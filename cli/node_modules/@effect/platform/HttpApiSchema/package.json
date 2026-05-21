@@ -1,0 +1,6 @@
+{
+  "main": "../dist/cjs/HttpApiSchema.js",
+  "module": "../dist/esm/HttpApiSchema.js",
+  "types": "../dist/dts/HttpApiSchema.d.ts",
+  "sideEffects": []
+}

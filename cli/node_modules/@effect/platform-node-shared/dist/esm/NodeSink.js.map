@@ -1,0 +1,1 @@
+{"version":3,"file":"NodeSink.js","names":["internal","fromWritable","fromWritableChannel"],"sources":["../../src/NodeSink.ts"],"sourcesContent":[null],"mappings":"AAQA,OAAO,KAAKA,QAAQ,MAAM,oBAAoB;AAG9C;;;;AAIA,OAAO,MAAMC,YAAY,GAIMD,QAAQ,CAACC,YAAY;AAEpD;;;;AAIA,OAAO,MAAMC,mBAAmB,GAImCF,QAAQ,CAACE,mBAAmB","ignoreList":[]}

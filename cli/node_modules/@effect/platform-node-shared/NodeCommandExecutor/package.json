@@ -1,0 +1,6 @@
+{
+  "main": "../dist/cjs/NodeCommandExecutor.js",
+  "module": "../dist/esm/NodeCommandExecutor.js",
+  "types": "../dist/dts/NodeCommandExecutor.d.ts",
+  "sideEffects": []
+}

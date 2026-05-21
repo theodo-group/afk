@@ -14,7 +14,14 @@ Not to be confused with: an ECS Task (AWS resource), a TodoWrite task (work item
 
 ## Backend
 
-A cloud-provider implementation of the operations a Run depends on: launching a container, attaching an interactive shell, streaming logs, terminating. The CLI is written against a Backend interface so the user-facing surface (`afk run`, `afk attach`, …) stays identical across providers. AWS ECS is the first and only Backend; GCP (GKE Autopilot) and Azure (Container Instances / Container Apps) are anticipated future Backends.
+A provider-specific implementation of the operations a Run depends on: launching a container, attaching an interactive shell, streaming logs, terminating. The CLI is written against a Backend interface so the user-facing surface (`afk run`, `afk attach`, …) stays identical across providers.
+
+The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`) is the default for every command. A per-command `--local` flag overrides it for that invocation only.
+
+Backends:
+- **AWS ECS** — first and only cloud Backend in v1.
+- **GCP (GKE Autopilot)**, **Azure (Container Instances / Container Apps)** — anticipated future cloud Backends.
+- **Local** — a peer Backend that launches the Run as a container on the developer's local Docker daemon instead of in the cloud. Same image, entrypoint, env, secrets, and lifecycle rules as the cloud Backends; differs only in where the container runs. Selected via `--local` on any command. Still requires `afk init` to have been run and Terraform to have been applied, because Local resolves `ssm:` secret references against the same SSM Parameter Store that the cloud Backend reads from.
 
 ## Owner
 
@@ -22,7 +29,7 @@ The IAM principal that launched a Run. Recorded as the `afk:owner` tag on the un
 
 ## Dockerfile Contract
 
-The set of rules a developer's `Dockerfile` must follow for their image to be usable as a Run. The Dockerfile installs the toolchain and dependencies needed by the Run's command, but does **not** copy the source code (the source is cloned at Run start by the entrypoint). The entrypoint script is owned by the CLI and injected at build time — the developer's Dockerfile does not declare it.
+The set of rules a developer's `afk.Dockerfile` must follow for their image to be usable as a Run. The file lives at the repo root and is named `afk.Dockerfile` to namespace it away from any other Dockerfile the project uses for its own deployment. It installs the toolchain and dependencies needed by the Run's command, but does **not** copy the source code (the source is cloned at Run start by the entrypoint). The entrypoint script is owned by the CLI and injected at build time — the developer's `afk.Dockerfile` does not declare it.
 
 ## Ref
 

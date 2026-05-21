@@ -1,0 +1,1 @@
+{"version":3,"file":"AutoCorrect.js","names":["InternalAutoCorrect","levensteinDistance"],"sources":["../../src/AutoCorrect.ts"],"sourcesContent":[null],"mappings":"AAAA;;;AAKA,OAAO,KAAKA,mBAAmB,MAAM,2BAA2B;AAEhE;;;;AAIA,OAAO,MAAMC,kBAAkB,GAC7BD,mBAAmB,CAACC,kBAAkB","ignoreList":[]}

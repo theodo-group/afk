@@ -13,19 +13,19 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 - **Run** — one ephemeral execution of a developer-defined command inside a container in the cloud. Backed by exactly one ECS Task. May be observed via attach but does not require it.
 - **Backend** — cloud-provider implementation. AWS ECS first; GCP (GKE Autopilot) and Azure (Container Instances / Container Apps) anticipated.
 - **Owner** — the IAM principal that launched a Run. Used for access control.
-- **Dockerfile Contract** — the rules a consumer's `Dockerfile` must follow.
+- **Dockerfile Contract** — the rules a consumer's `afk.Dockerfile` must follow.
 - **Ref** — the git reference a Run executes against.
 
 ---
 
 ## How it works (end-to-end)
 
-1. Developer runs `afk init` in their repo once. CLI creates the Terraform state S3 bucket, copies the Terraform module into their repo, scaffolds `.afk.env` and `afk.config.json`, gitignores `.afk.env`.
+1. Developer runs `afk init --provider aws` in their repo once. CLI creates the Terraform state S3 bucket, copies the matching Backend Terraform module into their repo (`terraform/aws/` → consumer's `terraform/afk/`), scaffolds `.afk.env` and `afk.config.json` (with `backend: "aws"`), gitignores `.afk.env`. `--provider` defaults to `aws` while it is the only supported Backend.
 2. Developer runs `terraform apply` from `terraform/afk/`. This creates the VPC, Fargate cluster, IAM roles and policies, and the developer IAM role.
 3. Developer stores their GitHub Personal Access Token: `afk secrets put github-token <PAT>`.
 4. Developer runs `afk run "claude -p 'fix the failing tests'"`. The CLI:
    - Refuses if the working tree is dirty or the current branch isn't pushed to origin.
-   - Builds the Docker image if no image exists for `<branch>-<sha>` in ECR (otherwise skips). The build wraps the dev's Dockerfile with a CLI-owned entrypoint.
+   - Builds the Docker image if no image exists for `<branch>-<sha>` in ECR (otherwise skips). The build runs `docker build -f afk.Dockerfile .` and wraps the dev's `afk.Dockerfile` with a CLI-owned entrypoint.
    - Pushes the image to the ECR repository `afk/<source-repo>` (creating it lazily with a 7-day lifecycle if absent).
    - Registers a fresh ECS Task Definition with the image, env vars, SSM secret references, CPU/memory, and IAM task role.
    - Calls `ecs:RunTask` on the shared cluster, tagged `afk:owner=<principal>`, `afk:run-id=<id>`, `afk:branch=<branch>`, `afk:sha=<sha>`.
@@ -92,7 +92,9 @@ Updates: `git pull && bun install`. There is no version pinning; consumers run w
 
 A repo that wants to use AFK must provide:
 
-### 1. A `Dockerfile`
+### 1. An `afk.Dockerfile` at the repo root
+
+The file **must** be named `afk.Dockerfile` so it is namespaced away from any other Dockerfile the project uses for its own deployment.
 
 - Installs the toolchain and dependencies needed by the Run's command.
 - **Does not `COPY` source code.** Source is cloned at Run start.
@@ -112,6 +114,7 @@ WORKDIR /workspace
 
 ```json
 {
+  "backend": "aws",
   "gitUrl": "https://github.com/you/your-repo.git",
   "defaultCpu": 1024,
   "defaultMemory": 2048,
@@ -119,7 +122,9 @@ WORKDIR /workspace
 }
 ```
 
-`gitUrl` is required. Resource defaults are optional.
+`backend` and `gitUrl` are required. `backend` selects which Backend implementation drives the CLI (`aws` is the only choice in v1; `gcp` and `azure` are anticipated). Set once by `afk init --provider <name>`; subsequent commands read it from the config and dispatch automatically — no per-command `--backend` flag needed. Resource defaults are optional.
+
+Backend-specific knobs, when they exist, are namespaced under the backend name (e.g. `"aws": { "region": "us-east-1" }`). Most runtime values the CLI needs (cluster name, subnet IDs, role ARNs) are read from `terraform output -json`, not from this file.
 
 ### 3. `.afk.env` (gitignored)
 
@@ -138,21 +143,23 @@ Secrets themselves are stored separately via `afk secrets put <name> <value>` (w
 ## CLI surface
 
 ```
-afk init                                  # one-time setup in a repo
+afk init [--provider aws|gcp|azure]       # one-time setup in a repo; selects Backend (default aws)
 afk doctor                                # check dependencies and AWS credentials
 afk config                                # print resolved config (debug)
 
-afk build [--ref <ref>]                   # explicit build + push (afk run also builds if needed)
+afk build [--ref <ref>] [--local]         # explicit build + push (afk run also builds if needed)
 afk run <command…>                        # launch a Run
   --ref <branch|sha|tag>                  #   defaults to current local branch
-  --cpu <units>                           #   overrides project default
-  --memory <mb>                           #   overrides project default
+  --cpu <units>                           #   overrides project default (ignored when --local)
+  --memory <mb>                           #   overrides project default (ignored when --local)
   --timeout <hours>                       #   overrides default (4h)
   --detach / -d                           #   default: launch and exit; without -d, streams logs
-afk ls [--all] [--status <s>]             # list Runs (yours by default; --all = team-wide if permitted)
-afk attach <run-id>                       # interactive shell via ECS Exec
-afk logs <run-id> [--follow]              # tail CloudWatch Logs
-afk kill <run-id>                         # stop a Run
+  --local                                 #   use the Local Backend (Docker on this machine) for this invocation
+afk ls [--all] [--status <s>] [--local]   # list Runs (yours by default; --all = team-wide if permitted)
+afk attach <run-id> [--local]             # interactive shell (ECS Exec, or `docker exec` when --local)
+afk logs <run-id> [--follow] [--local]    # tail logs (CloudWatch, or `docker logs` when --local)
+afk kill <run-id> [--local]               # stop a Run
+afk gc [--local]                          # prune stopped containers older than 7d (Local only; cloud is auto-reaped)
 
 afk secrets put <name> [value]            # write to SSM (prompts if value omitted)
 afk secrets ls                            # list stored secret names
@@ -212,6 +219,27 @@ A consumer of this repo runs the Terraform once per AWS account/team. It creates
 
 ---
 
+## Local Backend
+
+Every command accepts `--local` to execute against the developer's local Docker daemon instead of the configured cloud Backend. The point is faithful rehearsal: same image build, same CLI-injected entrypoint, same `.afk.env` resolution (including `ssm:` references, which the CLI dereferences client-side via `ssm:GetParameter`), same wall-clock timeout, same git-clone-from-origin source handling.
+
+What is the same as cloud:
+- Dirty-tree and unpushed-ref refusal — Local enforces both, identical to cloud.
+- Image build pipeline — wrapper Dockerfile, CLI-injected entrypoint, same tag format (`afk/<repo>:<branch>-<sha>`). Image stays in the local Docker daemon; no ECR push.
+- Secret resolution — `ssm:` references in `.afk.env` are fetched from SSM by the CLI and passed as `-e KEY=VALUE` to `docker run`.
+- Lifecycle — entrypoint clones source at the configured ref, executes the command under a `timeout(1)` wrapper, exits.
+
+What differs from cloud:
+- No ECR push, no ECS Task Definition registration, no ECS Exec. Containers carry labels (`afk.managed=true`, `afk.run-id=<id>`, `afk.repo=<repo>`, `afk.ref=<sha>`) so `afk ls --local`, `afk attach --local`, etc. can find them via `docker ps --filter`.
+- `afk attach --local` uses `docker exec -it`; `afk logs --local` uses `docker logs -f`; `afk kill --local` uses `docker stop` + `docker rm`.
+- No owner tag — your machine, one user. `afk ls --all --local` silently ignores `--all`.
+- Stopped containers are kept (not `--rm`) so logs are inspectable post-mortem. `afk gc --local` (manual) or 7-day age sweep cleans them up.
+- `--cpu`/`--memory` flags are ignored (Docker on a dev laptop is sized by the laptop).
+
+Prerequisites the CLI checks before `--local`: Docker daemon running, AWS credentials present (for SSM dereference), `afk init` already run in this repo.
+
+---
+
 ## Source code handling
 
 A Run's image contains the toolchain and dependencies — **not** the source. The entrypoint clones the repo at the configured ref into `/workspace` before executing the dev's command.
@@ -219,7 +247,7 @@ A Run's image contains the toolchain and dependencies — **not** the source. Th
 Why this split:
 - Image rebuilds only when dependencies change (rare).
 - Code changes (constant) don't trigger a rebuild — `afk run` is fast.
-- The image at a given tag is reproducible from the Dockerfile alone.
+- The image at a given tag is reproducible from the `afk.Dockerfile` alone.
 
 Two hard rules:
 - The working tree must be clean. `afk run` refuses if `git status` is dirty.
@@ -245,7 +273,7 @@ The Run needs at minimum a `github-token` secret to clone source.
 `afk attach <run-id>` wraps `aws ecs execute-command --interactive --command /bin/bash` against the underlying ECS Task. Implementation details:
 
 - Uses AWS Systems Manager Session Manager under the hood — no inbound networking, no SSH keys.
-- The Fargate platform includes the SSM agent; the consumer's Dockerfile needs no special setup.
+- The Fargate platform includes the SSM agent; the consumer's `afk.Dockerfile` needs no special setup.
 - Access is gated by IAM (`ecs:ExecuteCommand`) with a tag condition restricting it to Runs the developer owns.
 - Sessions are loggable to CloudWatch / S3 if audit is needed (Terraform variable, off by default).
 

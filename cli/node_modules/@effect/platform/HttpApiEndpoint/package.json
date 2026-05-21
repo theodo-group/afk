@@ -1,0 +1,6 @@
+{
+  "main": "../dist/cjs/HttpApiEndpoint.js",
+  "module": "../dist/esm/HttpApiEndpoint.js",
+  "types": "../dist/dts/HttpApiEndpoint.d.ts",
+  "sideEffects": []
+}

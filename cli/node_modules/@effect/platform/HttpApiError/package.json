@@ -1,0 +1,6 @@
+{
+  "main": "../dist/cjs/HttpApiError.js",
+  "module": "../dist/esm/HttpApiError.js",
+  "types": "../dist/dts/HttpApiError.d.ts",
+  "sideEffects": []
+}
