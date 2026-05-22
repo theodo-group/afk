@@ -107,7 +107,7 @@ export const BootstrapServiceLive = Layer.effect(
                   backend: "aws",
                   gitUrl: "",
                   mainService: "agent",
-                  defaultInstanceType: "m6a.large",
+                  defaultInstanceType: "t3.medium",
                   allowedInstanceTypes: [
                     "t3.medium",
                     "t3.large",

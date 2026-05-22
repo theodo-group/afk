@@ -33,7 +33,7 @@ export const TAG_GOLDEN_VERSION = "afk:golden-version"
 export const TAG_GOLDEN_BUILT_AT = "afk:built-at"
 export const TAG_GOLDEN_CACHED_IMAGES = "afk:cached-images"
 
-export const DEFAULT_INSTANCE_TYPE = "m6a.large"
+export const DEFAULT_INSTANCE_TYPE = "t3.medium"
 export const DEFAULT_ALLOWED_INSTANCE_TYPES = [
   "t3.medium",
   "t3.large",

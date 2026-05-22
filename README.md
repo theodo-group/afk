@@ -218,7 +218,7 @@ Sidecars share the VM's Docker daemon and the VM's network. `/workspace` is moun
   "backend": "aws",
   "gitUrl": "https://github.com/you/your-repo.git",
   "mainService": "agent",
-  "defaultInstanceType": "m6a.large",
+  "defaultInstanceType": "t3.medium",
   "allowedInstanceTypes": [
     "t3.medium", "t3.large", "t3.xlarge",
     "m6a.large", "m6a.xlarge", "m6a.2xlarge", "m6a.4xlarge"
