@@ -24,7 +24,7 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 
 ## How it works (end-to-end)
 
-1. Developer runs `afk init --provider aws` in their repo once. CLI creates the Terraform state S3 bucket, copies the matching Backend Terraform module into their repo (`terraform/aws/` → consumer's `terraform/afk/`), scaffolds `.afk.env` and `afk.config.json` (with `backend: "aws"`), gitignores `.afk.env`. `--provider` defaults to `aws` while it is the only supported Backend.
+1. Developer runs `afk init --provider aws --region <region>` in their repo once. CLI creates the Terraform state S3 bucket (`afk-tf-state-<account>-<region>`), copies the matching Backend Terraform module into their repo (`terraform/aws/` → consumer's `terraform/afk/`), renders `backend.tf` with the bucket/region, scaffolds `.afk.env` and `afk.config.json` (with `backend: "aws"` and `aws.region`), and gitignores `.afk.env`. `--provider` defaults to `aws`; `--region` defaults to `us-east-1`.
 2. Developer runs `terraform apply` from `terraform/afk/`. This creates the VPC, security groups, IAM roles and policies, the sweeper Lambda, and the developer IAM role.
 3. Developer builds the Golden Image: `afk image build`. The CLI launches a short-lived builder EC2 instance, installs Docker, pre-pulls the images listed in `afk.config.json` under `golden.cachedImages`, snapshots the result as an AMI tagged `afk:golden=true`, and terminates the builder.
 4. Developer stores their GitHub Personal Access Token: `afk secrets put github-token <PAT>`.
@@ -86,8 +86,10 @@ This repo is **not published to a registry**. Developers consume it by cloning.
 git clone <this-repo> ~/afk
 cd ~/afk/cli
 bun install
-bun link              # puts `afk` on PATH
+bun link              # registers @afk/cli globally
 ```
+
+`bun link` puts a symlink at `~/.bun/bin/afk` that resolves back to this checkout. If `~/.bun/bin` is on your PATH (Bun's installer adds it by default), `afk` is now usable from any project. Editing the source in your checkout takes effect immediately — no relink needed.
 
 Prerequisites on the developer machine:
 
@@ -95,8 +97,57 @@ Prerequisites on the developer machine:
 - Docker (image builds)
 - Terraform ≥ 1.10 (for S3 native state locking)
 - AWS CLI (credential chain) with creds for the target account
+- `session-manager-plugin` (required for `afk attach`)
+- `npm` (the sweeper Lambda is bundled with esbuild at `terraform apply` time)
+- A working `git` credential helper that can read your private remote (`gh auth setup-git` is the easiest if you have the GitHub CLI installed)
 
 Updates: `git pull && bun install`. There is no version pinning; consumers run whatever sha they checked out.
+
+---
+
+## Quickstart
+
+In a fresh consumer repo:
+
+```sh
+# 1. Bootstrap (creates the state bucket + scaffolds files)
+afk init --region eu-west-1
+
+# 2. Provision infra (VPC, IAM, sweeper Lambda)
+cd terraform/afk
+terraform init
+terraform apply -var aws_region=eu-west-1
+cd -
+
+# 3. Build the Golden Image (one-time per account/region; ~5 min)
+afk image build
+
+# 4. Store secrets (at minimum a GitHub PAT so the VM can clone source)
+afk secrets put github-token <PAT>
+echo "GITHUB_TOKEN=ssm:/afk/secrets/github-token" >> .afk.env
+
+# 5. Author your contract files (commit + push)
+#    - afk.Dockerfile          (toolchain only; no COPY of source; no ENTRYPOINT)
+#    - afk.compose.yml         (optional; main service must reference ${AFK_IMAGE})
+git add afk.Dockerfile afk.compose.yml afk.config.json .afk.env  # .afk.env should already be gitignored
+git commit -m "configure AFK"
+git push
+
+# 6. Launch a Run
+afk run bun --version
+afk ls
+afk logs <run-id>
+```
+
+Teardown when you're done:
+
+```sh
+afk image rm <ami-id>           # delete the Golden AMI
+cd terraform/afk && terraform destroy -var aws_region=eu-west-1
+aws ssm delete-parameter --name /afk/secrets/github-token --region eu-west-1
+aws ecr delete-repository --repository-name afk/<your-repo> --force --region eu-west-1
+aws s3 rb s3://afk-tf-state-<account-id>-eu-west-1 --force
+```
 
 ---
 
@@ -175,13 +226,16 @@ Sidecars share the VM's Docker daemon and the VM's network. `/workspace` is moun
   "defaultTimeoutHours": 4,
   "golden": {
     "cachedImages": ["postgres:16", "redis:7", "node:20"]
+  },
+  "aws": {
+    "region": "eu-west-1"
   }
 }
 ```
 
-`backend` and `gitUrl` are required. `mainService` defaults to `agent`. Resource and Golden-Image settings are optional.
+`backend` and `gitUrl` are required. `mainService` defaults to `agent`. `aws.region` selects the region for every AWS call the CLI makes; if omitted it defaults to `us-east-1`. Resource and Golden-Image settings are optional.
 
-Backend-specific knobs, when they exist, are namespaced under the backend name (e.g. `"aws": { "region": "us-east-1" }`). Most runtime values the CLI needs (VPC ID, subnet IDs, role ARNs) are read from `terraform output -json`, not from this file.
+Most runtime values the CLI needs (VPC ID, subnet IDs, role ARNs) are derived from tags + IAM lookups against the configured region — not read from this file.
 
 ### 4. `.afk.env` (gitignored)
 
@@ -200,31 +254,29 @@ Secrets themselves are stored separately via `afk secrets put <name> <value>` (w
 ## CLI surface
 
 ```
-afk init [--provider aws|gcp|azure]            # one-time setup in a repo; selects Backend (default aws)
+afk init [--provider aws] [--region <region>]  # one-time setup in a repo (creates state bucket, scaffolds config)
 afk doctor                                     # check dependencies, AWS creds, Golden Image presence + age
 afk config                                     # print resolved config (debug)
 
-afk image build [--local]                      # build the Golden Image AMI from afk.config.json's cache list
+afk image build                                # build the Golden Image AMI from afk.config.json's cache list
 afk image ls                                   # list Golden Image AMIs in this account/region
 afk image rm <ami-id>                          # delete a Golden Image AMI
 
-afk build [--ref <ref>] [--local]              # explicit container image build + push (afk run also builds if needed)
+afk build [--ref <ref>]                        # explicit container image build + push (afk run also builds if needed)
 afk run <command…>                             # launch a Run
   --ref <branch|sha|tag>                       #   defaults to current local branch
   --instance-type <type>                       #   overrides project default
   --on-demand                                  #   disable Spot for this Run (default is Spot)
   --timeout <hours>                            #   overrides default (4h)
-  --detach / -d                                #   default: launch and exit; without -d, streams logs
-  --local                                      #   use the Local Backend (Docker on this machine) for this invocation
-afk ls [--all] [--status <s>] [--local]        # list Runs (yours by default; --all = team-wide if permitted)
-afk attach <run-id> [--service <name>] [--host] [--local]
+  --detach / -d                                #   default: launch and exit (currently the only mode)
+afk ls [--all] [--status <s>]                  # list Runs (yours by default; --all = team-wide if permitted)
+afk attach <run-id> [--service <name>] [--host]
                                                # interactive shell. Default: docker exec into main service.
                                                # --service <name>: attach to a sidecar instead.
-                                               # --host: drop to the VM's host shell (cloud only).
-afk logs <run-id> [--follow] [--service <name>] [--local]
-                                               # tail logs (CloudWatch, or `docker compose logs` when --local)
-afk kill <run-id> [--local]                    # stop a Run
-afk gc [--local]                               # prune stopped containers older than 7d (Local only; cloud is auto-reaped)
+                                               # --host:           drop to the VM's host shell.
+afk logs <run-id> [--follow] [--service <name>]
+                                               # tail logs from CloudWatch (uses `aws logs tail` under the hood)
+afk kill <run-id>                              # ec2:TerminateInstances on the Run
 
 afk secrets put <name> [value]                 # write to SSM (prompts if value omitted)
 afk secrets ls                                 # list stored secret names
@@ -239,6 +291,11 @@ afk team rm <name>                             # admin: revoke access
 --verbose / -v                                 # debug logging
 --quiet / -q                                   # errors only
 ```
+
+**Command semantics worth knowing:**
+
+- `afk run "<command>"` and `afk run <command> <args…>` both work. The container's CMD becomes `sh -c "<joined command>"`, so quoting and shell features (`&&`, `|`, `$VARS`) work as you'd expect.
+- The region every command operates on comes from `afk.config.json` → `aws.region`. There is no per-command `--region` flag (apart from `afk init`, which writes the region into the rendered backend.tf and scaffolded config).
 
 All AWS calls go through the standard credential chain (`AWS_PROFILE`, env vars, IMDS). Developers act under an IAM role provisioned by the Terraform. The `team` commands require admin IAM permissions (separate policy output by the Terraform).
 
@@ -293,26 +350,9 @@ A consumer of this repo runs the Terraform once per AWS account/team. It creates
 
 ---
 
-## Local Backend
+## Local Backend (planned, not yet implemented)
 
-Every command (except `afk image build`) accepts `--local` to execute against the developer's local Docker daemon instead of the configured cloud Backend. The point is faithful rehearsal: same image build, same CLI-injected entrypoint, same `.afk.env` resolution (including `ssm:` references, which the CLI dereferences client-side via `ssm:GetParameter`), same compose file, same wall-clock timeout, same git-clone-from-origin source handling.
-
-What is the same as cloud:
-- Dirty-tree and unpushed-ref refusal — Local enforces both, identical to cloud.
-- Image build pipeline — wrapper Dockerfile, CLI-injected entrypoint, same tag format. Image stays in the local Docker daemon; no ECR push.
-- Compose file consumption — Local runs `docker compose up --exit-code-from <main-service>` against the same `afk.compose.yml`.
-- Secret resolution — `ssm:` references in `.afk.env` are fetched from SSM by the CLI and passed as environment variables to the compose stack.
-- Lifecycle — entrypoint clones source at the configured ref, executes the command under a `timeout(1)` wrapper, exits.
-
-What differs from cloud:
-- No VM, no Golden AMI, no ECR push, no IAM, no SSM. `afk image build --local` refuses with a message ("the Golden Image is a cloud concept; your local Docker daemon already caches what it pulls").
-- Containers carry labels (`afk.managed=true`, `afk.run-id=<id>`, `afk.repo=<repo>`, `afk.ref=<sha>`) so `afk ls --local`, `afk attach --local`, etc. can find them via `docker ps --filter`.
-- `afk attach --local [--service <name>]` uses `docker exec -it`; `afk logs --local` uses `docker compose logs -f`; `afk kill --local` uses `docker compose down -v`.
-- No owner tag — your machine, one user. `afk ls --all --local` silently ignores `--all`.
-- Stopped containers are kept (not `--rm`) so logs are inspectable post-mortem. `afk gc --local` (manual) or 7-day age sweep cleans them up.
-- `--instance-type` and `--on-demand` flags are ignored.
-
-Prerequisites the CLI checks before `--local`: Docker daemon running, AWS credentials present (for SSM dereference), `afk init` already run in this repo.
+The intent is to let every command accept `--local` to execute against the developer's local Docker daemon instead of EC2, as a faithful rehearsal of the cloud path (same image build, same entrypoint, same compose file, same secret resolution). This is not yet implemented in the current code — `--local` flags will be added once the cloud path is hardened. Until then, every command targets AWS.
 
 ---
 
