@@ -17,10 +17,12 @@ import { EcrLive } from "./adapters/aws/Ecr.ts"
 import { IamLive } from "./adapters/aws/Iam.ts"
 import { S3Live } from "./adapters/aws/S3.ts"
 import { Ec2Live } from "./adapters/aws/Ec2.ts"
+import { DynamoDbLive } from "./adapters/aws/DynamoDb.ts"
 
 import { ConfigServiceLive } from "./services/ConfigService.ts"
 import { BuildServiceLive } from "./services/BuildService.ts"
 import { ImageServiceLive } from "./services/ImageService.ts"
+import { HistoryServiceLive } from "./services/HistoryService.ts"
 import { RunServiceLive } from "./services/RunService.ts"
 import { SecretServiceLive } from "./services/SecretService.ts"
 import { TeamServiceLive } from "./services/TeamService.ts"
@@ -36,6 +38,7 @@ import { ls } from "./commands/ls.ts"
 import { logs } from "./commands/logs.ts"
 import { attach } from "./commands/attach.ts"
 import { kill } from "./commands/kill.ts"
+import { history } from "./commands/history.ts"
 import { secrets } from "./commands/secrets/index.ts"
 import { team } from "./commands/team/index.ts"
 
@@ -64,12 +67,14 @@ const L_adapters = Layer.mergeAll(
   IamLive,
   S3Live,
   Ec2Live,
+  DynamoDbLive,
 ).pipe(Layer.provideMerge(L_infra))
 
 const L_config = ConfigServiceLive.pipe(Layer.provideMerge(L_adapters))
 const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_config))
 const L_image = ImageServiceLive.pipe(Layer.provideMerge(L_build))
-const L_run = RunServiceLive.pipe(Layer.provideMerge(L_image))
+const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_image))
+const L_run = RunServiceLive.pipe(Layer.provideMerge(L_history))
 const AppLive = Layer.mergeAll(
   SecretServiceLive,
   TeamServiceLive,
@@ -96,6 +101,7 @@ const rootCommand = Command.make(
     logs,
     attach,
     kill,
+    history,
     secrets,
     team,
   ]),

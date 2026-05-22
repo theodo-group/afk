@@ -70,6 +70,19 @@ data "aws_iam_policy_document" "sweeper" {
       values   = ["true"]
     }
   }
+
+  statement {
+    sid = "ReconcileRunHistory"
+    actions = [
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+    ]
+    resources = [
+      aws_dynamodb_table.runs.arn,
+      "${aws_dynamodb_table.runs.arn}/index/*",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "sweeper" {
@@ -93,6 +106,7 @@ resource "aws_lambda_function" "sweeper" {
   environment {
     variables = {
       SWEEPER_GRACE_MINUTES = tostring(var.sweeper_grace_minutes)
+      RUNS_TABLE            = aws_dynamodb_table.runs.name
     }
   }
 }

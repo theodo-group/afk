@@ -53,6 +53,11 @@ output "sweeper_function_name" {
   value       = aws_lambda_function.sweeper.function_name
 }
 
+output "runs_table_name" {
+  description = "DynamoDB table holding persistent Run history."
+  value       = aws_dynamodb_table.runs.name
+}
+
 output "allowed_instance_types" {
   description = "Whitelist of instance types developers may launch Runs on."
   value       = var.allowed_instance_types

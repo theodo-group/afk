@@ -367,6 +367,23 @@ data "aws_iam_policy_document" "developer" {
     resources = [local.log_group_arn]
   }
 
+  # --- DynamoDB: read+write the run-history table ---
+  statement {
+    sid = "ManageRunHistory"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:DescribeTable",
+    ]
+    resources = [
+      aws_dynamodb_table.runs.arn,
+      "${aws_dynamodb_table.runs.arn}/index/*",
+    ]
+  }
+
   # --- PassRole locked to the single VM instance role ---
   # The critical lockdown. Without this constraint a developer could attach an
   # arbitrary role to a Run VM, attach via SSM, and become that role.

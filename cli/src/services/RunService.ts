@@ -9,6 +9,7 @@ import { Logs } from "../adapters/aws/Logs.ts"
 import { BuildService } from "./BuildService.ts"
 import { ConfigService } from "./ConfigService.ts"
 import { ImageService } from "./ImageService.ts"
+import { HistoryService } from "./HistoryService.ts"
 import {
   AwsError,
   UserError,
@@ -152,6 +153,7 @@ export const RunServiceLive = Layer.effect(
     const build = yield* BuildService
     const cfg = yield* ConfigService
     const images = yield* ImageService
+    const history = yield* HistoryService
 
     const resolveRegion = (regionOverride?: string) =>
       cfg.load.pipe(
@@ -356,6 +358,32 @@ export const RunServiceLive = Layer.effect(
               { key: "Name", value: `afk-${sourceRepoName}-${runId.slice(0, 8)}` },
             ],
           })
+
+          // Record in DDB history. Best-effort: log + continue on failure so a
+          // history-write hiccup never wastes a launched Run.
+          yield* history
+            .recordStart({
+              runId,
+              owner: identity.UserId,
+              repo: sourceRepoName,
+              branch: built.branch,
+              sha: built.sha,
+              image: built.image,
+              instanceId,
+              instanceType,
+              spot,
+              startedAt,
+              timeoutHours,
+            })
+            .pipe(
+              Effect.catchAll((e) =>
+                Effect.sync(() => {
+                  console.warn(
+                    `warning: failed to record run in history table: ${(e as { message?: string }).message ?? String(e)}`,
+                  )
+                }),
+              ),
+            )
 
           return {
             runId,
