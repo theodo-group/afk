@@ -20,6 +20,11 @@ const detach = Options.boolean("detach", { aliases: ["d"] }).pipe(
     "return immediately after launch; without this flag, afk run streams logs until the VM terminates",
   ),
 )
+const dryRun = Options.boolean("dry-run").pipe(
+  Options.withDescription(
+    "print the resolved launch plan (instance type, AMI, env, compose, user_data preview) and exit without launching",
+  ),
+)
 
 const command = Args.text({ name: "command" }).pipe(Args.repeated)
 
@@ -143,20 +148,52 @@ const streamUntilTerminated = (input: {
 
 export const run = Command.make(
   "run",
-  { ref, instanceType, onDemand, timeout, detach, command },
-  ({ ref, instanceType, onDemand, timeout, detach, command }) =>
+  { ref, instanceType, onDemand, timeout, detach, dryRun, command },
+  ({ ref, instanceType, onDemand, timeout, detach, dryRun, command }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       const cfg = yield* ConfigService
       const out = yield* Output
 
-      const started = yield* runs.start({
+      const planInput = {
         command,
         ref: ref._tag === "Some" ? ref.value : undefined,
         instanceType: instanceType._tag === "Some" ? instanceType.value : undefined,
         onDemand,
         timeoutHours: timeout._tag === "Some" ? timeout.value : undefined,
-      })
+      }
+
+      if (dryRun) {
+        const plan = yield* runs.prepare(planInput)
+        yield* out.emit({
+          data: plan,
+          human: () =>
+            out.print(
+              [
+                `Dry-run plan (no resources launched):`,
+                `  run id            ${plan.runId}`,
+                `  region            ${plan.region}`,
+                `  instance type     ${plan.instanceType}${plan.spot ? " (spot)" : " (on-demand)"}`,
+                `  golden AMI        ${plan.amiId}`,
+                `  subnet candidates ${plan.subnetIds.join(", ")}`,
+                `  security group    ${plan.securityGroupId}`,
+                `  timeout           ${plan.timeoutHours}h (${plan.timeoutSeconds}s)`,
+                `  image             ${plan.image}${plan.imageWasSkipped ? " (already in ECR)" : " (would be built+pushed)"}`,
+                `  branch            ${plan.branch}`,
+                `  sha               ${plan.sha}`,
+                `  compose           ${plan.composePresent ? "yes (main: " + plan.mainService + ")" : "no"}`,
+                `  env (plain)       ${plan.env.map((e) => e.name).join(", ") || "(none)"}`,
+                `  secrets (ssm)     ${plan.secrets.map((s) => `${s.name}->${s.ssmName}`).join(", ") || "(none)"}`,
+                `  log group         ${plan.logGroup}`,
+                ``,
+                `Add --dry-run=false (or just remove it) to actually launch.`,
+              ].join("\n"),
+            ),
+        })
+        return
+      }
+
+      const started = yield* runs.start(planInput)
 
       yield* out.emit({
         data: started,

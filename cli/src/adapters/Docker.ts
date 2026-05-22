@@ -8,6 +8,17 @@ export interface BuildOptions {
   readonly dockerfile: string
   readonly tag: string
   readonly platform?: string
+  /**
+   * Images to pull as BuildKit cache sources before the build. Typically
+   * the previous-pushed tag of the same branch. Missing tags are silently
+   * skipped by BuildKit.
+   */
+  readonly cacheFrom?: ReadonlyArray<string>
+  /**
+   * When true, embed inline cache metadata into the built image so it can
+   * be used as `cacheFrom` by future builds.
+   */
+  readonly inlineCache?: boolean
 }
 
 export class Docker extends Context.Tag("Docker")<
@@ -47,8 +58,13 @@ export const DockerLive = Layer.effect(
               "-t",
               opts.tag,
               ...(opts.platform ? ["--platform", opts.platform] : []),
+              ...(opts.cacheFrom ?? []).flatMap((c) => ["--cache-from", c]),
+              ...(opts.inlineCache
+                ? ["--build-arg", "BUILDKIT_INLINE_CACHE=1"]
+                : []),
               opts.contextDir,
             ],
+            { env: { DOCKER_BUILDKIT: "1" } },
           )
           .pipe(Effect.mapError(mapErr("build"))),
       tag: (source, target) =>

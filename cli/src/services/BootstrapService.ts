@@ -32,9 +32,12 @@ export interface InitInput {
 
 export interface InitResult {
   readonly stateBucket: string
+  readonly stateBucketCreated: boolean
   readonly terraformDir: string
+  readonly terraformDirCreated: boolean
   readonly configCreated: boolean
   readonly envCreated: boolean
+  readonly gitignoreUpdated: boolean
 }
 
 export class BootstrapService extends Context.Tag("BootstrapService")<
@@ -59,12 +62,15 @@ export const BootstrapServiceLive = Layer.effect(
           const stateBucket = `${AFK_STATE_BUCKET_PREFIX}-${identity.Account}-${region}`
 
           const exists = yield* s3.bucketExists(stateBucket)
+          let stateBucketCreated = false
           if (!exists) {
             yield* s3.createStateBucket({ bucket: stateBucket, region })
+            stateBucketCreated = true
           }
 
           // Copy terraform module into the project
           const terraformDir = resolve(projectDir, "terraform", "afk")
+          const terraformDirCreated = !existsSync(terraformDir)
           if (existsSync(TEMPLATE_TERRAFORM_DIR)) {
             mkdirSync(terraformDir, { recursive: true })
             yield* Effect.try({
@@ -155,6 +161,7 @@ export const BootstrapServiceLive = Layer.effect(
           const gitignoreContents = existsSync(gitignorePath)
             ? require("node:fs").readFileSync(gitignorePath, "utf8")
             : ""
+          let gitignoreUpdated = false
           if (!gitignoreContents.split("\n").includes(ENV_FILE)) {
             appendFileSync(
               gitignorePath,
@@ -163,13 +170,17 @@ export const BootstrapServiceLive = Layer.effect(
                 : "\n") +
                 `${ENV_FILE}\n.afk/\n`,
             )
+            gitignoreUpdated = true
           }
 
           return {
             stateBucket,
+            stateBucketCreated,
             terraformDir,
+            terraformDirCreated,
             configCreated,
             envCreated,
+            gitignoreUpdated,
           }
         }),
     })

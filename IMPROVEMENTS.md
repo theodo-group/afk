@@ -3,9 +3,11 @@
 Backlog of known gaps in the v2 implementation, ordered by value.
 Bugs found during live testing are folded in where relevant.
 
+**Status legend:** ✅ shipped · ⏳ pending · ⏸ deferred
+
 ---
 
-## 1. Run history (persistent post-mortem)
+## 1. Run history (persistent post-mortem) ✅
 
 **Gap.** `afk ls` only sees what's in `ec2:DescribeInstances`, which retains terminated instances for ~1 hour. After that, the VM is gone — CloudWatch Logs survives 30 days but there's no way to enumerate "all my Runs this week" with owner / branch / sha / exit code without remembering each run-id.
 
@@ -24,7 +26,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 2. `afk run` doesn't stream logs without `--detach`
+## 2. `afk run` doesn't stream logs without `--detach` ✅
 
 **Gap.** README documents `--detach / -d` as the flag to skip log streaming; the implication is the default streams logs. The streaming code path doesn't exist — `afk run` always exits after launch.
 
@@ -34,7 +36,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 3. `afk attach` refuses on non-RUNNING Runs
+## 3. `afk attach` refuses on non-RUNNING Runs ✅
 
 **Gap.** Today: `attach` errors with "Run is not RUNNING (status: STOPPED)." But for ~1 hour after termination the VM still exists in `DescribeInstances`, and SSM Session Manager can still reach a stopped-but-not-yet-terminated host. Useful for post-mortem.
 
@@ -44,7 +46,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 4. Docker build cache shared across Runs
+## 4. Docker build cache shared across Runs ✅
 
 **Gap.** Every `afk run` on a new git sha rebuilds the wrapper image; the user's `afk.Dockerfile` layers get redone because no BuildKit cache is shared between invocations. Most rebuilds are no-ops layer-wise but currently take 10-30s of useless docker work.
 
@@ -54,7 +56,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 5. `afk run --dry-run`
+## 5. `afk run --dry-run` ✅
 
 **Gap.** No way to preview what a Run would do without launching it.
 
@@ -64,7 +66,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 6. Compose `command:` override silently wins
+## 6. Compose `command:` override silently wins ✅
 
 **Gap.** If the dev hardcodes `command: ...` on the main service instead of using `${AFK_COMMAND}`, their `afk run <args>` invocation is silently ignored — the static compose command runs. Today the lint emits a warning, not an error.
 
@@ -76,7 +78,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 7. `afk team` commands untested
+## 7. `afk team` commands untested ⏳
 
 **Gap.** `afk team add|ls|rm` exist in the CLI surface but were never exercised end-to-end during the live deploy. Admin onboarding is unverified.
 
@@ -86,7 +88,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 8. Per-Run cost reporting
+## 8. Per-Run cost reporting ✅ (estimate only — hardcoded price table)
 
 **Gap.** `afk ls` shows duration but not cost. Trivially derivable from instance-type + spot-price-at-launch + EBS-hours + CloudWatch ingest. Worth surfacing.
 
@@ -96,7 +98,7 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 9. Local Backend (`--local`)
+## 9. Local Backend (`--local`) ⏸
 
 **Gap.** README originally promised it; current implementation has no `--local` paths. Removed from the doc, but the design intent stands.
 
@@ -108,13 +110,11 @@ Bugs found during live testing are folded in where relevant.
 
 ## 10. Operability nits
 
-These are small but should be done together at some point.
-
-- **Region as a Layer.** Every adapter currently takes `region` as a parameter to every method. A `RegionContext` Layer set from `ConfigService.load` would clean ~50 call sites.
-- **`afk logs` time window flag.** Currently hardcoded to `--since 30d` for non-follow mode. Add `--since <duration>`.
-- **`afk init` re-run UX.** Doesn't gracefully handle an already-bootstrapped repo (silently skips files; no message about which step was idempotent).
-- **YAML parser for compose.** See #6; would also let us better validate `restart:` policies and `image:` substitution.
-- **Better `afk run` error when git credential helper is broken.** Surface `gh auth setup-git` as a hint when `ls-remote` fails.
+- **Region as a Layer.** ⏳ Every adapter currently takes `region` as a parameter to every method. A `RegionContext` Layer set from `ConfigService.load` would clean ~50 call sites.
+- **`afk logs` time window flag.** ✅ `--since <duration>` (default 30d).
+- **`afk init` re-run UX.** ✅ Each step's idempotency is now surfaced in the output (`created` vs `already present`).
+- **YAML parser for compose.** ⏳ See #6; would also let us inject `command: ${AFK_COMMAND}` and `env_file:` automatically instead of erroring.
+- **Better `afk run` error when git credential helper is broken.** ✅ `gh auth setup-git` is surfaced as a hint on common credential failures.
 
 ---
 

@@ -62,9 +62,28 @@ export const BuildServiceLive = Layer.effect(
             )
           }
           const branch = yield* git.currentBranch
-          const sha = ref
-            ? yield* git.resolveRemoteRef(config.gitUrl, ref)
-            : yield* git.resolveRemoteRef(config.gitUrl, branch)
+          const sha = yield* (ref
+            ? git.resolveRemoteRef(config.gitUrl, ref)
+            : git.resolveRemoteRef(config.gitUrl, branch)
+          ).pipe(
+            Effect.mapError((e) => {
+              // The most common GitError on private repos is a broken
+              // credential helper. Convert to a UserError with the actionable
+              // fix surfaced as a hint.
+              if (
+                e._tag === "GitError" &&
+                /git-credential|could not read Username|Authentication failed|Permission denied/i.test(
+                  e.message ?? "",
+                )
+              ) {
+                return new UserError({
+                  message: `git ls-remote against ${config.gitUrl} failed: ${e.message}`,
+                  hint: "Configure a git credential helper. With the GitHub CLI: `gh auth setup-git`. Otherwise ensure your global git config has a working credential.helper for github.com.",
+                })
+              }
+              return e
+            }),
+          )
 
           const repoName = `${ECR_REPO_PREFIX}/${sourceRepoName}`
           const tag = `${branch}-${sha.slice(0, 12)}`
@@ -118,23 +137,40 @@ export const BuildServiceLive = Layer.effect(
             ].join("\n"),
           )
 
-          // Build user image, then wrapper image
+          // Pre-pull cache from the most recent previously-pushed image on
+          // this branch (if any). BuildKit will warm its layer cache from it.
+          // Requires we authenticate to ECR first so the pull works.
+          const password = yield* ecr.getLoginPassword(region)
+          yield* docker.login(registry, "AWS", password)
+
+          const prevTags = yield* ecr.listLatestTagsByPrefix(
+            region,
+            repoName,
+            `${branch}-`,
+            1,
+          )
+          const cacheFromImages = prevTags.map((t) => `${registry}/${repoName}:${t}`)
+
+          // Build user image (with inline cache + cache-from), then wrapper
+          // image. BuildKit is enabled by the Docker adapter.
           yield* docker.build({
             contextDir: projectRoot,
             dockerfile: userDockerfile,
             tag: userImageTag,
             platform: "linux/amd64",
+            cacheFrom: cacheFromImages,
+            inlineCache: true,
           })
           yield* docker.build({
             contextDir: buildDir,
             dockerfile: wrapperDockerfile,
             tag: image,
             platform: "linux/amd64",
+            cacheFrom: cacheFromImages,
+            inlineCache: true,
           })
 
-          // Login + push
-          const password = yield* ecr.getLoginPassword(region)
-          yield* docker.login(registry, "AWS", password)
+          // Push.
           yield* docker.push(image)
 
           return {

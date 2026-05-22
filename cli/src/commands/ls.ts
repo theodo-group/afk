@@ -2,7 +2,10 @@ import { Command, Options } from "@effect/cli"
 import { Effect } from "effect"
 import { RunService } from "../services/RunService.ts"
 import { Sts } from "../adapters/aws/Sts.ts"
+import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
+import { DEFAULT_REGION } from "../constants.ts"
+import { estimateCost, formatUsd } from "../services/Pricing.ts"
 
 const all = Options.boolean("all").pipe(
   Options.withDescription("show Runs across all team members"),
@@ -15,7 +18,11 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
   Effect.gen(function* () {
     const runs = yield* RunService
     const sts = yield* Sts
+    const cfg = yield* ConfigService
     const out = yield* Output
+
+    const { config } = yield* cfg.load
+    const region = config.aws?.region ?? DEFAULT_REGION
 
     const list = all
       ? yield* runs.listAll
@@ -40,6 +47,20 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
           { header: "TYPE", value: (r) => `${r.instanceType}${r.spot ? "/spot" : ""}` },
           { header: "OWNER", value: (r) => r.owner },
           { header: "STARTED", value: (r) => r.startedAt ?? "-" },
+          {
+            header: "COST",
+            value: (r) => {
+              if (!r.startedAt) return "-"
+              const c = estimateCost(
+                region,
+                r.instanceType,
+                r.spot,
+                r.startedAt,
+                r.stoppedAt,
+              )
+              return c ? formatUsd(c.usd) : "-"
+            },
+          },
         ]),
     })
   }),

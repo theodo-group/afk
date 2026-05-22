@@ -13,6 +13,8 @@ const provider = Options.choice("provider", ["aws"]).pipe(
   Options.withDescription("cloud backend (only 'aws' is supported in v1)"),
 )
 
+const status = (created: boolean): string => (created ? "created" : "already present")
+
 export const init = Command.make("init", { region, provider }, ({ region }) =>
   Effect.gen(function* () {
     const boot = yield* BootstrapService
@@ -23,14 +25,11 @@ export const init = Command.make("init", { region, provider }, ({ region }) =>
       human: () =>
         out.print(
           [
-            `state bucket   ${result.stateBucket}`,
-            `terraform dir  ${result.terraformDir}`,
-            result.configCreated
-              ? "afk.config.json: created (edit `gitUrl`)"
-              : "afk.config.json: already present",
-            result.envCreated
-              ? ".afk.env: created"
-              : ".afk.env: already present",
+            `state bucket       ${result.stateBucket} (${status(result.stateBucketCreated)})`,
+            `terraform dir      ${result.terraformDir} (${status(result.terraformDirCreated)})`,
+            `afk.config.json    ${status(result.configCreated)}`,
+            `.afk.env           ${status(result.envCreated)}`,
+            `.gitignore         ${result.gitignoreUpdated ? "updated" : "already had .afk.env / .afk/"}`,
             ``,
             `Next:`,
             `  1. cd ${result.terraformDir} && terraform init && terraform apply`,

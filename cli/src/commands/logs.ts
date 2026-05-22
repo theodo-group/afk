@@ -11,11 +11,15 @@ const service = Options.text("service").pipe(
   Options.optional,
   Options.withDescription("filter to one compose service's logs"),
 )
+const since = Options.text("since").pipe(
+  Options.withDefault("30d"),
+  Options.withDescription("time window for historical reads (e.g. 1h, 24h, 7d). default 30d"),
+)
 
 export const logs = Command.make(
   "logs",
-  { runId, follow, service },
-  ({ runId, follow, service }) =>
+  { runId, follow, service, since },
+  ({ runId, follow, service, since }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       const logsSvc = yield* Logs
@@ -37,7 +41,7 @@ export const logs = Command.make(
         group,
         stream: streamPrefix,
         follow,
-        since: "30d",
+        since,
       })
     }),
 )

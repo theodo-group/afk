@@ -90,11 +90,16 @@ export const lintCompose = (
   }
 
   if (!/env_file\s*:/.test(mainText)) {
-    warnings.push(
-      `main service '${input.mainService}' does not declare 'env_file:'. ` +
-        `Without it the container will not see .afk.env values or AFK_GIT_*/GITHUB_TOKEN. ` +
-        `Add: env_file: ["\${AFK_ENV_FILE}"]`,
-    )
+    throw new UserError({
+      message: `main service '${input.mainService}' does not declare 'env_file:'.`,
+      hint: `Add: env_file: ["\${AFK_ENV_FILE}"] — without it the container will not see .afk.env values or AFK_GIT_*/GITHUB_TOKEN, and the entrypoint will fail.`,
+    })
+  }
+  if (!/command\s*:\s*\$\{AFK_COMMAND\}/.test(mainText)) {
+    throw new UserError({
+      message: `main service '${input.mainService}' does not declare 'command: \${AFK_COMMAND}'.`,
+      hint: `Add: command: \${AFK_COMMAND} — otherwise the args you pass to 'afk run' are silently ignored in favour of any static command:, or the container runs with no command at all.`,
+    })
   }
 
   for (const [name, block] of serviceBlocks) {

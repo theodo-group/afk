@@ -24,6 +24,13 @@ export class Ecr extends Context.Tag("Ecr")<
       repoName: string,
       tag: string,
     ) => Effect.Effect<boolean, AwsError>
+    /** Latest pushed image tag matching `<prefix>*`, newest first, by pushed-at. Empty array if none. */
+    readonly listLatestTagsByPrefix: (
+      region: string,
+      repoName: string,
+      tagPrefix: string,
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<string>, AwsError>
     readonly getLoginPassword: (
       region: string,
     ) => Effect.Effect<string, AwsError>
@@ -136,6 +143,36 @@ export const EcrLive = Layer.effect(
           .pipe(
             Effect.map(() => true),
             Effect.catchAll(() => Effect.succeed(false)),
+          ),
+      listLatestTagsByPrefix: (region, repoName, tagPrefix, limit) =>
+        sub
+          .runJson<{
+            imageDetails: ReadonlyArray<{
+              imageTags?: ReadonlyArray<string>
+              imagePushedAt?: string
+            }>
+          }>("aws", [
+            "ecr",
+            "describe-images",
+            "--region",
+            region,
+            "--repository-name",
+            repoName,
+            "--output",
+            "json",
+          ])
+          .pipe(
+            Effect.map((r) =>
+              (r.imageDetails ?? [])
+                .filter((d) => (d.imageTags ?? []).some((t) => t.startsWith(tagPrefix)))
+                .sort((a, b) =>
+                  (b.imagePushedAt ?? "").localeCompare(a.imagePushedAt ?? ""),
+                )
+                .flatMap((d) => (d.imageTags ?? []).filter((t) => t.startsWith(tagPrefix)))
+                .slice(0, limit),
+            ),
+            // Repo may not exist yet on first build; that's fine.
+            Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<string>)),
           ),
       getLoginPassword: (region) =>
         sub

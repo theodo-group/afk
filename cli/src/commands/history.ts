@@ -2,8 +2,11 @@ import { Command, Options } from "@effect/cli"
 import { Effect } from "effect"
 import { HistoryService } from "../services/HistoryService.ts"
 import { Sts } from "../adapters/aws/Sts.ts"
+import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
 import { UserError } from "../infra/Errors.ts"
+import { DEFAULT_REGION } from "../constants.ts"
+import { estimateCost, formatUsd } from "../services/Pricing.ts"
 
 const all = Options.boolean("all").pipe(
   Options.withDescription("show Runs across all team members (requires broader IAM)"),
@@ -62,7 +65,10 @@ export const history = Command.make(
     Effect.gen(function* () {
       const hist = yield* HistoryService
       const sts = yield* Sts
+      const cfg = yield* ConfigService
       const out = yield* Output
+      const { config } = yield* cfg.load
+      const region = config.aws?.region ?? DEFAULT_REGION
 
       const sinceIso = yield* Effect.try({
         try: () => parseSince(since),
@@ -105,6 +111,19 @@ export const history = Command.make(
                 {
                   header: "EXIT",
                   value: (r) => (r.exitCode === undefined ? "-" : String(r.exitCode)),
+                },
+                {
+                  header: "COST",
+                  value: (r) => {
+                    const c = estimateCost(
+                      region,
+                      r.instanceType,
+                      r.spot,
+                      r.startedAt,
+                      r.stoppedAt,
+                    )
+                    return c ? formatUsd(c.usd) : "-"
+                  },
                 },
                 ...(all
                   ? [{ header: "OWNER", value: (r: typeof filtered[number]) => r.owner }]
