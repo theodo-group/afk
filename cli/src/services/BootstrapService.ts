@@ -104,10 +104,26 @@ export const BootstrapServiceLive = Layer.effect(
               configPath,
               JSON.stringify(
                 {
+                  backend: "aws",
                   gitUrl: "",
-                  defaultCpu: 1024,
-                  defaultMemory: 2048,
+                  mainService: "agent",
+                  defaultInstanceType: "m6a.large",
+                  allowedInstanceTypes: [
+                    "t3.medium",
+                    "t3.large",
+                    "t3.xlarge",
+                    "m6a.large",
+                    "m6a.xlarge",
+                    "m6a.2xlarge",
+                    "m6a.4xlarge",
+                  ],
                   defaultTimeoutHours: 4,
+                  golden: {
+                    cachedImages: [],
+                  },
+                  aws: {
+                    region,
+                  },
                 },
                 null,
                 2,

@@ -11,7 +11,6 @@ import { GitLive } from "./adapters/Git.ts"
 import { DockerLive } from "./adapters/Docker.ts"
 import { TerraformLive } from "./adapters/Terraform.ts"
 import { StsLive } from "./adapters/aws/Sts.ts"
-import { EcsLive } from "./adapters/aws/Ecs.ts"
 import { SsmLive } from "./adapters/aws/Ssm.ts"
 import { LogsLive } from "./adapters/aws/Logs.ts"
 import { EcrLive } from "./adapters/aws/Ecr.ts"
@@ -21,6 +20,7 @@ import { Ec2Live } from "./adapters/aws/Ec2.ts"
 
 import { ConfigServiceLive } from "./services/ConfigService.ts"
 import { BuildServiceLive } from "./services/BuildService.ts"
+import { ImageServiceLive } from "./services/ImageService.ts"
 import { RunServiceLive } from "./services/RunService.ts"
 import { SecretServiceLive } from "./services/SecretService.ts"
 import { TeamServiceLive } from "./services/TeamService.ts"
@@ -30,6 +30,7 @@ import { init } from "./commands/init.ts"
 import { doctor } from "./commands/doctor.ts"
 import { config as configCmd } from "./commands/config.ts"
 import { build } from "./commands/build.ts"
+import { image } from "./commands/image/index.ts"
 import { run } from "./commands/run.ts"
 import { ls } from "./commands/ls.ts"
 import { logs } from "./commands/logs.ts"
@@ -50,7 +51,6 @@ const quiet = Options.boolean("quiet", { aliases: ["q"] }).pipe(
 )
 
 // ---------- Layers ----------
-// Build from the bottom up, exposing each layer's outputs to the next via provideMerge.
 const L_infra = SubprocessLive
 
 const L_adapters = Layer.mergeAll(
@@ -58,7 +58,6 @@ const L_adapters = Layer.mergeAll(
   DockerLive,
   TerraformLive,
   StsLive,
-  EcsLive,
   SsmLive,
   LogsLive,
   EcrLive,
@@ -69,7 +68,8 @@ const L_adapters = Layer.mergeAll(
 
 const L_config = ConfigServiceLive.pipe(Layer.provideMerge(L_adapters))
 const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_config))
-const L_run = RunServiceLive.pipe(Layer.provideMerge(L_build))
+const L_image = ImageServiceLive.pipe(Layer.provideMerge(L_build))
+const L_run = RunServiceLive.pipe(Layer.provideMerge(L_image))
 const AppLive = Layer.mergeAll(
   SecretServiceLive,
   TeamServiceLive,
@@ -90,6 +90,7 @@ const rootCommand = Command.make(
     doctor,
     configCmd,
     build,
+    image,
     run,
     ls,
     logs,
@@ -107,7 +108,6 @@ const cli = Command.run(rootCommand, {
 
 const program = Effect.gen(function* () {
   const argv = process.argv
-  // Extract global flags lexically to set up logger/output layers before parsing.
   const isJson = argv.includes("--json")
   const isVerbose = argv.includes("--verbose") || argv.includes("-v")
   const isQuiet = argv.includes("--quiet") || argv.includes("-q")

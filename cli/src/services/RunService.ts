@@ -1,61 +1,89 @@
 import { Context, Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
-import { Ecs, type Tag } from "../adapters/aws/Ecs.ts"
+import { existsSync, readFileSync } from "node:fs"
+import { resolve } from "node:path"
+import { Ec2, type Tag as Ec2Tag } from "../adapters/aws/Ec2.ts"
 import { Sts } from "../adapters/aws/Sts.ts"
 import { Ssm } from "../adapters/aws/Ssm.ts"
 import { Logs } from "../adapters/aws/Logs.ts"
 import { BuildService } from "./BuildService.ts"
 import { ConfigService } from "./ConfigService.ts"
-import { AwsError, UserError, DockerError, GitError, ConfigError } from "../infra/Errors.ts"
+import { ImageService } from "./ImageService.ts"
 import {
-  AFK_CLUSTER,
+  AwsError,
+  UserError,
+  DockerError,
+  GitError,
+  ConfigError,
+} from "../infra/Errors.ts"
+import {
   AFK_SECURITY_GROUP,
-  AFK_TASK_EXECUTION_ROLE,
-  AFK_TASK_ROLE,
-  DEFAULT_CPU,
-  DEFAULT_MEMORY,
+  AFK_VM_INSTANCE_PROFILE,
+  AFK_VPC_NAME,
+  COMPOSE_FILE,
+  DEFAULT_INSTANCE_TYPE,
+  DEFAULT_MAIN_SERVICE,
+  DEFAULT_REGION,
   DEFAULT_TIMEOUT_HOURS,
   LOG_GROUP_PREFIX,
   LOG_RETENTION_DAYS,
   TAG_BRANCH,
   TAG_MANAGED,
   TAG_OWNER,
+  TAG_REPO,
   TAG_RUN_ID,
   TAG_SHA,
+  TAG_STARTED_AT,
+  TAG_TIMEOUT_HOURS,
+  VM_AFK_DIR,
+  VM_COMPOSE_PATH,
 } from "../constants.ts"
 import type { Run, RunStatus } from "../schema/Run.ts"
+import { buildUserData } from "./UserData.ts"
+import { lintCompose, substituteImage } from "./Compose.ts"
 
-const mapStatus = (s: string): RunStatus =>
-  ([
-    "PROVISIONING",
-    "PENDING",
-    "RUNNING",
-    "STOPPING",
-    "STOPPED",
-    "DEPROVISIONING",
-  ] as const).includes(s as RunStatus)
-    ? (s as RunStatus)
-    : "STOPPED"
+const mapEc2State = (s: string): RunStatus => {
+  switch (s) {
+    case "pending":
+      return "PROVISIONING"
+    case "running":
+      return "RUNNING"
+    case "shutting-down":
+    case "stopping":
+      return "STOPPING"
+    case "stopped":
+    case "terminated":
+    default:
+      return "STOPPED"
+  }
+}
+
+const tagsToMap = (tags: ReadonlyArray<Ec2Tag>): Record<string, string> =>
+  Object.fromEntries(tags.map((t) => [t.key, t.value]))
 
 export interface RunInput {
   readonly command: ReadonlyArray<string>
   readonly ref?: string
-  readonly cpu?: number
-  readonly memory?: number
+  readonly instanceType?: string
+  readonly onDemand?: boolean
   readonly timeoutHours?: number
-  readonly region: string
-  readonly subnetIds: ReadonlyArray<string>
-  readonly securityGroupIds: ReadonlyArray<string>
 }
 
 export interface RunStarted {
   readonly runId: string
-  readonly taskArn: string
+  readonly instanceId: string
   readonly image: string
   readonly branch: string
   readonly sha: string
   readonly logGroup: string
-  readonly logStream: string
+  readonly instanceType: string
+  readonly spot: boolean
+  readonly composeUsed: boolean
+}
+
+export interface AttachOptions {
+  readonly service?: string
+  readonly host?: boolean
 }
 
 export class RunService extends Context.Tag("RunService")<
@@ -68,87 +96,101 @@ export class RunService extends Context.Tag("RunService")<
       AwsError | UserError | DockerError | GitError | ConfigError
     >
     readonly listMine: (
-      currentArn: string,
-    ) => Effect.Effect<ReadonlyArray<Run>, AwsError>
-    readonly listAll: Effect.Effect<ReadonlyArray<Run>, AwsError>
+      ownerUserId: string,
+    ) => Effect.Effect<ReadonlyArray<Run>, AwsError | ConfigError | UserError>
+    readonly listAll: Effect.Effect<ReadonlyArray<Run>, AwsError | ConfigError | UserError>
     readonly findByRunId: (
       runId: string,
-    ) => Effect.Effect<Run, AwsError | UserError>
-    readonly kill: (runId: string) => Effect.Effect<void, AwsError | UserError>
+    ) => Effect.Effect<Run, AwsError | UserError | ConfigError>
+    readonly kill: (
+      runId: string,
+    ) => Effect.Effect<void, AwsError | UserError | ConfigError>
     readonly attach: (
       runId: string,
-    ) => Effect.Effect<void, AwsError | UserError>
+      opts: AttachOptions,
+    ) => Effect.Effect<void, AwsError | UserError | ConfigError>
   }
 >() {}
 
-const tagsToMap = (tags: ReadonlyArray<Tag>): Record<string, string> =>
-  Object.fromEntries(tags.map((t) => [t.key, t.value]))
-
-const ecsTaskToRun = (task: {
-  taskArn: string
-  lastStatus: string
-  createdAt?: string
-  stoppedAt?: string
-  stoppedReason?: string
-  tags: ReadonlyArray<Tag>
-  cpu?: string
-  memory?: string
-  containers: ReadonlyArray<{ image?: string }>
+const ec2InstanceToRun = (i: {
+  instanceId: string
+  state: string
+  instanceType: string
+  launchTime?: string
+  imageId: string
+  spotInstanceRequestId?: string
+  stateReason?: string
+  tags: ReadonlyArray<Ec2Tag>
 }): Run | null => {
-  const m = tagsToMap(task.tags)
+  const m = tagsToMap(i.tags)
   const runId = m[TAG_RUN_ID]
   const owner = m[TAG_OWNER]
   if (!runId || !owner) return null
   return {
     runId: runId as Run["runId"],
-    taskArn: task.taskArn,
-    status: mapStatus(task.lastStatus),
+    instanceId: i.instanceId,
+    status: mapEc2State(i.state),
     owner,
     branch: m[TAG_BRANCH] ?? "",
     sha: m[TAG_SHA] ?? "",
-    image: task.containers[0]?.image ?? "",
-    cpu: Number(task.cpu ?? 0),
-    memory: Number(task.memory ?? 0),
-    startedAt: task.createdAt,
-    stoppedAt: task.stoppedAt,
-    stopReason: task.stoppedReason,
+    image: i.imageId,
+    instanceType: i.instanceType,
+    spot: Boolean(i.spotInstanceRequestId),
+    startedAt: m[TAG_STARTED_AT] ?? i.launchTime,
+    stoppedAt: undefined,
+    stopReason: i.stateReason,
   }
 }
-
-const fetchAllRuns = (ecs: Context.Tag.Service<typeof Ecs>) =>
-  Effect.gen(function* () {
-    const [running, stopped] = yield* Effect.all([
-      ecs.listTasks({ cluster: AFK_CLUSTER, desiredStatus: "RUNNING" }),
-      ecs.listTasks({ cluster: AFK_CLUSTER, desiredStatus: "STOPPED" }),
-    ])
-    const arns = [...running, ...stopped]
-    if (arns.length === 0) return []
-    const tasks = yield* ecs.describeTasks({
-      cluster: AFK_CLUSTER,
-      taskArns: arns,
-    })
-    return tasks
-      .map(ecsTaskToRun)
-      .filter((r): r is Run => r !== null)
-  })
-
-const renderUserId = (arn: string) => arn
 
 export const RunServiceLive = Layer.effect(
   RunService,
   Effect.gen(function* () {
-    const ecs = yield* Ecs
+    const ec2 = yield* Ec2
     const sts = yield* Sts
     const ssm = yield* Ssm
     const logs = yield* Logs
     const build = yield* BuildService
     const cfg = yield* ConfigService
+    const images = yield* ImageService
 
-    const listAll = fetchAllRuns(ecs)
-    const listMine = (currentArn: string) =>
-      listAll.pipe(
-        Effect.map((rs) => rs.filter((r) => r.owner === currentArn)),
+    const resolveRegion = (regionOverride?: string) =>
+      cfg.load.pipe(
+        Effect.map((r) => regionOverride ?? r.config.aws?.region ?? DEFAULT_REGION),
       )
+
+    const fetchRunsAtRegion = (region: string, ownerUserId?: string) =>
+      Effect.gen(function* () {
+        const tagFilters = [
+          { key: TAG_MANAGED, values: ["true"] },
+          ...(ownerUserId ? [{ key: TAG_OWNER, values: [ownerUserId] }] : []),
+        ]
+        const instances = yield* ec2.describeInstances({
+          region,
+          tagFilters,
+          states: [
+            "pending",
+            "running",
+            "shutting-down",
+            "stopping",
+            "stopped",
+            "terminated",
+          ],
+        })
+        return instances
+          .map(ec2InstanceToRun)
+          .filter((r): r is Run => r !== null)
+      })
+
+    const listAll = Effect.gen(function* () {
+      const region = yield* resolveRegion()
+      return yield* fetchRunsAtRegion(region)
+    })
+
+    const listMine = (ownerUserId: string) =>
+      Effect.gen(function* () {
+        const region = yield* resolveRegion()
+        return yield* fetchRunsAtRegion(region, ownerUserId)
+      })
 
     const findByRunId = (runId: string) =>
       Effect.gen(function* () {
@@ -172,112 +214,172 @@ export const RunServiceLive = Layer.effect(
 
       start: (input) =>
         Effect.gen(function* () {
-          const { config, envEntries, sourceRepoName } = yield* cfg.load
+          const { config, envEntries, projectRoot, sourceRepoName } = yield* cfg.load
           const identity = yield* sts.callerIdentity
+          const region = config.aws?.region ?? DEFAULT_REGION
 
-          const built = yield* build.build({ region: input.region, ref: input.ref })
+          // Refuse if no golden AMI exists.
+          const golden = yield* images.findLatestGolden(region)
+          if (!golden) {
+            return yield* Effect.fail(
+              new UserError({
+                message: `No Golden Image found in ${region}.`,
+                hint: "Run `afk image build` to create one.",
+              }),
+            )
+          }
 
-          // Resource sizing
-          const cpu = input.cpu ?? config.defaultCpu ?? DEFAULT_CPU
-          const memory =
-            input.memory ?? config.defaultMemory ?? DEFAULT_MEMORY
+          // Resolve instance type + whitelist.
+          const instanceType =
+            input.instanceType ?? config.defaultInstanceType ?? DEFAULT_INSTANCE_TYPE
+          const whitelist = config.allowedInstanceTypes
+          if (whitelist && whitelist.length > 0 && !whitelist.includes(instanceType)) {
+            return yield* Effect.fail(
+              new UserError({
+                message: `Instance type '${instanceType}' is not in allowedInstanceTypes.`,
+                hint: `Pick one of: ${whitelist.join(", ")}`,
+              }),
+            )
+          }
+
           const timeoutHours =
-            input.timeoutHours ??
-            config.defaultTimeoutHours ??
-            DEFAULT_TIMEOUT_HOURS
+            input.timeoutHours ?? config.defaultTimeoutHours ?? DEFAULT_TIMEOUT_HOURS
+          const timeoutSeconds = Math.floor(timeoutHours * 3600)
 
-          // Log group
+          // Build (or skip) the container image.
+          const built = yield* build.build({ region, ref: input.ref })
+
+          // Compose handling.
+          const composePath = resolve(projectRoot, COMPOSE_FILE)
+          const composePresent = existsSync(composePath)
+          const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
+          let composeContent: string | undefined
+          if (composePresent) {
+            const raw = yield* Effect.try({
+              try: () => readFileSync(composePath, "utf8"),
+              catch: (cause) =>
+                new ConfigError({
+                  path: composePath,
+                  message: `cannot read: ${String(cause)}`,
+                }),
+            })
+            const lint = yield* Effect.try({
+              try: () => lintCompose({ content: raw, mainService }),
+              catch: (e) =>
+                e instanceof UserError
+                  ? e
+                  : new UserError({
+                      message: `afk.compose.yml: ${String(e)}`,
+                    }),
+            })
+            for (const w of lint.warnings) {
+              console.warn(`warning: ${w}`)
+            }
+            composeContent = substituteImage(raw, built.image)
+          }
+
+          // Log group (created lazily).
           const logGroup = `${LOG_GROUP_PREFIX}/${sourceRepoName}`
-          yield* logs.ensureLogGroup(logGroup, LOG_RETENTION_DAYS)
+          yield* logs.ensureLogGroup(region, logGroup, LOG_RETENTION_DAYS)
 
           const runId = randomUUID()
-          const logStreamPrefix = "run"
-          // ECS awslogs driver builds stream as `${prefix}/${containerName}/${taskId}`.
-          // We don't know the taskId until RunTask returns; record the prefix instead.
-          const logStream = `${logStreamPrefix}/run`
+          const startedAt = new Date().toISOString()
 
-          // Env + secrets
-          const environment = envEntries
+          // Env + secrets.
+          const env: Array<{ name: string; value: string }> = envEntries
             .filter((e) => e.kind === "plain")
             .map((e) => ({ name: e.name, value: (e as { value: string }).value }))
-          environment.push({ name: "AFK_GIT_URL", value: config.gitUrl })
-          environment.push({ name: "AFK_GIT_SHA", value: built.sha })
-          environment.push({ name: "AFK_GIT_REF", value: input.ref ?? built.branch })
-          environment.push({ name: "AFK_RUN_ID", value: runId })
-          environment.push({
-            name: "AFK_TIMEOUT_SECONDS",
-            value: String(Math.floor(timeoutHours * 3600)),
-          })
+          env.push({ name: "AFK_GIT_URL", value: config.gitUrl })
+          env.push({ name: "AFK_GIT_SHA", value: built.sha })
+          env.push({ name: "AFK_GIT_REF", value: input.ref ?? built.branch })
+          env.push({ name: "AFK_RUN_ID", value: runId })
+          env.push({ name: "AFK_TIMEOUT_SECONDS", value: String(timeoutSeconds) })
 
           const secrets = envEntries
             .filter((e) => e.kind === "ssm")
             .map((e) => ({
               name: e.name,
-              valueFrom: ssm.getParameterArn(
-                (e as { ssmName: string }).ssmName,
-                input.region,
-                identity.Account,
-              ),
+              ssmName: (e as { ssmName: string }).ssmName,
             }))
 
-          const family = `afk-${sourceRepoName}`.replace(/[^a-zA-Z0-9-]/g, "-")
-          const executionRoleArn = `arn:aws:iam::${identity.Account}:role/${AFK_TASK_EXECUTION_ROLE}`
-          const taskRoleArn = `arn:aws:iam::${identity.Account}:role/${AFK_TASK_ROLE}`
+          // Network lookups.
+          const vpcId = yield* ec2.findVpcIdByName(region, AFK_VPC_NAME)
+          const subnetIds = yield* ec2.findSubnetIdsByVpcId(region, vpcId)
+          if (subnetIds.length === 0) {
+            return yield* Effect.fail(
+              new UserError({
+                message: `No subnets found in VPC '${AFK_VPC_NAME}'.`,
+                hint: "Apply the AFK Terraform first.",
+              }),
+            )
+          }
+          const sgId = yield* ec2.findSecurityGroupIdByName(
+            region,
+            vpcId,
+            AFK_SECURITY_GROUP,
+          )
 
-          const td = yield* ecs.registerTaskDefinition({
-            family,
-            cpu: String(cpu),
-            memory: String(memory),
-            executionRoleArn,
-            taskRoleArn,
+          const userData = buildUserData({
+            runId,
+            region,
+            accountId: identity.Account,
+            repoName: sourceRepoName,
+            mainService,
             image: built.image,
-            command: [...input.command],
-            environment,
+            command: input.command,
+            timeoutSeconds,
+            env,
             secrets,
-            logGroup,
-            logRegion: input.region,
-            logStreamPrefix,
+            compose: composeContent,
           })
 
-          const task = yield* ecs.runTask({
-            cluster: AFK_CLUSTER,
-            taskDefinitionArn: td.taskDefinitionArn,
-            subnets: input.subnetIds,
-            securityGroups: input.securityGroupIds,
-            assignPublicIp: true,
-            enableExecuteCommand: true,
+          const spot = input.onDemand !== true
+
+          const { instanceId } = yield* ec2.runInstance({
+            region,
+            imageId: golden.imageId,
+            instanceType,
+            subnetId: subnetIds[Math.floor(Math.random() * subnetIds.length)]!,
+            securityGroupIds: [sgId],
+            iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
+            userData,
+            spot,
             tags: [
-              { key: TAG_OWNER, value: renderUserId(identity.Arn) },
+              { key: TAG_OWNER, value: identity.UserId },
               { key: TAG_RUN_ID, value: runId },
               { key: TAG_BRANCH, value: built.branch },
               { key: TAG_SHA, value: built.sha },
               { key: TAG_MANAGED, value: "true" },
+              { key: TAG_REPO, value: sourceRepoName },
+              { key: TAG_TIMEOUT_HOURS, value: String(timeoutHours) },
+              { key: TAG_STARTED_AT, value: startedAt },
+              { key: "Name", value: `afk-${sourceRepoName}-${runId.slice(0, 8)}` },
             ],
           })
 
           return {
             runId,
-            taskArn: task.taskArn,
+            instanceId,
             image: built.image,
             branch: built.branch,
             sha: built.sha,
             logGroup,
-            logStream,
+            instanceType,
+            spot,
+            composeUsed: composePresent,
           }
         }),
 
       kill: (runId) =>
         Effect.gen(function* () {
           const run = yield* findByRunId(runId)
-          yield* ecs.stopTask({
-            cluster: AFK_CLUSTER,
-            taskArn: run.taskArn,
-            reason: `killed by afk cli`,
-          })
+          const region = yield* resolveRegion()
+          yield* ec2.terminateInstances(region, [run.instanceId])
         }),
 
-      attach: (runId) =>
+      attach: (runId, opts) =>
         Effect.gen(function* () {
+          const { config } = yield* cfg.load
           const run = yield* findByRunId(runId)
           if (run.status !== "RUNNING") {
             return yield* Effect.fail(
@@ -286,10 +388,35 @@ export const RunServiceLive = Layer.effect(
               }),
             )
           }
-          yield* ecs.executeCommand({
-            cluster: AFK_CLUSTER,
-            taskArn: run.taskArn,
-            command: "/bin/sh",
+          const region = config.aws?.region ?? DEFAULT_REGION
+          const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
+          const service = opts.service ?? mainService
+
+          if (opts.host) {
+            yield* ssm.startHostShell({ region, instanceId: run.instanceId })
+            return
+          }
+
+          // Pick docker exec target. Compose creates containers named
+          // <project>_<service>_1 (compose v1) or <project>-<service>-1 (v2);
+          // we let `docker compose exec` resolve the name for us. Fallback to
+          // `docker exec agent` for non-compose Runs.
+          const cmd = [
+            "set -e",
+            `cd ${VM_AFK_DIR}`,
+            // Try compose-aware exec first; fall back to plain docker exec.
+            `if [ -f ${VM_COMPOSE_PATH} ]; then`,
+            `  docker compose -f ${VM_COMPOSE_PATH} exec ${service} bash 2>/dev/null \\`,
+            `    || docker compose -f ${VM_COMPOSE_PATH} exec ${service} sh`,
+            `else`,
+            `  docker exec -it agent bash 2>/dev/null || docker exec -it agent sh`,
+            `fi`,
+          ].join("; ")
+
+          yield* ssm.startInteractiveCommand({
+            region,
+            instanceId: run.instanceId,
+            command: cmd,
           })
         }),
     })

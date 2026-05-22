@@ -38,12 +38,14 @@ export const S3Live = Layer.effect(
         Effect.gen(function* () {
           const createArgs =
             region === "us-east-1"
-              ? ["s3api", "create-bucket", "--bucket", bucket]
+              ? ["s3api", "create-bucket", "--bucket", bucket, "--region", region]
               : [
                   "s3api",
                   "create-bucket",
                   "--bucket",
                   bucket,
+                  "--region",
+                  region,
                   "--create-bucket-configuration",
                   `LocationConstraint=${region}`,
                 ]
@@ -56,6 +58,8 @@ export const S3Live = Layer.effect(
               "put-bucket-versioning",
               "--bucket",
               bucket,
+              "--region",
+              region,
               "--versioning-configuration",
               "Status=Enabled",
             ])
@@ -69,6 +73,8 @@ export const S3Live = Layer.effect(
               "put-bucket-encryption",
               "--bucket",
               bucket,
+              "--region",
+              region,
               "--server-side-encryption-configuration",
               JSON.stringify({
                 Rules: [
@@ -90,6 +96,8 @@ export const S3Live = Layer.effect(
               "put-public-access-block",
               "--bucket",
               bucket,
+              "--region",
+              region,
               "--public-access-block-configuration",
               "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
             ])

@@ -15,10 +15,12 @@ export class Ecr extends Context.Tag("Ecr")<
       region: string,
     ) => Effect.Effect<string, AwsError>
     readonly ensureRepository: (
+      region: string,
       repoName: string,
       lifecycleDays: number,
     ) => Effect.Effect<void, AwsError>
     readonly imageExists: (
+      region: string,
       repoName: string,
       tag: string,
     ) => Effect.Effect<boolean, AwsError>
@@ -48,7 +50,7 @@ export const EcrLive = Layer.effect(
             ),
             Effect.mapError(awsError("sts:GetCallerIdentity")),
           ),
-      ensureRepository: (repoName, lifecycleDays) =>
+      ensureRepository: (region, repoName, lifecycleDays) =>
         Effect.gen(function* () {
           const exists = yield* sub
             .runJson<{ repositories: ReadonlyArray<{ repositoryName: string }> }>(
@@ -56,6 +58,8 @@ export const EcrLive = Layer.effect(
               [
                 "ecr",
                 "describe-repositories",
+                "--region",
+                region,
                 "--repository-names",
                 repoName,
                 "--output",
@@ -71,6 +75,8 @@ export const EcrLive = Layer.effect(
               .run("aws", [
                 "ecr",
                 "create-repository",
+                "--region",
+                region,
                 "--repository-name",
                 repoName,
                 "--image-scanning-configuration",
@@ -98,6 +104,8 @@ export const EcrLive = Layer.effect(
               .run("aws", [
                 "ecr",
                 "put-lifecycle-policy",
+                "--region",
+                region,
                 "--repository-name",
                 repoName,
                 "--lifecycle-policy-text",
@@ -111,11 +119,13 @@ export const EcrLive = Layer.effect(
               )
           }
         }),
-      imageExists: (repoName, tag) =>
+      imageExists: (region, repoName, tag) =>
         sub
           .run("aws", [
             "ecr",
             "describe-images",
+            "--region",
+            region,
             "--repository-name",
             repoName,
             "--image-ids",

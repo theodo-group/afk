@@ -34,8 +34,9 @@ export const init = Command.make("init", { region, provider }, ({ region }) =>
             ``,
             `Next:`,
             `  1. cd ${result.terraformDir} && terraform init && terraform apply`,
-            `  2. afk secrets put github-token <PAT>`,
-            `  3. afk run "<your command>"`,
+            `  2. afk image build           # one-time golden AMI build (5-10 min)`,
+            `  3. afk secrets put github-token <PAT>`,
+            `  4. afk run "<your command>"`,
           ].join("\n"),
         ),
     })

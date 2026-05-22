@@ -6,12 +6,18 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.0"
+    }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 
-  # Backend config is rendered into backend.tf by `afk init`. We declare the
-  # backend type here so `terraform init` knows what to expect; the bucket,
-  # key, region, and use_lockfile = true are written next to this file.
-  backend "s3" {}
+  # Backend block is rendered into backend.tf by `afk init` (not declared here
+  # to avoid a "duplicate backend configuration" error).
 }
 
 provider "aws" {

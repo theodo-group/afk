@@ -17,7 +17,7 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "CIDR blocks for the public subnets used by Fargate Runs. Must contain exactly two entries; each is mapped to a distinct AZ."
+  description = "CIDR blocks for the public subnets used by Run VMs. Must contain exactly two entries; each is mapped to a distinct AZ."
   type        = list(string)
   default     = ["10.40.0.0/24", "10.40.1.0/24"]
 
@@ -28,13 +28,39 @@ variable "public_subnet_cidrs" {
 }
 
 variable "max_run_timeout_hours" {
-  description = "Hard ceiling on Run wall-clock duration. Enforced by the entrypoint wrapper; the CLI rejects --timeout values above this."
+  description = "Hard ceiling on Run wall-clock duration. The sweeper Lambda terminates VMs older than this + a grace window. The CLI rejects --timeout values above this."
   type        = number
   default     = 8
 }
 
-variable "enable_exec_logging" {
-  description = "When true, ECS Exec sessions are recorded to CloudWatch under /afk/exec. Off by default to keep baseline cost at zero."
+variable "allowed_instance_types" {
+  description = "Instance types developers may launch Runs on. RunInstances is denied for any type outside this list."
+  type        = list(string)
+  default = [
+    "t3.medium",
+    "t3.large",
+    "t3.xlarge",
+    "m6a.large",
+    "m6a.xlarge",
+    "m6a.2xlarge",
+    "m6a.4xlarge",
+  ]
+}
+
+variable "sweeper_schedule_expression" {
+  description = "EventBridge schedule for the sweeper Lambda."
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
+variable "sweeper_grace_minutes" {
+  description = "Grace period past a Run's declared timeout before the sweeper terminates the VM."
+  type        = number
+  default     = 30
+}
+
+variable "enable_session_logging" {
+  description = "When true, SSM Session Manager sessions are recorded to CloudWatch under /afk/sessions. Off by default."
   type        = bool
   default     = false
 }

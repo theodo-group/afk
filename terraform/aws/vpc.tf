@@ -49,12 +49,13 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Security group attached to every Run. Inbound is fully denied (ECS Exec uses
-# the SSM control plane, not inbound TCP). Outbound is unrestricted so the Run
-# can reach ECR, SSM, CloudWatch, GitHub, and the agent's API.
+# Security group attached to every Run VM. Inbound is fully denied (attach uses
+# the SSM control plane, not inbound TCP). Outbound is unrestricted so the VM
+# can reach ECR, SSM, CloudWatch, GitHub, and any registries the compose graph
+# pulls from.
 resource "aws_security_group" "runs" {
-  name        = "${var.project_name}-runs"
-  description = "Security group for AFK Runs. No inbound; all outbound."
+  name        = "${var.project_name}-runs-sg"
+  description = "Security group for AFK Run VMs. No inbound; all outbound."
   vpc_id      = aws_vpc.afk.id
 
   egress {

@@ -1,18 +1,24 @@
 import { Command, Options } from "@effect/cli"
 import { Effect } from "effect"
 import { BuildService } from "../services/BuildService.ts"
+import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
+import { DEFAULT_REGION } from "../constants.ts"
 
-const region = Options.text("region").pipe(Options.withDefault("us-east-1"))
 const ref = Options.text("ref").pipe(
   Options.optional,
   Options.withDescription("git ref (branch, sha, or tag); defaults to current branch"),
 )
 
-export const build = Command.make("build", { region, ref }, ({ region, ref }) =>
+export const build = Command.make("build", { ref }, ({ ref }) =>
   Effect.gen(function* () {
     const builder = yield* BuildService
+    const cfg = yield* ConfigService
     const out = yield* Output
+
+    const { config } = yield* cfg.load
+    const region = config.aws?.region ?? DEFAULT_REGION
+
     const result = yield* builder.build({
       region,
       ref: ref._tag === "Some" ? ref.value : undefined,

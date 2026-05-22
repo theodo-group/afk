@@ -4,39 +4,61 @@ locals {
   ssm_param_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter/${var.project_name}/*"
   ecr_repo_arn  = "arn:aws:ecr:${local.region}:${local.account_id}:repository/${var.project_name}/*"
   log_group_arn = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/${var.project_name}/*"
-  task_def_arn  = "arn:aws:ecs:${local.region}:${local.account_id}:task-definition/*"
-  task_arn      = "arn:aws:ecs:${local.region}:${local.account_id}:task/${aws_ecs_cluster.afk.name}/*"
+
+  # Resource ARNs for the RunInstances policy. RunInstances touches several
+  # resource types in one API call; the conditions on each are different.
+  ec2_instance_arn = "arn:aws:ec2:${local.region}:${local.account_id}:instance/*"
+  ec2_volume_arn   = "arn:aws:ec2:${local.region}:${local.account_id}:volume/*"
+  ec2_nic_arn      = "arn:aws:ec2:${local.region}:${local.account_id}:network-interface/*"
+  ec2_keypair_arn  = "arn:aws:ec2:${local.region}:${local.account_id}:key-pair/*"
+  ec2_subnet_arn   = "arn:aws:ec2:${local.region}:${local.account_id}:subnet/*"
+  ec2_sg_arn       = "arn:aws:ec2:${local.region}:${local.account_id}:security-group/*"
+  ec2_image_arn    = "arn:aws:ec2:${local.region}::image/*"
 }
 
 # ---------------------------------------------------------------------------
-# Task execution role — used by the ECS control plane to pull images, fetch
-# SSM secret references, and write container logs to CloudWatch.
+# VM instance role — attached to every Run VM via the instance profile.
+# Minimal: pull from ECR, read SSM params under /afk/secrets, write CloudWatch
+# Logs under /afk/*. No ec2:*. No iam:*. The VM terminates itself by OS
+# shutdown (InstanceInitiatedShutdownBehavior=terminate), not via API.
 # ---------------------------------------------------------------------------
 
-data "aws_iam_policy_document" "ecs_tasks_assume" {
+data "aws_iam_policy_document" "ec2_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
       type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
+      identifiers = ["ec2.amazonaws.com"]
     }
   }
 }
 
-resource "aws_iam_role" "task_execution" {
-  name               = "${var.project_name}-task-execution"
-  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+resource "aws_iam_role" "vm_instance" {
+  name               = "${var.project_name}-vm-instance-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
-resource "aws_iam_role_policy_attachment" "task_execution_managed" {
-  role       = aws_iam_role.task_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+# SSM agent needs this for Session Manager (attach) to work.
+resource "aws_iam_role_policy_attachment" "vm_ssm" {
+  role       = aws_iam_role.vm_instance.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-data "aws_iam_policy_document" "task_execution_extra" {
+data "aws_iam_policy_document" "vm_instance" {
   statement {
-    sid       = "ReadAfkSsmParameters"
-    actions   = ["ssm:GetParameters", "ssm:GetParameter"]
+    sid = "PullFromAfkEcr"
+    actions = [
+      "ecr:GetAuthorizationToken",
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "ReadAfkSecrets"
+    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = [local.ssm_param_arn]
   }
 
@@ -50,53 +72,34 @@ data "aws_iam_policy_document" "task_execution_extra" {
       values   = ["ssm.${local.region}.amazonaws.com"]
     }
   }
-}
 
-resource "aws_iam_role_policy" "task_execution_extra" {
-  name   = "${var.project_name}-task-execution-extra"
-  role   = aws_iam_role.task_execution.id
-  policy = data.aws_iam_policy_document.task_execution_extra.json
-}
-
-# ---------------------------------------------------------------------------
-# Task role — assumed by the container at runtime. Minimal by design;
-# consumers can attach extra policies in their own Terraform if needed.
-# ---------------------------------------------------------------------------
-
-resource "aws_iam_role" "task" {
-  name               = "${var.project_name}-task"
-  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
-}
-
-data "aws_iam_policy_document" "task" {
-  # Required for ECS Exec from inside the container.
   statement {
-    sid = "EcsExecSsmMessages"
+    sid = "WriteRunLogs"
     actions = [
-      "ssmmessages:CreateControlChannel",
-      "ssmmessages:CreateDataChannel",
-      "ssmmessages:OpenControlChannel",
-      "ssmmessages:OpenDataChannel",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:CreateLogGroup",
+      "logs:DescribeLogStreams",
     ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid       = "WriteRunLogs"
-    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = [local.log_group_arn]
   }
 }
 
-resource "aws_iam_role_policy" "task" {
-  name   = "${var.project_name}-task"
-  role   = aws_iam_role.task.id
-  policy = data.aws_iam_policy_document.task.json
+resource "aws_iam_role_policy" "vm_instance" {
+  name   = "${var.project_name}-vm-instance"
+  role   = aws_iam_role.vm_instance.id
+  policy = data.aws_iam_policy_document.vm_instance.json
+}
+
+resource "aws_iam_instance_profile" "vm_instance" {
+  name = "${var.project_name}-vm-instance-profile"
+  role = aws_iam_role.vm_instance.name
 }
 
 # ---------------------------------------------------------------------------
-# Developer role + policy — what the CLI assumes (or what is attached
-# directly to individual developer IAM principals by an admin).
+# Developer role + policy — the IAM principal a developer acts under when
+# driving the CLI. RunInstances is heavily conditioned; PassRole is locked
+# to the single VM instance role.
 # ---------------------------------------------------------------------------
 
 data "aws_iam_policy_document" "developer_assume" {
@@ -115,51 +118,201 @@ resource "aws_iam_role" "developer" {
 }
 
 data "aws_iam_policy_document" "developer" {
+  # --- RunInstances: heavily conditioned ---
+  # AWS's RunInstances API touches many resource types in one call. We split
+  # the allow statements by resource so each gets its own conditions.
+
+  # Allow launching INTO the AFK subnet only.
   statement {
-    sid = "ManageRuns"
-    actions = [
-      "ecs:RunTask",
-      "ecs:StopTask",
-      "ecs:ListTasks",
-      "ecs:DescribeTasks",
-      "ecs:DescribeTaskDefinition",
-      "ecs:RegisterTaskDefinition",
-      "ecs:DeregisterTaskDefinition",
-      "ecs:ListTaskDefinitions",
-    ]
-    resources = ["*"]
+    sid       = "LaunchIntoAfkSubnetsOnly"
+    actions   = ["ec2:RunInstances"]
+    resources = [local.ec2_subnet_arn]
     condition {
       test     = "StringEquals"
-      variable = "ecs:cluster"
-      values   = [aws_ecs_cluster.afk.arn]
+      variable = "ec2:Vpc"
+      values   = [aws_vpc.afk.arn]
     }
   }
 
-  # RegisterTaskDefinition and ListTaskDefinitions don't accept the ecs:cluster
-  # condition. Allow them unconditionally — RegisterTaskDefinition is
-  # account-scoped by nature.
+  # Allow only the AFK security group.
   statement {
-    sid = "RegisterTaskDefinitionUnscoped"
+    sid       = "LaunchWithAfkSgOnly"
+    actions   = ["ec2:RunInstances"]
+    resources = [local.ec2_sg_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:Vpc"
+      values   = [aws_vpc.afk.arn]
+    }
+  }
+
+  # Allow only golden AMIs (tagged afk:golden=true) owned by this account.
+  statement {
+    sid       = "LaunchFromGoldenAmiOnly"
+    actions   = ["ec2:RunInstances"]
+    resources = [local.ec2_image_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:ResourceTag/afk:golden"
+      values   = ["true"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:Owner"
+      values   = [local.account_id]
+    }
+  }
+
+  # Allow the actual instance creation, restricted to the whitelisted instance
+  # types and requiring the afk:owner tag to match the caller's userid.
+  statement {
+    sid       = "LaunchInstanceWithWhitelistedType"
+    actions   = ["ec2:RunInstances"]
+    resources = [local.ec2_instance_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:InstanceType"
+      values   = var.allowed_instance_types
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/afk:owner"
+      values   = ["$${aws:userid}"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/afk:managed"
+      values   = ["true"]
+    }
+    # afk:run-id must be present
+    condition {
+      test     = "Null"
+      variable = "aws:RequestTag/afk:run-id"
+      values   = ["false"]
+    }
+  }
+
+  # Allow ancillary resource creation (volumes, NICs, key-pairs) that
+  # RunInstances always touches. No additional conditions; the instance-level
+  # conditions above gate the broader call.
+  statement {
+    sid     = "LaunchAncillaryResources"
+    actions = ["ec2:RunInstances"]
+    resources = [
+      local.ec2_volume_arn,
+      local.ec2_nic_arn,
+      local.ec2_keypair_arn,
+    ]
+  }
+
+  # --- CreateTags at launch only ---
+  statement {
+    sid       = "TagAtLaunchOnly"
+    actions   = ["ec2:CreateTags"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = ["RunInstances"]
+    }
+  }
+
+  # --- DescribeInstances / DescribeImages (read-only, no ARN scoping in EC2) ---
+  statement {
+    sid = "DescribeInfra"
     actions = [
-      "ecs:RegisterTaskDefinition",
-      "ecs:DeregisterTaskDefinition",
-      "ecs:DescribeTaskDefinition",
-      "ecs:ListTaskDefinitions",
+      "ec2:DescribeInstances",
+      "ec2:DescribeInstanceStatus",
+      "ec2:DescribeImages",
+      "ec2:DescribeTags",
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeAvailabilityZones",
+      "ec2:DescribeKeyPairs",
     ]
     resources = ["*"]
   }
 
+  # --- Image management (for `afk image build`) ---
+  # CreateImage / RegisterImage require broader permissions; the builder
+  # workflow uses CreateImage on the builder instance, then DeleteSnapshot/
+  # DeregisterImage for `afk image rm`. Restrict to AFK-tagged resources.
   statement {
-    sid       = "AttachOnlyToOwnRuns"
-    actions   = ["ecs:ExecuteCommand"]
-    resources = [local.task_arn]
+    sid = "ManageGoldenImages"
+    actions = [
+      "ec2:CreateImage",
+      "ec2:RegisterImage",
+      "ec2:DeregisterImage",
+      "ec2:DeleteSnapshot",
+      "ec2:CopyImage",
+    ]
+    resources = ["*"]
+  }
+
+  # SSM SendCommand against the builder instance (to install Docker + pre-pull).
+  statement {
+    sid = "SsmSendCommandForBuilder"
+    actions = [
+      "ssm:SendCommand",
+      "ssm:GetCommandInvocation",
+      "ssm:ListCommandInvocations",
+      "ssm:DescribeInstanceInformation",
+    ]
+    resources = ["*"]
+  }
+
+  # --- Terminate only own Runs (and any instance the developer launched) ---
+  statement {
+    sid       = "TerminateOwnRuns"
+    actions   = ["ec2:TerminateInstances", "ec2:StopInstances"]
+    resources = [local.ec2_instance_arn]
     condition {
       test     = "StringEquals"
-      variable = "aws:ResourceTag/afk:owner"
+      variable = "ec2:ResourceTag/afk:owner"
       values   = ["$${aws:userid}"]
     }
   }
 
+  # The builder instance is launched by the developer (so RunInstances
+  # request-tag condition picks them as the owner) — same Terminate path
+  # applies, no extra grant needed.
+
+  # --- Attach via SSM Session Manager, scoped to own Runs ---
+  statement {
+    sid       = "StartSessionToOwnRuns"
+    actions   = ["ssm:StartSession"]
+    resources = ["arn:aws:ec2:${local.region}:${local.account_id}:instance/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/afk:owner"
+      values   = ["$${aws:userid}"]
+    }
+  }
+
+  statement {
+    sid = "StartSessionDocuments"
+    actions = ["ssm:StartSession"]
+    resources = [
+      "arn:aws:ssm:${local.region}::document/AWS-StartInteractiveCommand",
+      "arn:aws:ssm:${local.region}::document/AWS-StartSSHSession",
+      "arn:aws:ssm:${local.region}::document/SSM-SessionManagerRunShell",
+    ]
+  }
+
+  statement {
+    sid       = "TerminateOwnSessions"
+    actions   = ["ssm:TerminateSession", "ssm:ResumeSession"]
+    resources = ["arn:aws:ssm:${local.region}:${local.account_id}:session/$${aws:username}-*"]
+  }
+
+  statement {
+    sid       = "DescribeSessions"
+    actions   = ["ssm:DescribeSessions"]
+    resources = ["*"]
+  }
+
+  # --- ECR (unchanged from v1) ---
   statement {
     sid = "ManageAfkEcrRepositories"
     actions = [
@@ -186,6 +339,7 @@ data "aws_iam_policy_document" "developer" {
     resources = ["*"]
   }
 
+  # --- SSM secrets (developer-managed) ---
   statement {
     sid = "ManageAfkSsmParameters"
     actions = [
@@ -198,6 +352,7 @@ data "aws_iam_policy_document" "developer" {
     resources = [local.ssm_param_arn]
   }
 
+  # --- CloudWatch Logs ---
   statement {
     sid = "ManageAfkLogGroups"
     actions = [
@@ -212,17 +367,17 @@ data "aws_iam_policy_document" "developer" {
     resources = [local.log_group_arn]
   }
 
+  # --- PassRole locked to the single VM instance role ---
+  # The critical lockdown. Without this constraint a developer could attach an
+  # arbitrary role to a Run VM, attach via SSM, and become that role.
   statement {
-    sid     = "PassTaskRoles"
-    actions = ["iam:PassRole"]
-    resources = [
-      aws_iam_role.task_execution.arn,
-      aws_iam_role.task.arn,
-    ]
+    sid       = "PassVmInstanceRoleOnly"
+    actions   = ["iam:PassRole"]
+    resources = [aws_iam_role.vm_instance.arn]
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["ecs-tasks.amazonaws.com"]
+      values   = ["ec2.amazonaws.com"]
     }
   }
 }

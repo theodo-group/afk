@@ -13,12 +13,20 @@ export const config = Command.make("config", {}, () =>
       human: () =>
         out.print(
           [
-            `project root      ${resolved.projectRoot}`,
-            `source repo       ${resolved.sourceRepoName}`,
-            `git url           ${resolved.config.gitUrl}`,
-            `default cpu       ${resolved.config.defaultCpu ?? "(unset)"}`,
-            `default memory    ${resolved.config.defaultMemory ?? "(unset)"}`,
-            `default timeout   ${resolved.config.defaultTimeoutHours ?? "(unset)"}h`,
+            `project root        ${resolved.projectRoot}`,
+            `source repo         ${resolved.sourceRepoName}`,
+            `backend             ${resolved.config.backend ?? "aws"}`,
+            `git url             ${resolved.config.gitUrl}`,
+            `region              ${resolved.config.aws?.region ?? "(unset)"}`,
+            `main service        ${resolved.config.mainService ?? "agent"}`,
+            `default instance    ${resolved.config.defaultInstanceType ?? "(unset)"}`,
+            `allowed instances   ${
+              (resolved.config.allowedInstanceTypes ?? []).join(", ") || "(unrestricted)"
+            }`,
+            `default timeout     ${resolved.config.defaultTimeoutHours ?? "(unset)"}h`,
+            `cached images       ${
+              (resolved.config.golden?.cachedImages ?? []).join(", ") || "(none)"
+            }`,
             `env entries:`,
             ...resolved.envEntries.map((e) =>
               e.kind === "plain"

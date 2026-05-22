@@ -19,14 +19,14 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
 
     const list = all
       ? yield* runs.listAll
-      : yield* runs.listMine((yield* sts.callerIdentity).Arn)
+      : yield* runs.listMine((yield* sts.callerIdentity).UserId)
 
     const filtered = list.filter((r) =>
       status === "all"
         ? true
         : status === "running"
-          ? r.status === "RUNNING" || r.status === "PROVISIONING" || r.status === "PENDING"
-          : r.status === "STOPPED",
+          ? r.status === "RUNNING" || r.status === "PROVISIONING"
+          : r.status === "STOPPED" || r.status === "STOPPING",
     )
 
     yield* out.emit({
@@ -37,6 +37,7 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
           { header: "STATUS", value: (r) => r.status },
           { header: "BRANCH", value: (r) => r.branch },
           { header: "SHA", value: (r) => r.sha.slice(0, 12) },
+          { header: "TYPE", value: (r) => `${r.instanceType}${r.spot ? "/spot" : ""}` },
           { header: "OWNER", value: (r) => r.owner },
           { header: "STARTED", value: (r) => r.startedAt ?? "-" },
         ]),

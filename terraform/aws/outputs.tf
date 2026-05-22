@@ -8,14 +8,9 @@ output "account_id" {
   value       = data.aws_caller_identity.current.account_id
 }
 
-output "cluster_name" {
-  description = "ECS cluster name. Passed to ecs:RunTask by the CLI."
-  value       = aws_ecs_cluster.afk.name
-}
-
-output "cluster_arn" {
-  description = "ECS cluster ARN."
-  value       = aws_ecs_cluster.afk.arn
+output "vpc_id" {
+  description = "AFK VPC ID."
+  value       = aws_vpc.afk.id
 }
 
 output "subnet_ids" {
@@ -24,18 +19,23 @@ output "subnet_ids" {
 }
 
 output "security_group_id" {
-  description = "Security group attached to every Run (deny inbound, allow outbound)."
+  description = "Security group attached to every Run VM (deny inbound, allow outbound)."
   value       = aws_security_group.runs.id
 }
 
-output "task_execution_role_arn" {
-  description = "Role ECS assumes to launch a Run (pull image, fetch SSM secrets, write logs)."
-  value       = aws_iam_role.task_execution.arn
+output "vm_instance_profile_name" {
+  description = "Name of the instance profile attached to every Run VM."
+  value       = aws_iam_instance_profile.vm_instance.name
 }
 
-output "task_role_arn" {
-  description = "Role the Run's container assumes at runtime."
-  value       = aws_iam_role.task.arn
+output "vm_instance_profile_arn" {
+  description = "ARN of the instance profile attached to every Run VM."
+  value       = aws_iam_instance_profile.vm_instance.arn
+}
+
+output "vm_instance_role_arn" {
+  description = "Role assumed by every Run VM via its instance profile."
+  value       = aws_iam_role.vm_instance.arn
 }
 
 output "developer_role_arn" {
@@ -46,6 +46,16 @@ output "developer_role_arn" {
 output "developer_policy_arn" {
   description = "Customer-managed policy granting AFK developer permissions. Attach to IAM users/roles directly if not using the developer role."
   value       = aws_iam_policy.developer.arn
+}
+
+output "sweeper_function_name" {
+  description = "Name of the sweeper Lambda function."
+  value       = aws_lambda_function.sweeper.function_name
+}
+
+output "allowed_instance_types" {
+  description = "Whitelist of instance types developers may launch Runs on."
+  value       = var.allowed_instance_types
 }
 
 output "max_run_timeout_hours" {

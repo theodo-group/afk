@@ -17,10 +17,12 @@ export class Logs extends Context.Tag("Logs")<
   Logs,
   {
     readonly ensureLogGroup: (
+      region: string,
       name: string,
       retentionDays: number,
     ) => Effect.Effect<void, AwsError>
     readonly getEvents: (input: {
+      readonly region: string
       readonly group: string
       readonly stream: string
       readonly startFromHead?: boolean
@@ -30,8 +32,11 @@ export class Logs extends Context.Tag("Logs")<
       AwsError
     >
     readonly tail: (input: {
+      readonly region: string
       readonly group: string
       readonly stream?: string
+      readonly follow?: boolean
+      readonly since?: string
     }) => Effect.Effect<void, AwsError>
   }
 >() {}
@@ -42,7 +47,7 @@ export const LogsLive = Layer.effect(
     const sub = yield* Subprocess
 
     return Logs.of({
-      ensureLogGroup: (name, retentionDays) =>
+      ensureLogGroup: (region, name, retentionDays) =>
         Effect.gen(function* () {
           const exists = yield* sub
             .runJson<{ logGroups: ReadonlyArray<{ logGroupName: string }> }>(
@@ -50,6 +55,8 @@ export const LogsLive = Layer.effect(
               [
                 "logs",
                 "describe-log-groups",
+                "--region",
+                region,
                 "--log-group-name-prefix",
                 name,
                 "--output",
@@ -67,6 +74,8 @@ export const LogsLive = Layer.effect(
               .run("aws", [
                 "logs",
                 "create-log-group",
+                "--region",
+                region,
                 "--log-group-name",
                 name,
                 "--output",
@@ -78,6 +87,8 @@ export const LogsLive = Layer.effect(
             .run("aws", [
               "logs",
               "put-retention-policy",
+              "--region",
+              region,
               "--log-group-name",
               name,
               "--retention-in-days",
@@ -98,6 +109,8 @@ export const LogsLive = Layer.effect(
           }>("aws", [
             "logs",
             "get-log-events",
+            "--region",
+            input.region,
             "--log-group-name",
             input.group,
             "--log-stream-name",
@@ -123,9 +136,13 @@ export const LogsLive = Layer.effect(
             "logs",
             "tail",
             input.group,
-            "--follow",
+            "--region",
+            input.region,
+            ...(input.follow ? ["--follow"] : []),
+            "--since",
+            input.since ?? "24h",
             ...(input.stream
-              ? ["--log-stream-names", input.stream]
+              ? ["--log-stream-name-prefix", input.stream]
               : []),
           ])
           .pipe(Effect.mapError(awsError("logs:Tail"))),

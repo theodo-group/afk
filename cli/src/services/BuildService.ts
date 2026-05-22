@@ -70,12 +70,12 @@ export const BuildServiceLive = Layer.effect(
           const tag = `${branch}-${sha.slice(0, 12)}`
 
           // Ensure ECR repo exists
-          yield* ecr.ensureRepository(repoName, ECR_LIFECYCLE_DAYS)
+          yield* ecr.ensureRepository(region, repoName, ECR_LIFECYCLE_DAYS)
           const registry = yield* ecr.registryUri(region)
           const image = `${registry}/${repoName}:${tag}`
 
           // Skip if image already exists
-          const exists = yield* ecr.imageExists(repoName, tag)
+          const exists = yield* ecr.imageExists(region, repoName, tag)
           if (exists) {
             return {
               image,
