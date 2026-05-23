@@ -10,6 +10,7 @@
  * fetch handlers are usually small enough to dispatch by URL.
  */
 
+import { DurableObject } from "cloudflare:workers"
 import { Container } from "@cloudflare/containers"
 import type {
   Env,

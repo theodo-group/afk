@@ -115,7 +115,7 @@ For the **AWS Backend** additionally:
 For the **Cloudflare Backend** additionally:
 
 - `wrangler` (Cloudflare's deploy CLI) on PATH
-- `CLOUDFLARE_API_TOKEN` exported, scoped for `Workers Scripts:Edit`, `Containers:Edit`, `D1:Edit`, `Workers KV:Edit`, `Access:Edit`
+- `CLOUDFLARE_API_TOKEN` in a gitignored `.env` at the repo root (afk auto-loads `.env`), scoped for `Workers Scripts:Edit`, `Workers Containers:Edit`, `Cloudflare Images:Edit`, `D1:Edit`, `Workers KV Storage:Edit`, and `Access: Service Tokens:Edit` (the last only for `afk team add`)
 - A Cloudflare account on the Workers Paid plan (Containers requires it)
 
 Updates: `git pull && bun install`. There is no version pinning; consumers run whatever sha they checked out.
@@ -134,11 +134,10 @@ In a fresh consumer repo:
 # 1. Bootstrap (creates the state bucket + scaffolds files)
 afk init --provider aws --region eu-west-1
 
-# 2. Provision infra (VPC, IAM, sweeper Lambda)
-cd terraform/afk
-terraform init
-terraform apply -var aws_region=eu-west-1
-cd -
+# 2. Provision infra (VPC, IAM, sweeper Lambda, DynamoDB).
+#    Runs `terraform init && terraform apply` against terraform/afk for you,
+#    using the region from afk.config.json. (Or run terraform yourself there.)
+afk provision
 
 # 3. Build the Golden Image (one-time per account/region; ~5 min)
 afk golden build
@@ -180,88 +179,70 @@ In a fresh consumer repo:
 # 0. Prerequisites.
 #    - Cloudflare account on the Workers Paid plan ($5/mo; Containers requires it).
 #    - `wrangler` on PATH (`npm i -g wrangler` or `bun i -g wrangler`).
-#    - A Cloudflare API token in your env. Required scopes:
-#        Account: Workers Scripts:Edit, Workers KV Storage:Edit,
-#                 D1:Edit, Containers:Edit, Access: Edit.
-export CLOUDFLARE_API_TOKEN=<your-token>
+#    - A Cloudflare API token. Required scopes (all Account-scoped):
+#        Workers Scripts: Edit, Workers KV Storage: Edit, D1: Edit,
+#        Workers Containers: Edit, Cloudflare Images: Edit,
+#        Access: Service Tokens: Edit   (the last only needed for `afk team add`).
+#    Put it in a gitignored `.env` at the repo root — afk auto-loads `.env`,
+#    so you do NOT need to `export` it for afk commands:
+echo 'CLOUDFLARE_API_TOKEN=<your-token>' >> .env
 
-# 1. Bootstrap: copies the launcher Worker into worker/afk/ + scaffolds afk.config.json
-#    with a `cloudflare:` block. Does NOT call any Cloudflare API yet.
+# 1. Bootstrap. Scaffolds the launcher Worker into worker/afk/, derives your
+#    account id from the token, and writes/merges a `cloudflare:` block into
+#    afk.config.json (flipping `backend` to cloudflare; an existing `aws:` block
+#    is preserved). Renders wrangler.toml with account_id + CF_ACCOUNT_ID filled.
 afk init --provider cloudflare
 
-# 2. One-time: provision the launcher Worker's backing resources.
-cd worker/afk
-npm install
-wrangler d1 create afk-launcher-history
-#   → paste the returned database_id into wrangler.toml under [[d1_databases]]
-wrangler kv:namespace create DEVELOPERS_KV
-#   → paste the returned namespace id into wrangler.toml under [[kv_namespaces]]
-wrangler d1 execute afk-launcher-history --file=migrations/0001_runs.sql --remote
-
-# 3. Fill in the obvious placeholders in BOTH files:
-#    - wrangler.toml      → account_id (account ID, not the API token)
-#    - afk.config.json    → cloudflare.accountId, cloudflare.workerName
-#    (You'll come back to fill in `cloudflare.workerUrl` and the wrangler.toml
-#    `image = ...` field after step 5 — they don't exist yet.)
-
-# 4. Build the Golden Container image. Produces the image the Worker's Container
-#    binding boots from. Pushes to registry.cloudflare.com/<accountId>/afk-golden:<v>.
+# 2. Build the Golden Container image. Pushes to
+#    registry.cloudflare.com/<accountId>/afk-golden:<v> and auto-patches the URI
+#    into worker/afk/wrangler.toml's [[containers]] image field.
 afk golden build
-#   → copy the printed image URI into wrangler.toml's [[containers]] image field.
 
-# 5. Deploy the launcher Worker and set its admin-scoped API token (used by the
-#    Worker to provision Access service tokens for developers via /team).
-wrangler deploy
-wrangler secret put CF_API_TOKEN
-#   → wrangler prints the deployed Worker URL (https://<name>.<subdomain>.workers.dev).
-#   → paste it into afk.config.json's cloudflare.workerUrl.
-cd -
+# 3. Provision the backing resources in ONE command: npm install, create the D1
+#    database + KV namespace (idempotent — reuses existing) and patch their ids
+#    into wrangler.toml, run the migration, `wrangler deploy`, write the deployed
+#    URL into afk.config.json's cloudflare.workerUrl, and set the CF_API_TOKEN
+#    Worker secret.
+afk provision
 
-# 6. Auth mode. As of v2, the CLI sends Cloudflare Access service-token
-#    headers (`Cf-Access-Client-Id` + `Cf-Access-Client-Secret`). You must:
-#       (a) Wrap the Worker URL in a Cloudflare Access application via the
-#           Zero Trust dashboard.
-#       (b) Configure that Access app to allow service tokens.
-#       (c) Add the tokens provisioned in step 7 to its allow policy.
-#    The Worker's single-dev `AFK_SHARED_TOKEN` fallback is accepted server-
-#    side but the CLI does not send a bearer token; that path needs a
-#    follow-up commit to be reachable. Until then, use Access service tokens.
-
-# 7. Provision yourself as a developer. On (a) this creates a CF Access service
-#    token via the Worker and prints { clientId, clientSecret } ONCE.
-#    On (b) you can skip this — the shared bearer is your auth.
-afk team add <your-name>
-#   → export the printed values for every subsequent CLI call:
-export AFK_CF_CLIENT_ID=<printed clientId>
-export AFK_CF_CLIENT_SECRET=<printed clientSecret>
-
-# 8. Verify the install.
+# 4. Verify the install.
 afk doctor    # checks wrangler, CLOUDFLARE_API_TOKEN, worker reachability,
               # golden image presence.
 
-# 9. Store secrets (at minimum a GitHub PAT so the Container can clone source).
+# 5. Store secrets (at minimum a GitHub PAT so the Container can clone source).
 #    Stored as Workers Secrets on the launcher Worker; referenced via secret:<name>.
 afk secrets put github-token <PAT>
 echo "GITHUB_TOKEN=secret:github-token" >> .afk.env
 
-# 10. Author your contract files (commit + push) — same as AWS.
-git add afk.Dockerfile afk.compose.yml afk.config.json .afk.env  # .afk.env should already be gitignored
+# 6. Author your contract files (commit + push) — same as AWS.
+git add afk.Dockerfile afk.compose.yml afk.config.json worker/afk
 git commit -m "configure AFK"
 git push
 
-# 11. Launch a Run.
+# 7. Launch a Run.
 afk run bun --version
 afk ls
 afk logs <run-id>
 ```
 
+> **Auth note.** The CLI sends Cloudflare Access service-token headers
+> (`Cf-Access-Client-Id` + `Cf-Access-Client-Secret`, from `AFK_CF_CLIENT_ID` /
+> `AFK_CF_CLIENT_SECRET`). For a multi-dev, Access-gated deploy: enable Cloudflare
+> Access (Zero Trust), wrap the Worker URL in an Access application that allows
+> service tokens, then run `afk team add <name>` (needs the **Access: Service
+> Tokens** scope and Access enabled) and export the printed `clientId`/`clientSecret`.
+> Until you wrap the Worker in Access it is reachable by anyone with the URL and
+> trusts the client-id header — fine for a solo smoke test, not for production.
+
 Teardown when you're done:
 
 ```sh
-afk golden rm <image-tag>            # delete the Golden Container image
-cd worker/afk && wrangler delete     # remove the launcher Worker + DOs
+afk golden rm <image-tag>                       # delete the Golden Container image
+cd worker/afk
+wrangler delete                                 # remove the launcher Worker + DOs
 wrangler d1 delete afk-launcher-history
-wrangler kv:namespace delete --binding DEVELOPERS_KV
+wrangler kv namespace delete --binding DEVELOPERS_KV
+wrangler containers delete afk-launcher-runcontainer   # the Worker delete does NOT remove this
 # Optionally delete the Access service tokens via the Zero Trust dashboard.
 ```
 
@@ -288,7 +269,7 @@ See [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the launc
 
 | Area | Status | Impact on first-time use |
 |---|---|---|
-| CF Container registry listing (`afk golden ls` / the post-build "find latest" check) | ⏳ stubbed — returns `[]` / `null` | `afk run` on CF refuses to launch with `"Run \`afk golden build\` first"` even after a successful build, because the launcher-side presence check can't see the tag yet. **Workaround until shipped:** the CLI's `CloudflareCompute.prepare` check is a soft block; comment it out locally for the first end-to-end smoke test, or wait for the registry listing PR. |
+| CF Container registry listing (`afk golden ls` / golden "find latest") | ✅ shipped — via `wrangler containers images list` | Golden presence checks (`afk doctor`, the `afk run` preflight) now resolve the pushed tag. The per-Run *wrapper* image cache check is still stubbed (always rebuilds) — see IMPROVEMENTS #9. |
 | GraphQL Analytics for historical Workers Logs | ⏳ shelled out to `wrangler tail` | Historical reads (`afk logs <id>` without `--follow`) miss events older than the tail window. |
 | WSS attach end-to-end | ⏳ code written, not exercised live | `afk attach` likely needs SIGWINCH / header tweaks once tested against a real Container. |
 | Single-dev shared-bearer (`AFK_SHARED_TOKEN`) | ⏳ Worker accepts, CLI never sends | Use Access service tokens; the bearer-only path is half-wired. |
@@ -413,6 +394,10 @@ Secrets themselves are stored separately via `afk secrets put <name> <value>`. T
 afk init [--provider <aws|cloudflare>] [--region <region>]
                                                # one-time setup in a repo (scaffolds config + Backend infra)
                                                # --provider defaults to aws; --region applies to provider=aws only
+                                               # CF: derives accountId from the token and merges the cloudflare config block
+afk provision                                  # CF only: create D1+KV, migrate, deploy the launcher Worker,
+                                               #   set CF_API_TOKEN, and write workerUrl (run after `afk golden build`)
+                                               #   (on AWS, provisioning is `terraform apply` from terraform/afk)
 afk doctor                                     # check dependencies, Backend creds, Golden Image presence + age
 afk config                                     # print resolved config (debug)
 
