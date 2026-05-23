@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { RunHistory } from "../../services/backend/RunHistory.ts"
+import { CloudflareGoldenBuilder } from "../../services/CloudflareGoldenBuilder.ts"
 import {
   Compute,
   type AttachOptions,
@@ -132,6 +133,7 @@ export const CloudflareComputeLive = Layer.effect(
   Effect.gen(function* () {
     const cfg = yield* ConfigService
     const history = yield* RunHistory
+    const golden = yield* CloudflareGoldenBuilder
 
     const resolveWorkerUrl = Effect.gen(function* () {
       const { config } = yield* cfg.load
@@ -157,6 +159,21 @@ export const CloudflareComputeLive = Layer.effect(
       Effect.gen(function* () {
         const { config, envEntries, projectRoot, sourceRepoName } = yield* cfg.load
         const workerUrl = yield* resolveWorkerUrl
+
+        // Refuse to launch if no Golden Image has been built. The agent's
+        // wrapper image FROM-extends `afk-golden:*` (see PR 3's
+        // wrapper-Dockerfile contract) and there is no implicit on-demand
+        // build, mirroring the AWS path.
+        const latestGolden = yield* golden.findLatest
+        if (!latestGolden) {
+          return yield* Effect.fail(
+            new UserError({
+              message:
+                "No Cloudflare Golden Image found for this account.",
+              hint: "Run `afk golden build` first.",
+            }),
+          )
+        }
         const built = input.built
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
         const timeoutHours =
