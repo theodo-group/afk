@@ -5,6 +5,7 @@ import { ConfigService } from "./ConfigService.ts"
 import type { Run } from "../schema/Run.ts"
 import {
   AwsError,
+  CloudflareError,
   ConfigError,
   DockerError,
   GitError,
@@ -42,34 +43,34 @@ export class RunService extends Context.Tag("RunService")<
       input: RunRequest,
     ) => Effect.Effect<
       PreparedRun,
-      AwsError | UserError | DockerError | GitError | ConfigError
+      AwsError | CloudflareError | UserError | DockerError | GitError | ConfigError
     >
     readonly launch: (
       plan: PreparedRun,
-    ) => Effect.Effect<RunStarted, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<RunStarted, AwsError | CloudflareError | UserError | ConfigError>
     readonly start: (
       input: RunRequest,
     ) => Effect.Effect<
       RunStarted,
-      AwsError | UserError | DockerError | GitError | ConfigError
+      AwsError | CloudflareError | UserError | DockerError | GitError | ConfigError
     >
     readonly listMine: (
       ownerUserId: string,
-    ) => Effect.Effect<ReadonlyArray<Run>, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<ReadonlyArray<Run>, AwsError | CloudflareError | ConfigError | UserError>
     readonly listAll: Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | ConfigError | UserError
+      AwsError | CloudflareError | ConfigError | UserError
     >
     readonly findByRunId: (
       runId: string,
-    ) => Effect.Effect<Run, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<Run, AwsError | CloudflareError | UserError | ConfigError>
     readonly kill: (
       runId: string,
-    ) => Effect.Effect<void, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
     readonly attach: (
       runId: string,
       opts: AttachOptions,
-    ) => Effect.Effect<void, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
     /** Identifier of the active Backend (`"aws"`, `"cloudflare"`, …). */
     readonly backendName: "aws" | "cloudflare"
   }

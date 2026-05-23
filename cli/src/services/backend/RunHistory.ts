@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect"
-import { AwsError, ConfigError, UserError } from "../../infra/Errors.ts"
+import { AwsError, CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
 
 /**
  * One row in the Backend-neutral history table. Stored at Run start by the
@@ -54,14 +54,14 @@ export class RunHistory extends Context.Tag("RunHistory")<
   {
     readonly recordStart: (
       input: RecordStartInput,
-    ) => Effect.Effect<void, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | ConfigError | UserError>
 
     readonly recordComplete: (
       input: RecordCompleteInput,
-    ) => Effect.Effect<void, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | ConfigError | UserError>
 
     readonly query: (
       input: QueryInput,
-    ) => Effect.Effect<ReadonlyArray<HistoryRow>, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<ReadonlyArray<HistoryRow>, AwsError | CloudflareError | ConfigError | UserError>
   }
 >() {}

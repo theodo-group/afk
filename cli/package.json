@@ -15,7 +15,8 @@
     "effect": "^3.12.0",
     "@effect/cli": "^0.52.0",
     "@effect/platform": "^0.72.0",
-    "@effect/platform-bun": "^0.52.0"
+    "@effect/platform-bun": "^0.52.0",
+    "yaml": "^2.6.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -5,7 +5,14 @@ import { Git } from "../adapters/Git.ts"
 import { Docker } from "../adapters/Docker.ts"
 import { ImageRegistry } from "./backend/ImageRegistry.ts"
 import { ConfigService } from "./ConfigService.ts"
-import { UserError, AwsError, DockerError, GitError, ConfigError } from "../infra/Errors.ts"
+import {
+  UserError,
+  AwsError,
+  CloudflareError,
+  DockerError,
+  GitError,
+  ConfigError,
+} from "../infra/Errors.ts"
 import { ECR_REPO_PREFIX } from "../constants.ts"
 
 const ENTRYPOINT_SOURCE = resolve(
@@ -42,7 +49,7 @@ export class BuildService extends Context.Tag("BuildService")<
       readonly ref?: string
     }) => Effect.Effect<
       BuildOutput,
-      UserError | AwsError | DockerError | GitError | ConfigError
+      UserError | AwsError | CloudflareError | DockerError | GitError | ConfigError
     >
   }
 >() {}

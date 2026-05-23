@@ -47,6 +47,17 @@ export class ConfigError extends Data.TaggedError("ConfigError")<{
   readonly message: string
 }> {}
 
+/**
+ * Generic Cloudflare-side failure (HTTP/WSS/CF-API). Distinct from AwsError so
+ * the AWS error channels in the abstract Compute/SecretStore/etc. interfaces
+ * can keep their narrow types while the CF Backend reports its own failures.
+ */
+export class CloudflareError extends Data.TaggedError("CloudflareError")<{
+  readonly operation: string
+  readonly status?: number
+  readonly message: string
+}> {}
+
 export type AfkError =
   | UserError
   | SubprocessError
@@ -55,3 +66,4 @@ export type AfkError =
   | DockerError
   | GitError
   | ConfigError
+  | CloudflareError

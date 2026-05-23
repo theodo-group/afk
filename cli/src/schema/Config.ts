@@ -21,6 +21,12 @@ export type AwsBackendConfig = typeof AwsBackendConfig.Type
 export const CloudflareBackendConfig = Schema.Struct({
   accountId: Schema.optional(Schema.String),
   workerName: Schema.optional(Schema.String),
+  /**
+   * HTTPS URL of the deployed launcher Worker (workers.dev or custom hostname).
+   * Set after `wrangler deploy` — the CF Compute layer reads every operation's
+   * target from here.
+   */
+  workerUrl: Schema.optional(Schema.String),
   /** Smart placement (auto) or a regional pin like "weur", "wnam", "enam". */
   placement: Schema.optional(Schema.String),
   /** Container instance tier: dev | basic | standard-1 | standard-2 | standard-3 | standard-4. */
