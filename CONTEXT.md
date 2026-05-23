@@ -19,10 +19,10 @@ A provider-specific implementation of the operations a Run depends on: launching
 The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`) is the default for every command. A per-command `--local` flag overrides it for that invocation only.
 
 Backends:
-- **AWS EC2** — first cloud Backend. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
-- **Cloudflare Containers** — second cloud Backend. Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. Runs `dockerd` rootless inside the Container to host the workload. Compose Contract honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
+- **AWS EC2** — shipped. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
+- **Cloudflare Containers** — shipped. Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. Runs `dockerd` rootless inside the Container to host the workload. Compose Contract honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
 - **GCP (Compute Engine)**, **Azure (Virtual Machines)** — anticipated future cloud Backends. Each is expected to follow the same one-VM-per-Run shape as AWS.
-- **Local** — a peer Backend that launches the Run on the developer's local Docker daemon instead of in the cloud. Same image, entrypoint, env, secrets, and lifecycle rules as the cloud Backends; differs only in where the containers run. Selected via `--local` on any command.
+- **Local** — a peer Backend that would launch the Run on the developer's local Docker daemon instead of in the cloud. Same image, entrypoint, env, secrets, and lifecycle rules as the cloud Backends; differs only in where the containers run. Selected via `--local` on any command. Not yet implemented.
 
 ## Owner
 

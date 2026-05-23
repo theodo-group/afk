@@ -7,6 +7,21 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
+## Cloudflare Backend ✅ (PRs 1-5 of the v2 split, landed)
+
+**Shipped.** AFK now supports two cloud Backends: AWS EC2 (original) and Cloudflare Containers (new). Selection is per-project via `afk init --provider <aws|cloudflare>` and persisted in `afk.config.json`.
+
+Landed across five PRs at commits:
+- `93d0d5e` — PR 1: extract `Backend` interface as Effect service tags (refactor, AWS-only).
+- `fbc8e53` — PR 2: scaffold Cloudflare launcher Worker (`worker/cloudflare/`).
+- `98ab4f3` — PR 3: Cloudflare Backend in the CLI.
+- `92f7e5c` — PR 4: Cloudflare Golden Image pipeline.
+- PR 5: docs polish + `afk doctor` CF dispatch (this commit).
+
+Open follow-ups for the CF Backend are listed below as their own entries.
+
+---
+
 ## 1. Run history (persistent post-mortem) ✅
 
 **Gap.** `afk ls` only sees what's in `ec2:DescribeInstances`, which retains terminated instances for ~1 hour. After that, the VM is gone — CloudWatch Logs survives 30 days but there's no way to enumerate "all my Runs this week" with owner / branch / sha / exit code without remembering each run-id.
@@ -98,23 +113,67 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 9. Local Backend (`--local`) ⏸
+## 9. CF Container registry listing ⏳ (highest-priority follow-up)
 
-**Gap.** README originally promised it; current implementation has no `--local` paths. Removed from the doc, but the design intent stands.
+**Gap.** `CloudflareImageRegistry.imageExists` and `listLatestTagsByPrefix`, and `CloudflareGoldenBuilder.list`/`findLatest`, are stubbed to `false` / `[]` / `null` pending the CF Container Distribution v2 API auth flow being nailed down. Without these, `afk run` on CF cannot resolve the wrapper image or the Golden image, so the path is blocked even after a successful `afk golden build`.
 
-**Approach.** Implement per-command `--local` dispatch in each command module (or via a `Backend` interface that picks `CloudBackend` vs `LocalBackend` at the CLI entry point). Local should: build the wrapped image, resolve `ssm:` secrets client-side, `docker compose up --exit-code-from <main>` with labels for `afk ls --local` enumeration. `afk image build --local` refuses with a clear message.
+**Approach.** Implement the auth handshake against `registry.cloudflare.com/v2/` using `CLOUDFLARE_API_TOKEN`, then implement `/v2/<repo>/tags/list` with prefix filtering. Verify against a real CF account.
 
-**Touches:** new `cli/src/services/LocalBackend.ts`, dispatch logic in every `RunService`-fronted command.
+**Touches:** `cli/src/backends/cloudflare/CloudflareImageRegistry.ts`, `cli/src/services/ImageService.ts` (CF branch — `CloudflareGoldenBuilder` if extracted).
 
 ---
 
-## 10. Operability nits
+## 10. CF Workers Logs GraphQL Analytics query ⏳
+
+**Gap.** `CloudflareLogStore.read{,Stream}` currently shells out to `wrangler tail` for both follow and non-follow modes. `wrangler tail` is right for live tailing but is the wrong tool for historical reads over a window (`--since 30d` style queries) — it streams from "now" and exits when there are no more events.
+
+**Approach.** Use the Cloudflare GraphQL Analytics endpoint for non-follow reads (`https://api.cloudflare.com/client/v4/graphql`, dataset `workersInvocationsAdaptive` or `cloudflareLogs` — needs verification). Keep `wrangler tail` for `--follow`.
+
+**Touches:** `cli/src/backends/cloudflare/CloudflareLogStore.ts`.
+
+---
+
+## 11. CF WSS attach end-to-end verification ⏳
+
+**Gap.** The WSS attach path (CLI → launcher Worker `/runs/:id/attach` → DO → `docker compose exec` inside the outer Container) is written but never tested against a real Container. Specifically unverified: SIGWINCH forwarding for terminal resize, `Cf-Access-Client-Id` header propagation on the WS upgrade, Bun's WS client's `headers` option behavior at upgrade time.
+
+**Approach.** Deploy to a real CF account, run a real `afk run` with sidecars, exercise `afk attach <run-id>` and `afk attach --service postgres <run-id>` and `afk attach --host <run-id>`. Resize the terminal mid-session. Validate audit log entries.
+
+**Touches:** `cli/src/backends/cloudflare/CloudflareCompute.ts:attach`, `worker/cloudflare/src/runDO.ts:attachHandler`.
+
+---
+
+## 12. CF integration test against a real account ⏳
+
+**Gap.** PRs 2-5 are "compiles, looks right." None of the CF Backend has been exercised against a real Cloudflare deployment. The four highest-risk paths — image build/push, `afk run` happy path, attach, history queries — all need at least one end-to-end run on a real account before we recommend CF to anyone outside this repo.
+
+**Approach.** Provision a throwaway CF account, run the [Quickstart on Cloudflare](./README.md#quickstart-on-cloudflare) cold, capture what breaks, file follow-ups.
+
+**Touches:** none anticipated in code; this is verification work that will surface the next batch of bugs.
+
+---
+
+## 13. Operability nits
 
 - **Region as a Layer.** ⏳ Every adapter currently takes `region` as a parameter to every method. A `RegionContext` Layer set from `ConfigService.load` would clean ~50 call sites.
 - **`afk logs` time window flag.** ✅ `--since <duration>` (default 30d).
 - **`afk init` re-run UX.** ✅ Each step's idempotency is now surfaced in the output (`created` vs `already present`).
 - **YAML parser for compose.** ⏳ See #6; would also let us inject `command: ${AFK_COMMAND}` and `env_file:` automatically instead of erroring.
 - **Better `afk run` error when git credential helper is broken.** ✅ `gh auth setup-git` is surfaced as a hint on common credential failures.
+
+---
+
+## Deferred
+
+Items the design supports but no implementation plan has been scheduled for.
+
+### Local Backend (`--local`) ⏸
+
+**Gap.** README originally promised it; current implementation has no `--local` paths. The design intent stands — same image, entrypoint, env, secrets, and lifecycle, just on the developer's local Docker daemon.
+
+**Approach.** Implement a `LocalBackend` Compute layer that builds the wrapped image, resolves `secret:<name>` references via the active cloud Backend's `SecretStore`, runs `docker compose up --exit-code-from <main>` with labels for `afk ls --local` enumeration. `afk golden build --local` refuses with a clear message.
+
+**Touches:** new `cli/src/backends/local/*.ts`, dispatch logic in `cli/src/cli.ts`.
 
 ---
 
