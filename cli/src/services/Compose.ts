@@ -1,124 +1,209 @@
+import { parseDocument, stringify, YAMLMap, YAMLSeq, Scalar } from "yaml"
 import { UserError } from "../infra/Errors.ts"
 import { AFK_IMAGE_PLACEHOLDER } from "../constants.ts"
 
 /**
- * Lightweight, regex-based validation of the dev's afk.compose.yml.
+ * YAML-backed lint + (optionally) mutate of the developer's afk.compose.yml.
  *
- * We deliberately avoid a full YAML parse here — the lints are about catching
- * the few constructs that conflict with AFK semantics (restart policies on the
- * main service, missing ${AFK_IMAGE} on the main service, exposed ports). A
- * future revision may swap to a proper YAML parser.
+ * Rules common to every Backend:
+ *   - At least one service is declared.
+ *   - The named main service exists.
+ *   - The main service uses `image: ${AFK_IMAGE}`.
+ *   - The main service does NOT declare a long-lived restart policy.
+ *   - The main service declares `env_file` and `command: ${AFK_COMMAND}`.
+ *
+ * Backend-specific behavior:
+ *   - "aws": no mutation, lint only.
+ *   - "cloudflare": every service is rewritten to `network_mode: host` and
+ *     every other service's name is added to its `extra_hosts` mapping to
+ *     127.0.0.1. Port collisions across services are a hard error (since CF
+ *     Containers spawn on a single host network all ports share the same
+ *     namespace).
  */
 export interface ComposeLintInput {
   readonly content: string
   readonly mainService: string
+  readonly backend: "aws" | "cloudflare"
 }
 
-export const lintCompose = (
-  input: ComposeLintInput,
-): { warnings: ReadonlyArray<string> } => {
-  const warnings: string[] = []
-  const lines = input.content.split("\n")
+export interface ComposeLintResult {
+  readonly warnings: ReadonlyArray<string>
+  /** Possibly-mutated YAML content. For "aws" this equals `input.content`. */
+  readonly content: string
+}
 
-  // Find each top-level service block by indentation.
-  // Compose top-level: `services:` with two-space-indented service names.
-  let inServices = false
-  let servicesIndent = 0
-  let currentService: string | null = null
-  let currentServiceIndent = 0
-  const serviceBlocks = new Map<string, string[]>()
+const asMap = (node: unknown): YAMLMap | null =>
+  node instanceof YAMLMap ? node : null
 
-  for (const raw of lines) {
-    const line = raw.replace(/\r$/, "")
-    const trimmed = line.trim()
-    const indent = line.match(/^ */)?.[0].length ?? 0
-
-    if (!inServices) {
-      if (/^services\s*:/.test(trimmed)) {
-        inServices = true
-        servicesIndent = indent
+const extractServicePorts = (svc: YAMLMap): string[] => {
+  const ports = svc.get("ports")
+  if (!(ports instanceof YAMLSeq)) return []
+  const out: string[] = []
+  for (const item of ports.items) {
+    let raw: string | null = null
+    if (item instanceof Scalar && typeof item.value === "string") {
+      raw = item.value
+    } else if (typeof item === "string") {
+      raw = item
+    } else if (item instanceof YAMLMap) {
+      const pub = item.get("published")
+      if (typeof pub === "number" || typeof pub === "string") {
+        raw = String(pub)
       }
-      continue
     }
-    if (trimmed === "" || trimmed.startsWith("#")) continue
-    // Left the services block?
-    if (indent <= servicesIndent && !/^services\s*:/.test(trimmed)) {
-      inServices = false
-      currentService = null
-      continue
+    if (!raw) continue
+    // "HOST:CONTAINER" or "HOST:CONTAINER/proto" or just "PORT"
+    const hostPart = raw.split(":").length > 1 ? raw.split(":")[0]! : raw
+    const cleaned = hostPart.split("/")[0]!.trim()
+    if (cleaned) out.push(cleaned)
+  }
+  return out
+}
+
+export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
+  const doc = (() => {
+    try {
+      return parseDocument(input.content)
+    } catch (e) {
+      throw new UserError({
+        message: `afk.compose.yml: invalid YAML — ${String(e)}`,
+      })
     }
-    // A service header looks like `  myservice:` at services+2 indent.
-    const headerMatch = /^([A-Za-z0-9_.-]+)\s*:\s*$/.exec(trimmed)
-    if (headerMatch && (currentService === null || indent <= currentServiceIndent)) {
-      currentService = headerMatch[1]!
-      currentServiceIndent = indent
-      serviceBlocks.set(currentService, [])
-      continue
-    }
-    if (currentService) {
-      serviceBlocks.get(currentService)!.push(line)
-    }
+  })()
+  if (doc.errors.length > 0) {
+    throw new UserError({
+      message: `afk.compose.yml: invalid YAML — ${doc.errors[0]!.message}`,
+    })
   }
 
-  if (serviceBlocks.size === 0) {
+  const root = asMap(doc.contents)
+  if (!root) {
+    throw new UserError({
+      message: "afk.compose.yml: top-level must be a mapping.",
+    })
+  }
+  const services = asMap(root.get("services"))
+  if (!services || services.items.length === 0) {
     throw new UserError({
       message: "afk.compose.yml declares no services.",
       hint: "Add at least the main service.",
     })
   }
 
-  const mainBlock = serviceBlocks.get(input.mainService)
-  if (!mainBlock) {
+  // Collect service names in declaration order.
+  const serviceNames: string[] = []
+  for (const pair of services.items) {
+    const key = pair.key as Scalar
+    if (key && typeof key.value === "string") serviceNames.push(key.value)
+  }
+
+  const main = asMap(services.get(input.mainService))
+  if (!main) {
     throw new UserError({
       message: `afk.compose.yml has no '${input.mainService}' service.`,
       hint: `The main service is named by 'mainService' in afk.config.json (default: agent). Either add a '${input.mainService}:' service or change 'mainService'.`,
     })
   }
 
-  const mainText = mainBlock.join("\n")
-  if (!mainText.includes(AFK_IMAGE_PLACEHOLDER)) {
+  // image: ${AFK_IMAGE}
+  const mainImage = main.get("image")
+  const mainImageStr =
+    mainImage instanceof Scalar ? mainImage.value : mainImage
+  if (typeof mainImageStr !== "string" || !mainImageStr.includes(AFK_IMAGE_PLACEHOLDER)) {
     throw new UserError({
       message: `Main service '${input.mainService}' must use 'image: ${AFK_IMAGE_PLACEHOLDER}'.`,
-      hint: "The CLI substitutes this with the ECR URI of the wrapped agent image at submit time.",
+      hint: "The CLI substitutes this with the registry URI of the wrapped agent image at submit time.",
     })
   }
-  if (/restart:\s*(always|unless-stopped)/.test(mainText)) {
+
+  // restart policy ban.
+  const restart = main.get("restart")
+  const restartStr = restart instanceof Scalar ? restart.value : restart
+  if (
+    typeof restartStr === "string" &&
+    (restartStr === "always" || restartStr === "unless-stopped")
+  ) {
     throw new UserError({
       message: `Main service '${input.mainService}' must not use 'restart: always' or 'restart: unless-stopped'.`,
       hint: "Those policies fight AFK's Run-ends-on-exit semantics.",
     })
   }
 
-  if (!/env_file\s*:/.test(mainText)) {
+  if (!main.has("env_file")) {
     throw new UserError({
       message: `main service '${input.mainService}' does not declare 'env_file:'.`,
       hint: `Add: env_file: ["\${AFK_ENV_FILE}"] — without it the container will not see .afk.env values or AFK_GIT_*/GITHUB_TOKEN, and the entrypoint will fail.`,
     })
   }
-  if (!/command\s*:\s*\$\{AFK_COMMAND\}/.test(mainText)) {
+  const command = main.get("command")
+  const commandStr = command instanceof Scalar ? command.value : command
+  if (typeof commandStr !== "string" || !commandStr.includes("${AFK_COMMAND}")) {
     throw new UserError({
       message: `main service '${input.mainService}' does not declare 'command: \${AFK_COMMAND}'.`,
       hint: `Add: command: \${AFK_COMMAND} — otherwise the args you pass to 'afk run' are silently ignored in favour of any static command:, or the container runs with no command at all.`,
     })
   }
 
-  for (const [name, block] of serviceBlocks) {
-    const text = block.join("\n")
-    if (/^\s*ports\s*:/m.test(text)) {
-      warnings.push(
-        `service '${name}' declares 'ports:' — inbound is denied at the security-group level, so port mappings have no effect.`,
-      )
+  const warnings: string[] = []
+
+  if (input.backend === "aws") {
+    // AWS: just warn on `ports:` (security group denies it anyway).
+    for (const name of serviceNames) {
+      const svc = asMap(services.get(name))
+      if (!svc) continue
+      if (svc.has("ports")) {
+        warnings.push(
+          `service '${name}' declares 'ports:' — inbound is denied at the security-group level, so port mappings have no effect.`,
+        )
+      }
+    }
+    return { warnings, content: input.content }
+  }
+
+  // ---- Cloudflare backend mutation ----
+  //
+  // CF Containers run inside a single Worker process; sidecar services
+  // therefore share a network namespace. We:
+  //  1. Hard-error on duplicate published ports across services.
+  //  2. Set `network_mode: host` on every service.
+  //  3. Inject `extra_hosts` mapping every OTHER service name → 127.0.0.1
+  //     so service-name DNS still resolves to localhost.
+  const portOwners = new Map<string, string>()
+  for (const name of serviceNames) {
+    const svc = asMap(services.get(name))
+    if (!svc) continue
+    for (const p of extractServicePorts(svc)) {
+      const prev = portOwners.get(p)
+      if (prev && prev !== name) {
+        throw new UserError({
+          message: `afk.compose.yml: port ${p} is published by both '${prev}' and '${name}'.`,
+          hint: "On the Cloudflare backend, every service shares a network namespace. Choose distinct host ports.",
+        })
+      }
+      portOwners.set(p, name)
     }
   }
 
-  return { warnings }
+  for (const name of serviceNames) {
+    const svc = asMap(services.get(name))
+    if (!svc) continue
+    svc.set("network_mode", "host")
+    const others = serviceNames.filter((n) => n !== name)
+    if (others.length > 0) {
+      const hosts = new YAMLSeq()
+      for (const o of others) hosts.add(`${o}:127.0.0.1`)
+      svc.set("extra_hosts", hosts)
+    }
+  }
+
+  return { warnings, content: stringify(doc) }
 }
 
 /**
  * Substitute ${AFK_IMAGE} with the supplied image URI. Performed by the CLI
  * client-side so the compose file shipped in user_data already references the
- * resolved ECR image; ${AFK_COMMAND} is left intact for shell-side substitution
- * in user_data.
+ * resolved registry image; ${AFK_COMMAND} is left intact for shell-side
+ * substitution in user_data.
  */
 export const substituteImage = (composeContent: string, imageUri: string): string =>
   composeContent.split(AFK_IMAGE_PLACEHOLDER).join(imageUri)

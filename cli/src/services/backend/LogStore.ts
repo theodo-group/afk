@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect"
-import { AwsError, ConfigError, UserError } from "../../infra/Errors.ts"
+import { AwsError, CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
 
 export interface TailInput {
   readonly runId: string
@@ -21,6 +21,6 @@ export class LogStore extends Context.Tag("LogStore")<
     /** Stream logs to the caller's stdout. Blocks until done (or Ctrl-C on follow). */
     readonly tail: (
       input: TailInput,
-    ) => Effect.Effect<void, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | ConfigError | UserError>
   }
 >() {}

@@ -33,6 +33,12 @@ export const add = Command.make("add", { name, principal }, ({ name, principal }
             `  AWS_SECRET_ACCESS_KEY=${result.accessKey.secretAccessKey}`,
           )
         }
+        if (result.serviceToken) {
+          lines.push(``)
+          lines.push(`Service token (shown ONCE — store securely):`)
+          lines.push(`  AFK_CF_CLIENT_ID=${result.serviceToken.clientId}`)
+          lines.push(`  AFK_CF_CLIENT_SECRET=${result.serviceToken.clientSecret}`)
+        }
         return out.print(lines.join("\n"))
       },
     })

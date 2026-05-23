@@ -3,6 +3,8 @@ import { Effect } from "effect"
 import { RunService } from "../services/RunService.ts"
 import { Ec2 } from "../adapters/aws/Ec2.ts"
 import { ConfigService } from "../services/ConfigService.ts"
+import { LogStore } from "../services/backend/LogStore.ts"
+import { Compute } from "../services/backend/Compute.ts"
 import { Output } from "../infra/Output.ts"
 import { DEFAULT_REGION, LOG_GROUP_PREFIX } from "../constants.ts"
 
@@ -145,6 +147,55 @@ const streamAwsUntilTerminated = (input: {
     })
   })
 
+/**
+ * Cloudflare equivalent of streamAwsUntilTerminated: tail Workers Logs via
+ * the LogStore tag and concurrently poll Compute.findByRunId to discover when
+ * the Run reaches a terminal state.
+ */
+const streamCloudflareUntilTerminated = (input: {
+  readonly runId: string
+  readonly repoName: string
+}): Effect.Effect<void, never, LogStore | Compute> =>
+  Effect.gen(function* () {
+    const logs = yield* LogStore
+    const compute = yield* Compute
+
+    // Kick off the log tail. We don't await it — we race it against the
+    // terminal-state poll below and kill it via SIGINT when the Run ends.
+    const tailFiber = yield* Effect.forkDaemon(
+      logs
+        .tail({ runId: input.runId, repoName: input.repoName, follow: true })
+        .pipe(Effect.catchAll(() => Effect.void)),
+    )
+
+    let stop = false
+    const onSig = () => {
+      stop = true
+    }
+    process.once("SIGINT", onSig)
+    process.once("SIGTERM", onSig)
+
+    while (!stop) {
+      yield* Effect.promise(() => sleep(8000))
+      const run = yield* compute
+        .findByRunId(input.runId)
+        .pipe(Effect.catchAll(() => Effect.succeed(null)))
+      if (
+        run &&
+        (run.status === "STOPPED" || run.status === "STOPPING")
+      ) {
+        break
+      }
+    }
+
+    process.removeListener("SIGINT", onSig)
+    process.removeListener("SIGTERM", onSig)
+    // Best-effort cleanup of the daemon fiber. The process is about to exit
+    // (or move on to printing the final summary) so an in-flight tail is fine
+    // to abandon.
+    void tailFiber
+  })
+
 const formatBackendDetails = (d: Record<string, string>): string => {
   const keys = Object.keys(d).sort()
   return keys.map((k) => `${k}=${d[k]}`).join(", ")
@@ -224,15 +275,22 @@ export const run = Command.make(
           ),
       })
 
-      if (!detach && runs.backendName === "aws") {
+      if (!detach) {
         const { config, sourceRepoName } = yield* cfg.load
-        const region = config.aws?.region ?? DEFAULT_REGION
-        yield* streamAwsUntilTerminated({
-          region,
-          instanceId: started.resourceId,
-          runId: started.runId,
-          repoName: sourceRepoName,
-        })
+        if (runs.backendName === "aws") {
+          const region = config.aws?.region ?? DEFAULT_REGION
+          yield* streamAwsUntilTerminated({
+            region,
+            instanceId: started.resourceId,
+            runId: started.runId,
+            repoName: sourceRepoName,
+          })
+        } else if (runs.backendName === "cloudflare") {
+          yield* streamCloudflareUntilTerminated({
+            runId: started.runId,
+            repoName: sourceRepoName,
+          })
+        }
       }
     }),
 )

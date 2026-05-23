@@ -1,6 +1,7 @@
 import { Context, Effect } from "effect"
 import {
   AwsError,
+  CloudflareError,
   ConfigError,
   DockerError,
   GitError,
@@ -111,48 +112,48 @@ export class Compute extends Context.Tag("Compute")<
       input: StartInput,
     ) => Effect.Effect<
       PreparedRun,
-      AwsError | UserError | DockerError | GitError | ConfigError
+      AwsError | CloudflareError | UserError | DockerError | GitError | ConfigError
     >
 
     /** Launch a previously-prepared plan. */
     readonly launch: (
       plan: PreparedRun,
-    ) => Effect.Effect<RunStarted, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<RunStarted, AwsError | CloudflareError | UserError | ConfigError>
 
     /** Convenience: prepare + launch. */
     readonly start: (
       input: StartInput,
     ) => Effect.Effect<
       RunStarted,
-      AwsError | UserError | DockerError | GitError | ConfigError
+      AwsError | CloudflareError | UserError | DockerError | GitError | ConfigError
     >
 
     /** List Runs owned by a specific principal. */
     readonly listMine: (
       ownerUserId: string,
-    ) => Effect.Effect<ReadonlyArray<Run>, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<ReadonlyArray<Run>, AwsError | CloudflareError | ConfigError | UserError>
 
     /** List every Run visible to the caller (admin scope). */
     readonly listAll: Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | ConfigError | UserError
+      AwsError | CloudflareError | ConfigError | UserError
     >
 
     /** Resolve a Run by id. Returns UserError if not found. */
     readonly findByRunId: (
       runId: string,
-    ) => Effect.Effect<Run, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<Run, AwsError | CloudflareError | UserError | ConfigError>
 
     /** Terminate a Run. */
     readonly kill: (
       runId: string,
-    ) => Effect.Effect<void, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
 
     /** Open an interactive session into a running Run's main (or named) service. */
     readonly attach: (
       runId: string,
       opts: AttachOptions,
-    ) => Effect.Effect<void, AwsError | UserError | ConfigError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
 
     /**
      * Get the caller's principal id for this Backend. AWS: STS UserId.
@@ -160,7 +161,7 @@ export class Compute extends Context.Tag("Compute")<
      */
     readonly callerPrincipal: Effect.Effect<
       { readonly id: string; readonly displayName: string },
-      AwsError | UserError | ConfigError
+      AwsError | CloudflareError | UserError | ConfigError
     >
   }
 >() {}

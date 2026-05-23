@@ -237,7 +237,7 @@ export const AwsComputeLive = Layer.effect(
               }),
           })
           const lint = yield* Effect.try({
-            try: () => lintCompose({ content: raw, mainService }),
+            try: () => lintCompose({ content: raw, mainService, backend: "aws" }),
             catch: (e) =>
               e instanceof UserError
                 ? e
@@ -248,7 +248,7 @@ export const AwsComputeLive = Layer.effect(
           for (const w of lint.warnings) {
             console.warn(`warning: ${w}`)
           }
-          composeContent = substituteImage(raw, built.image)
+          composeContent = substituteImage(lint.content, built.image)
         }
 
         const logGroup = `${LOG_GROUP_PREFIX}/${sourceRepoName}`

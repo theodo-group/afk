@@ -28,7 +28,12 @@ import { SecretServiceLive } from "./services/SecretService.ts"
 import { TeamServiceLive } from "./services/TeamService.ts"
 import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
+import { existsSync, readFileSync } from "node:fs"
+import { resolve } from "node:path"
+
 import { AwsBackendLive } from "./backends/aws/index.ts"
+import { CloudflareBackendLive } from "./backends/cloudflare/index.ts"
+import { CONFIG_FILE } from "./constants.ts"
 
 import { init } from "./commands/init.ts"
 import { doctor } from "./commands/doctor.ts"
@@ -91,7 +96,46 @@ const L_adapters = Layer.mergeAll(
 
 const L_config = ConfigServiceLive.pipe(Layer.provideMerge(L_adapters))
 const L_image = ImageServiceLive.pipe(Layer.provideMerge(L_config))
-const L_backend = AwsBackendLive.pipe(Layer.provideMerge(L_image))
+
+/**
+ * Pick the Backend aggregate based on `afk.config.json`'s `backend` field.
+ *
+ * Synchronously walks up from cwd looking for the config file (the same logic
+ * ConfigService uses, duplicated here because the Layer must be selected
+ * before the Effect runtime is up). Defaults to AWS so `afk init` itself
+ * still works in an empty directory.
+ */
+const pickBackendName = (): "aws" | "cloudflare" => {
+  let dir = process.cwd()
+  while (true) {
+    const candidate = resolve(dir, CONFIG_FILE)
+    if (existsSync(candidate)) {
+      try {
+        const raw = readFileSync(candidate, "utf8")
+        const parsed = JSON.parse(raw) as { backend?: string }
+        if (parsed.backend === "cloudflare") return "cloudflare"
+        return "aws"
+      } catch {
+        return "aws"
+      }
+    }
+    const parent = resolve(dir, "..")
+    if (parent === dir) return "aws"
+    dir = parent
+  }
+}
+
+const _backendName = pickBackendName()
+
+// Both backend aggregates declare different external deps (AWS adapters vs.
+// Docker + Subprocess), so we can't take a single `pipe(Layer.provideMerge)`
+// expression with a union value — TypeScript can't unify the two RIn shapes.
+// Instead we branch and produce two fully-resolved L_backend layers; the
+// downstream pipeline is identical from there.
+const L_backend =
+  _backendName === "cloudflare"
+    ? CloudflareBackendLive.pipe(Layer.provideMerge(L_image))
+    : AwsBackendLive.pipe(Layer.provideMerge(L_image))
 const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_backend))
 const L_run = RunServiceLive.pipe(Layer.provideMerge(L_build))
 const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_run))

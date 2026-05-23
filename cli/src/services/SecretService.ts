@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import { SecretStore } from "./backend/SecretStore.ts"
-import { AwsError, ConfigError, UserError } from "../infra/Errors.ts"
+import { AwsError, CloudflareError, ConfigError, UserError } from "../infra/Errors.ts"
 import type { Secret } from "../schema/Secret.ts"
 
 /**
@@ -13,13 +13,13 @@ export class SecretService extends Context.Tag("SecretService")<
     readonly put: (
       name: string,
       value: string,
-    ) => Effect.Effect<void, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | ConfigError | UserError>
     readonly rm: (
       name: string,
-    ) => Effect.Effect<void, AwsError | ConfigError | UserError>
+    ) => Effect.Effect<void, AwsError | CloudflareError | ConfigError | UserError>
     readonly ls: Effect.Effect<
       ReadonlyArray<Secret>,
-      AwsError | ConfigError | UserError
+      AwsError | CloudflareError | ConfigError | UserError
     >
   }
 >() {}
