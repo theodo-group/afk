@@ -162,11 +162,9 @@ afk logs <run-id>
 Teardown when you're done:
 
 ```sh
-afk golden rm <ami-id>          # delete the Golden AMI
-cd terraform/afk && terraform destroy -var aws_region=eu-west-1
-aws ssm delete-parameter --name /afk/secrets/github-token --region eu-west-1
-aws ecr delete-repository --repository-name afk/<your-repo> --force --region eu-west-1
-aws s3 rb s3://afk-tf-state-<account-id>-eu-west-1 --force
+afk destroy            # dry-run: prints what would be deleted
+afk destroy --yes      # terraform destroy + golden AMI, ECR repo, SSM secrets,
+                       # and the Terraform state bucket
 ```
 
 ### Quickstart on Cloudflare
@@ -237,13 +235,11 @@ afk logs <run-id>
 Teardown when you're done:
 
 ```sh
-afk golden rm <image-tag>                       # delete the Golden Container image
-cd worker/afk
-wrangler delete                                 # remove the launcher Worker + DOs
-wrangler d1 delete afk-launcher-history
-wrangler kv namespace delete --binding DEVELOPERS_KV
-wrangler containers delete afk-launcher-runcontainer   # the Worker delete does NOT remove this
-# Optionally delete the Access service tokens via the Zero Trust dashboard.
+afk destroy            # dry-run: prints what would be deleted
+afk destroy --yes      # deletes golden images, launcher Worker + DOs, the
+                       # Container app (+ live instances), D1, and KV
+# Cloudflare Access service tokens (if any) are not deleted — remove them via
+# the Zero Trust dashboard.
 ```
 
 See [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the launcher Worker's internals.
