@@ -17,6 +17,8 @@ export interface Env {
   readonly CF_API_TOKEN?: string
   /** CF account ID — surfaced for the API calls that need it explicitly. */
   readonly CF_ACCOUNT_ID?: string
+  /** This Worker's own script name, for self-targeting CF-API calls (secrets). */
+  readonly WORKER_NAME?: string
   /** Catch-all for AFK_SECRET_* names — Workers Secrets that the Compute layer
    * resolves into the Container's env. Indexed at runtime by `env[name]`. */
   readonly [key: string]: unknown

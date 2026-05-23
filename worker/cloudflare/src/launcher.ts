@@ -213,7 +213,7 @@ app.post("/secrets/:name", async (c) => {
   const name = `AFK_SECRET_${c.req.param("name")}`
   const { value } = (await c.req.json()) as { value: string }
   const r = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${getScriptName(c.req.url)}/secrets`,
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${getScriptName(c.env)}/secrets`,
     {
       method: "PUT",
       headers: {
@@ -235,7 +235,7 @@ app.delete("/secrets/:name", async (c) => {
   }
   const name = `AFK_SECRET_${c.req.param("name")}`
   const r = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${getScriptName(c.req.url)}/secrets/${name}`,
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${getScriptName(c.env)}/secrets/${name}`,
     { method: "DELETE", headers: { Authorization: `Bearer ${apiToken}` } },
   )
   if (!r.ok) return c.json({ error: await r.text() }, 502)
@@ -312,15 +312,13 @@ app.delete("/team/:name", async (c) => {
   return c.json({ ok: true })
 })
 
-/** Derive the script's own name from the request URL when we need it for
- *  self-targeting CF API calls. The Worker doesn't have a built-in way to
- *  know its own name; we pass it in via the env. */
-const getScriptName = (_url: string): string => {
-  // The CLI sets the worker name into env.WORKER_NAME at deploy time so this
-  // Worker can address itself in CF-API calls.
-  // Fallback intentionally empty; the call will fail server-side and the
-  // caller will see "Worker missing WORKER_NAME" in the response.
-  return (globalThis as unknown as { WORKER_NAME?: string }).WORKER_NAME ?? ""
+/** The Worker's own script name, for self-targeting CF API calls (the secrets
+ *  routes PUT/DELETE against `/workers/scripts/<name>/secrets`). Set as a
+ *  [vars] entry in wrangler.toml. Worker vars live on `env`, never on
+ *  globalThis — reading globalThis here was the original bug (empty name →
+ *  the CF API misrouted to the script-upload endpoint). */
+const getScriptName = (env: Env): string => {
+  return env.WORKER_NAME ?? "afk-launcher"
 }
 
 export default app

@@ -223,6 +223,10 @@ First end-to-end CF deploy against a real account (the verification work #12 ant
 
 **15.9 init does not scaffold a `cloudflare:` block into an existing config ✅ (fixed).** `afk init --provider cloudflare` now merges a `cloudflare:` block into an existing config and flips `backend`, preserving the `aws:` block. See #14.
 
+**15.11 `/secrets` route addressed an empty script name ✅ (fixed).** `afk secrets put/rm` on CF failed with CF API code 10001 ("Content-Type must be one of: application/javascript, …"). Cause: `getScriptName()` read `globalThis.WORKER_NAME` (always `undefined` — Worker vars live on `env`, not globalThis), so the secrets URL was `/workers/scripts//secrets` with an empty name, which the CF API misrouted to the script-upload endpoint. Fixed: read the name from `env.WORKER_NAME` (new `[vars]` entry, rendered from `worker_name`), default `afk-launcher`. Touches `worker/cloudflare/src/launcher.ts`, `types.ts`, `wrangler.toml.template`.
+
+**15.12 `afk secrets ls` shows an AWS "SSM PATH" column on CF ⏳ (cosmetic).** The table header is hardcoded for the AWS/SSM backend; on Cloudflare it prints `AFK_SECRET_<name>` under "SSM PATH". Harmless but misleading — the column should be backend-neutral (or omitted on CF).
+
 **15.10 `afk destroy` (Cloudflare) now executes ✅ (fixed).** It previously only *printed* a wrangler sequence — which was also incomplete (wrong KV flag, and it omitted the Container application + golden images, leaving Container instances billing). `afk destroy --yes` now actually tears down golden image tags, the launcher Worker, the Container app, D1, and KV; `afk destroy` (no flag) is a dry-run. Symmetric with `afk provision`. Touches `cli/src/services/BootstrapService.ts:destroyCloudflare`.
 
 **15.6 update (token scope message) ✅ (partial).** `afk init`'s missing-token error now lists `Cloudflare Images:Edit`. The README prerequisites list still needs the same addition (Images + Workers Containers for the push; Access: Service Tokens for `team add`).
