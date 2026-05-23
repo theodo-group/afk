@@ -1,0 +1,55 @@
+# AFK launcher Worker — Cloudflare wrangler.toml template.
+#
+# Rendered by `afk init --provider cloudflare` into the consumer's
+# worker/afk/wrangler.toml. Placeholders {{...}} are substituted by the CLI.
+
+name = "{{worker_name}}"
+main = "src/launcher.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "{{account_id}}"
+
+# Workers Logs: required for Container stdout/stderr to be captured + queryable.
+[observability]
+enabled = true
+
+# Placement: smart by default; can be pinned to a region via the CLI.
+[placement]
+mode = "{{placement}}"
+
+# --- The Container class every Run is spawned from ---
+[[containers]]
+class_name = "RunContainer"
+image = "{{golden_image_uri}}"
+max_instances = 200
+instance_type = "{{default_instance_tier}}"
+# No sleepAfter — we control termination via the RunDO alarm + explicit stop.
+
+# --- Durable Objects ---
+[[durable_objects.bindings]]
+name = "RUN_DO"
+class_name = "RunDO"
+
+[[durable_objects.bindings]]
+name = "REGISTRY_DO"
+class_name = "RegistryDO"
+
+# DO migrations — first install creates both classes.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RunDO", "RegistryDO"]
+
+# --- D1 (history table) ---
+[[d1_databases]]
+binding = "DB"
+database_name = "{{worker_name}}-history"
+database_id = "{{d1_database_id}}"
+
+# --- KV (developer service-token registry) ---
+[[kv_namespaces]]
+binding = "DEVELOPERS_KV"
+id = "{{developers_kv_id}}"
+
+# --- Secrets (set via `wrangler secret put` after first deploy) ---
+# CF_API_TOKEN  — needed by `afk team add` to provision service tokens.
+# (Other AFK_SECRET_* values: per-developer secrets set by `afk secrets put`.)
