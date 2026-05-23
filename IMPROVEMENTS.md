@@ -237,6 +237,21 @@ First end-to-end CF deploy against a real account (the verification work #12 ant
 
 Net: making `afk run` actually execute on CF is a real implementation effort with live unknowns (does rootless dind work on CF? in-container registry auth? container-log retrieval?), not a small fix. Subsumes the execution half of #11/#12.
 
+**RESOLVED — dind works on CF; recipe found (2026-05-23, live-debugged).** Via SSH + a `/debug` egress probe we determined the exact working configuration and baked it into golden's `bootstrap.sh`:
+- **Run the golden container as ROOT** (drop `USER rootless`). Rootless is not viable on CF: `/dev/net/tun` is `root 0600` (so `slirp4netns` can't open it) and netns/netlink ops are denied to non-root (so `--network host` and the bridge both fail). The Firecracker microVM is the isolation boundary, so root is acceptable.
+- **`dockerd --bridge=none --iptables=false --exec-opt native.cgroupdriver=cgroupfs`**: CF blocks NAT/`iptables` setup; there's no systemd so the default systemd cgroup driver fails with *"Failed to set unit properties: No such process"* (cgroupfs fixes it).
+- **Run workloads with `--network host`** (the no-compose path; the compose contract already injects `network_mode: host`). Child containers share the CF container's network, which has egress.
+- In-container image pull works via the minted short-lived registry pull credential (`AFK_REGISTRY_*`).
+
+Live-verified inside a CF container instance: `dockerd_up=YES`, `docker run --network none` OK, **`docker run --network host alpine … wget https://example.com` OK** (pull + execute + egress).
+
+**Remaining follow-ups (now that execution works):**
+- **Container logs** (#15.16-logs / #10): container stdout still isn't in `wrangler tail`; `afk logs` needs the Containers observability/Logs API to show agent output.
+- **Status on completion**: `RunDO` doesn't observe container exit, so a Run stays RUNNING until the alarm; wire the Container lifecycle (or an exit-report) to `markStopped` + capture exit code.
+- **`wrangler containers ssh` doesn't work when PID 1 is root** (500s) — lose interactive debug; acceptable, but note it.
+- **Remove the temporary `/debug` route** from the launcher Worker before shipping.
+- **Fully-observable end-to-end** (`afk run` → see agent output + exit code) still pending the logs/status items + a valid GitHub token.
+
 **Update — orchestration implemented, container runtime is the blocker (2026-05-23).** The workload-orchestration half (root cause #1) is now built:
 - Golden `bootstrap.sh` (CloudflareGoldenBuilder) now, after `dockerd` is up: `docker login` (with an injected pull credential) → `docker pull $AFK_IMAGE` → `docker run --env-file … $AFK_IMAGE sh -c "$AFK_COMMAND"` (or `docker compose up` with the injected compose), captures the exit code, and exits.
 - `RunDO.handleStart` mints a short-lived registry **pull** credential via `POST …/containers/registries/registry.cloudflare.com/credentials`, base64-encodes the workload env file, and passes `AFK_IMAGE`/`AFK_COMMAND`/`AFK_MAIN_SERVICE`/`AFK_RUN_ENV_B64`/`AFK_REGISTRY_*`/`AFK_COMPOSE_YML` as the Container's control env.
