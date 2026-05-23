@@ -4,6 +4,7 @@ import { CloudflareImageRegistryLive } from "./CloudflareImageRegistry.ts"
 import { CloudflareSecretStoreLive } from "./CloudflareSecretStore.ts"
 import { CloudflareLogStoreLive } from "./CloudflareLogStore.ts"
 import { CloudflareRunHistoryLive } from "./CloudflareRunHistory.ts"
+import { CloudflareGoldenBuilderLive } from "../../services/CloudflareGoldenBuilder.ts"
 
 /**
  * Aggregate Layer that wires up every Backend service tag with the Cloudflare
@@ -22,6 +23,15 @@ const Leaves = Layer.mergeAll(
   CloudflareRunHistoryLive,
 )
 
-export const CloudflareBackendLive = CloudflareComputeLive.pipe(
+// CloudflareGoldenBuilderLive depends on ImageRegistry + ConfigService + Docker.
+// We provide it on top of Leaves so it sees the CF ImageRegistry, and re-export
+// it in the aggregate output so the `golden` command-layer dispatch can consume
+// it. Parallel to where AWS's `ImageServiceLive` sits — except CF's lives
+// inside the backend bundle (it has no cross-backend reuse).
+const GoldenBuilder = CloudflareGoldenBuilderLive.pipe(
   Layer.provideMerge(Leaves),
+)
+
+export const CloudflareBackendLive = CloudflareComputeLive.pipe(
+  Layer.provideMerge(GoldenBuilder),
 )

@@ -1,9 +1,11 @@
-import { Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { AwsComputeLive } from "./AwsCompute.ts"
 import { AwsImageRegistryLive } from "./AwsImageRegistry.ts"
 import { AwsSecretStoreLive } from "./AwsSecretStore.ts"
 import { AwsLogStoreLive } from "./AwsLogStore.ts"
 import { AwsRunHistoryLive } from "./AwsRunHistory.ts"
+import { CloudflareGoldenBuilder } from "../../services/CloudflareGoldenBuilder.ts"
+import { UserError } from "../../infra/Errors.ts"
 
 /**
  * Aggregate Layer that wires up every Backend service tag with the AWS
@@ -24,4 +26,36 @@ const Leaves = Layer.mergeAll(
   AwsRunHistoryLive,
 )
 
-export const AwsBackendLive = AwsComputeLive.pipe(Layer.provideMerge(Leaves))
+/**
+ * Stub `CloudflareGoldenBuilder` for the AWS aggregate so the shared
+ * golden-command dispatch (which references both impls at compile time) has
+ * a fully-resolved tag in the AppLive type. The stub fails loudly if the
+ * AWS branch ever actually consumes it — that should never happen because
+ * the command-level dispatch routes on `config.backend`.
+ */
+const CloudflareGoldenBuilderStub = Layer.succeed(
+  CloudflareGoldenBuilder,
+  CloudflareGoldenBuilder.of({
+    build: Effect.fail(
+      new UserError({
+        message:
+          "internal: CloudflareGoldenBuilder.build invoked on the AWS backend",
+        hint: "This should never happen — file an issue.",
+      }),
+    ),
+    list: Effect.succeed([]),
+    remove: () =>
+      Effect.fail(
+        new UserError({
+          message:
+            "internal: CloudflareGoldenBuilder.remove invoked on the AWS backend",
+        }),
+      ),
+    findLatest: Effect.succeed(null),
+  }),
+)
+
+export const AwsBackendLive = Layer.mergeAll(
+  AwsComputeLive.pipe(Layer.provideMerge(Leaves)),
+  CloudflareGoldenBuilderStub,
+)
