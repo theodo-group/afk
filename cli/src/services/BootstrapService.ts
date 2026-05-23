@@ -16,6 +16,7 @@ import { Ecr } from "../adapters/aws/Ecr.ts"
 import { Terraform } from "../adapters/Terraform.ts"
 import { AwsError, CloudflareError, SubprocessError, UserError } from "../infra/Errors.ts"
 import { deriveAccountId } from "../infra/CfToml.ts"
+import { Subprocess } from "../infra/Subprocess.ts"
 import {
   AFK_STATE_BUCKET_PREFIX,
   CONFIG_FILE,
@@ -141,6 +142,7 @@ export const BootstrapServiceLive = Layer.effect(
     const ssm = yield* Ssm
     const ecr = yield* Ecr
     const terraform = yield* Terraform
+    const sub = yield* Subprocess
 
     const initAws = (input: InitInput): Effect.Effect<InitResult, AwsError | UserError> =>
       Effect.gen(function* () {
@@ -550,30 +552,117 @@ export const BootstrapServiceLive = Layer.effect(
 
     const destroyCloudflare = (
       input: DestroyInput,
-    ): Effect.Effect<DestroyResult, CloudflareError | UserError> =>
+    ): Effect.Effect<DestroyResult, CloudflareError | UserError | SubprocessError> =>
       Effect.gen(function* () {
-        const workerDir = resolve(input.projectDir, "worker", "afk")
-        // The CLI deliberately does not drive wrangler (see init). Teardown of
-        // the CF backing resources is wrangler-owned, so we emit the exact
-        // sequence rather than executing it.
+        const projectDir = input.projectDir
+        const workerName = "afk-launcher"
+        const d1Name = "afk-launcher-history"
+        const kvTitle = "DEVELOPERS_KV"
+        const containerName = "afk-launcher-runcontainer"
+        const goldenRepo = "afk-golden"
+
+        // Run wrangler from the project root so it picks up CLOUDFLARE_API_TOKEN
+        // from the inherited env (.env is auto-loaded by the CLI at startup).
+        const wrangler = (args: ReadonlyArray<string>) =>
+          sub
+            .run("wrangler", args, { cwd: projectDir })
+            .pipe(
+              Effect.mapError(
+                (e) =>
+                  new CloudflareError({
+                    operation: `wrangler ${args[0]}`,
+                    message: e.stderr || e.stdout || String(e),
+                  }),
+              ),
+            )
+        const sliceArray = (s: string): Array<Record<string, string>> => {
+          const a = s.indexOf("[")
+          const b = s.lastIndexOf("]")
+          if (a === -1 || b === -1 || b < a) return []
+          try {
+            return JSON.parse(s.slice(a, b + 1)) as Array<Record<string, string>>
+          } catch {
+            return []
+          }
+        }
+
         const actions = [
-          `cd ${workerDir}`,
-          `wrangler delete                    # remove launcher Worker + DOs`,
-          `wrangler d1 delete afk-launcher-history`,
-          `wrangler kv namespace delete --binding DEVELOPERS_KV`,
-          `# delete the Golden Container image + any Access service tokens via the dashboard`,
+          `delete golden image tags (${goldenRepo}:*)`,
+          `wrangler delete --name ${workerName}   # launcher Worker + DOs`,
+          `wrangler containers delete ${containerName}   # outer Container app + live instances`,
+          `wrangler d1 delete ${d1Name}`,
+          `wrangler kv namespace delete <${kvTitle} id>`,
         ]
-        const humanReport = [
-          `Cloudflare teardown is wrangler-driven; afk does not run wrangler for you.`,
-          `Run these from the repo root (CLOUDFLARE_API_TOKEN must be exported):`,
-          ``,
-          ...actions.map((a) => `  ${a}`),
-        ].join("\n")
+
+        // Dry-run: show the plan, touch nothing.
+        if (!input.execute) {
+          return {
+            provider: "cloudflare" as const,
+            executed: false,
+            actions,
+            humanReport: [
+              `Would tear down the Cloudflare backend (re-run with --yes to execute):`,
+              ``,
+              ...actions.map((a) => `  ${a}`),
+            ].join("\n"),
+          }
+        }
+
+        const done: string[] = []
+
+        // 1. Golden image tags.
+        const imgs = sliceArray(
+          (yield* wrangler(["containers", "images", "list", "--json"])).stdout,
+        ) as Array<{ name?: string; tags?: string[] }>
+        const golden = imgs.find((i) => i.name === goldenRepo)
+        for (const tag of golden?.tags ?? []) {
+          yield* wrangler(["containers", "images", "delete", `${goldenRepo}:${tag}`])
+          done.push(`deleted golden ${goldenRepo}:${tag}`)
+        }
+
+        // 2. Launcher Worker (also removes its DOs).
+        yield* wrangler(["delete", "--name", workerName])
+        done.push(`deleted Worker ${workerName}`)
+
+        // 3. Outer Container application (NOT removed by the Worker delete —
+        // this is what leaves live instances billing otherwise).
+        const containers = sliceArray(
+          (yield* wrangler(["containers", "list", "--json"])).stdout,
+        ) as Array<{ id?: string; name?: string }>
+        const app = containers.find((c) => c.name === containerName)
+        if (app?.id) {
+          yield* wrangler(["containers", "delete", app.id])
+          done.push(`deleted container app ${containerName}`)
+        }
+
+        // 4. D1 database.
+        yield* wrangler(["d1", "delete", d1Name])
+        done.push(`deleted D1 ${d1Name}`)
+
+        // 5. KV namespace (resolve id by title).
+        const kvs = sliceArray(
+          (yield* wrangler(["kv", "namespace", "list"])).stdout,
+        ) as Array<{ id?: string; title?: string }>
+        const kv = kvs.find(
+          (n) => n.title === kvTitle || (n.title ?? "").endsWith(`-${kvTitle}`),
+        )
+        if (kv?.id) {
+          yield* wrangler(["kv", "namespace", "delete", "--namespace-id", kv.id])
+          done.push(`deleted KV ${kvTitle}`)
+        }
+
         return {
           provider: "cloudflare" as const,
-          executed: false,
+          executed: true,
           actions,
-          humanReport,
+          humanReport: [
+            `Cloudflare backend torn down:`,
+            ``,
+            ...done.map((d) => `  ✓ ${d}`),
+            ``,
+            `Note: Cloudflare Access service tokens (if any) are not deleted —`,
+            `remove them via the Zero Trust dashboard.`,
+          ].join("\n"),
         }
       })
 

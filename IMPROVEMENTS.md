@@ -223,6 +223,8 @@ First end-to-end CF deploy against a real account (the verification work #12 ant
 
 **15.9 init does not scaffold a `cloudflare:` block into an existing config ✅ (fixed).** `afk init --provider cloudflare` now merges a `cloudflare:` block into an existing config and flips `backend`, preserving the `aws:` block. See #14.
 
+**15.10 `afk destroy` (Cloudflare) now executes ✅ (fixed).** It previously only *printed* a wrangler sequence — which was also incomplete (wrong KV flag, and it omitted the Container application + golden images, leaving Container instances billing). `afk destroy --yes` now actually tears down golden image tags, the launcher Worker, the Container app, D1, and KV; `afk destroy` (no flag) is a dry-run. Symmetric with `afk provision`. Touches `cli/src/services/BootstrapService.ts:destroyCloudflare`.
+
 **15.6 update (token scope message) ✅ (partial).** `afk init`'s missing-token error now lists `Cloudflare Images:Edit`. The README prerequisites list still needs the same addition (Images + Workers Containers for the push; Access: Service Tokens for `team add`).
 
 ---
