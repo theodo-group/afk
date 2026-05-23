@@ -2,9 +2,9 @@
 
 Run ephemeral containerized tasks in the cloud from a CLI. Built for AI agents that work while you're AFK ("away from keyboard"), but works for any cli-runnable workload.
 
-Each Run executes on a short-lived VM that the developer owns end-to-end. The VM has Docker installed, so the Run can `docker compose up` against the host daemon — giving the agent first-class access to sidecar services (Postgres, Redis, etc.) without the limitations of serverless container platforms.
+Each Run executes on a short-lived **compute primitive** that the developer owns end-to-end — an EC2 VM on the AWS Backend, a Cloudflare Container instance on the Cloudflare Backend. Either way the Run has Docker available (the host daemon on AWS, rootless `dind` on Cloudflare), so `docker compose up` is the same surface across providers — giving the agent first-class access to sidecar services (Postgres, Redis, etc.) without the limitations of serverless container platforms.
 
-This repository is the **base layer**: it ships the Terraform that provisions the cloud infra, the CLI that drives it, and the contract that consumers must follow in their own repos.
+This repository is the **base layer**: it ships the per-Backend infra (Terraform for AWS, a launcher Worker for Cloudflare), the CLI that drives them, and the contract that consumers must follow in their own repos.
 
 ---
 
@@ -12,21 +12,23 @@ This repository is the **base layer**: it ships the Terraform that provisions th
 
 See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 
-- **Run** — one ephemeral execution of a developer-defined command, backed by exactly one EC2 instance. The VM boots, runs the workload, and self-terminates on exit.
-- **Backend** — cloud-provider implementation. AWS EC2 first; GCP (Compute Engine) and Azure (Virtual Machines) anticipated.
-- **Owner** — the IAM principal that launched a Run. Used for access control.
+- **Run** — one ephemeral execution of a developer-defined command, backed by exactly one compute primitive (an EC2 instance on AWS, a Container instance on Cloudflare). The primitive boots, runs the workload, and self-terminates on exit.
+- **Backend** — cloud-provider implementation. **AWS EC2** and **Cloudflare Containers** are shipped; GCP (Compute Engine) and Azure (Virtual Machines) are anticipated.
+- **Owner** — the developer principal that launched a Run (AWS IAM userid, or Cloudflare Access service-token client-id). Used for access control.
 - **Dockerfile Contract** — the rules a consumer's `afk.Dockerfile` must follow.
 - **Compose Contract** — the (optional) rules a consumer's `afk.compose.yml` must follow when the Run needs sidecar services.
-- **Golden Image** — the AMI used as the boot image for every Run. Pure Docker cache, nothing more.
+- **Golden Image** — the per-Backend boot artifact used by every Run. An AMI on AWS, a Container image on Cloudflare. Pure Docker engine + sidecar cache, nothing more.
 - **Ref** — the git reference a Run executes against.
 
 ---
 
 ## How it works (end-to-end)
 
+The walkthrough below describes the AWS Backend. The Cloudflare Backend follows the same conceptual shape — the same `afk` CLI surface, the same `afk.Dockerfile` + `afk.compose.yml` contract, the same Owner / Ref / Golden Image concepts — but swaps EC2 + Terraform for Cloudflare Containers + a launcher Worker. See [Quickstart on Cloudflare](#quickstart-on-cloudflare) and [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the CF-specific topology.
+
 1. Developer runs `afk init --provider aws --region <region>` in their repo once. CLI creates the Terraform state S3 bucket (`afk-tf-state-<account>-<region>`), copies the matching Backend Terraform module into their repo (`terraform/aws/` → consumer's `terraform/afk/`), renders `backend.tf` with the bucket/region, scaffolds `.afk.env` and `afk.config.json` (with `backend: "aws"` and `aws.region`), and gitignores `.afk.env`. `--provider` defaults to `aws`; `--region` defaults to `us-east-1`.
 2. Developer runs `terraform apply` from `terraform/afk/`. This creates the VPC, security groups, IAM roles and policies, the sweeper Lambda, and the developer IAM role.
-3. Developer builds the Golden Image: `afk image build`. The CLI launches a short-lived builder EC2 instance, installs Docker, pre-pulls the images listed in `afk.config.json` under `golden.cachedImages`, snapshots the result as an AMI tagged `afk:golden=true`, and terminates the builder.
+3. Developer builds the Golden Image: `afk golden build`. The CLI launches a short-lived builder EC2 instance, installs Docker, pre-pulls the images listed in `afk.config.json` under `golden.cachedImages`, snapshots the result as an AMI tagged `afk:golden=true`, and terminates the builder.
 4. Developer stores their GitHub Personal Access Token: `afk secrets put github-token <PAT>`.
 5. Developer runs `afk run "claude -p 'fix the failing tests'"`. The CLI:
    - Refuses if the working tree is dirty or the current branch isn't pushed to origin.
@@ -38,7 +40,7 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
    - Returns the Run ID and exits.
 6. The VM boots. The `user_data` script:
    - Authenticates to ECR via the instance profile and pulls the agent image.
-   - Resolves `ssm:` env vars from SSM Parameter Store.
+   - Resolves `secret:<name>` env vars by reading SSM Parameter Store.
    - Writes the compose file to `/etc/afk/compose.yml` (or skips if no compose file was provided).
    - Runs `timeout <N>h docker compose up --exit-code-from <main-service> --abort-on-container-exit` (or `docker run` if no compose file).
    - The CLI-injected entrypoint inside the main service's container reads `AFK_GIT_URL`, `AFK_GIT_REF`, and the GitHub token, clones the repo at the ref into `/workspace`, then `exec`s the dev's command.
@@ -60,8 +62,8 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 │   ├── src/
 │   ├── package.json
 │   └── tsconfig.json
-├── terraform/              # copyable modules, split by Backend (afk init drops the selected one into the dev's repo)
-│   └── aws/                # AWS Backend — EC2 VM per Run (only Backend supported in v1)
+├── terraform/              # AWS Backend infra — copyable modules (afk init drops one into the dev's repo)
+│   └── aws/                # AWS Backend — EC2 VM per Run
 │       ├── main.tf
 │       ├── vpc.tf
 │       ├── iam.tf
@@ -71,7 +73,13 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 │       ├── variables.tf
 │       └── outputs.tf
 │   # future: gcp/, azure/
-├── entrypoint/             # CLI-injected container entrypoint
+├── worker/                 # Cloudflare Backend infra — copyable launcher Worker
+│   └── cloudflare/         # Cloudflare Backend — Container instance per Run
+│       ├── src/            # Hono router + per-Run Durable Object + registry DO
+│       ├── migrations/     # D1 schema (runs history table)
+│       ├── wrangler.toml.template  # rendered by afk init
+│       └── README.md       # CF-specific topology + deploy notes
+├── entrypoint/             # CLI-injected container entrypoint (shared across Backends)
 │   └── entrypoint.sh
 └── examples/               # example consumer repos
 ```
@@ -95,11 +103,20 @@ Prerequisites on the developer machine:
 
 - Bun (runtime)
 - Docker (image builds)
+- A working `git` credential helper that can read your private remote (`gh auth setup-git` is the easiest if you have the GitHub CLI installed)
+
+For the **AWS Backend** additionally:
+
 - Terraform ≥ 1.10 (for S3 native state locking)
 - AWS CLI (credential chain) with creds for the target account
 - `session-manager-plugin` (required for `afk attach`)
 - `npm` (the sweeper Lambda is bundled with esbuild at `terraform apply` time)
-- A working `git` credential helper that can read your private remote (`gh auth setup-git` is the easiest if you have the GitHub CLI installed)
+
+For the **Cloudflare Backend** additionally:
+
+- `wrangler` (Cloudflare's deploy CLI) on PATH
+- `CLOUDFLARE_API_TOKEN` exported, scoped for `Workers Scripts:Edit`, `Containers:Edit`, `D1:Edit`, `Workers KV:Edit`, `Access:Edit`
+- A Cloudflare account on the Workers Paid plan (Containers requires it)
 
 Updates: `git pull && bun install`. There is no version pinning; consumers run whatever sha they checked out.
 
@@ -107,11 +124,15 @@ Updates: `git pull && bun install`. There is no version pinning; consumers run w
 
 ## Quickstart
 
+Pick the Backend you want to run on. The CLI surface (`afk run`, `afk ls`, `afk attach`, …) is identical from there.
+
+### Quickstart on AWS
+
 In a fresh consumer repo:
 
 ```sh
 # 1. Bootstrap (creates the state bucket + scaffolds files)
-afk init --region eu-west-1
+afk init --provider aws --region eu-west-1
 
 # 2. Provision infra (VPC, IAM, sweeper Lambda)
 cd terraform/afk
@@ -120,11 +141,11 @@ terraform apply -var aws_region=eu-west-1
 cd -
 
 # 3. Build the Golden Image (one-time per account/region; ~5 min)
-afk image build
+afk golden build
 
 # 4. Store secrets (at minimum a GitHub PAT so the VM can clone source)
 afk secrets put github-token <PAT>
-echo "GITHUB_TOKEN=ssm:/afk/secrets/github-token" >> .afk.env
+echo "GITHUB_TOKEN=secret:github-token" >> .afk.env
 
 # 5. Author your contract files (commit + push)
 #    - afk.Dockerfile          (toolchain only; no COPY of source; no ENTRYPOINT)
@@ -142,12 +163,74 @@ afk logs <run-id>
 Teardown when you're done:
 
 ```sh
-afk image rm <ami-id>           # delete the Golden AMI
+afk golden rm <ami-id>          # delete the Golden AMI
 cd terraform/afk && terraform destroy -var aws_region=eu-west-1
 aws ssm delete-parameter --name /afk/secrets/github-token --region eu-west-1
 aws ecr delete-repository --repository-name afk/<your-repo> --force --region eu-west-1
 aws s3 rb s3://afk-tf-state-<account-id>-eu-west-1 --force
 ```
+
+### Quickstart on Cloudflare
+
+In a fresh consumer repo:
+
+```sh
+# 0. Export a Cloudflare API token (Workers Scripts:Edit, Containers:Edit,
+#    D1:Edit, Workers KV:Edit, Access:Edit).
+export CLOUDFLARE_API_TOKEN=<your-token>
+
+# 1. Bootstrap (copies the launcher Worker into worker/afk/, scaffolds files)
+afk init --provider cloudflare
+
+# 2. Provision the launcher Worker's backing resources (one-time)
+cd worker/afk
+npm install
+wrangler d1 create afk-launcher-history
+#   → paste the database_id into wrangler.toml under [[d1_databases]]
+wrangler kv:namespace create DEVELOPERS_KV
+#   → paste the namespace id into wrangler.toml under [[kv_namespaces]]
+wrangler d1 execute afk-launcher-history --file=migrations/0001_runs.sql --remote
+
+# 3. Fill in your Cloudflare account_id in wrangler.toml AND
+#    afk.config.json's cloudflare.accountId.
+
+# 4. Build the Golden Container image (one-time per account; ~5 min)
+afk golden build
+
+# 5. Deploy the launcher Worker + store its API token
+wrangler deploy
+wrangler secret put CF_API_TOKEN   # admin-scoped: read+write Containers/D1/KV
+#   → copy the deployed Worker URL into afk.config.json's cloudflare.workerUrl.
+cd -
+
+# 6. Provision yourself as a developer (creates a CF Access service token)
+afk team add <your-name>
+
+# 7. Store secrets (at minimum a GitHub PAT so the Container can clone source)
+afk secrets put github-token <PAT>
+echo "GITHUB_TOKEN=secret:github-token" >> .afk.env
+
+# 8. Author your contract files (commit + push) — same as AWS
+git add afk.Dockerfile afk.compose.yml afk.config.json .afk.env
+git commit -m "configure AFK"
+git push
+
+# 9. Launch a Run
+afk run bun --version
+afk ls
+afk logs <run-id>
+```
+
+Teardown when you're done:
+
+```sh
+afk golden rm <image-tag>       # delete the Golden Container image
+cd worker/afk && wrangler delete   # remove the launcher Worker + DOs
+wrangler d1 delete afk-launcher-history
+wrangler kv:namespace delete --binding DEVELOPERS_KV
+```
+
+See [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the launcher Worker's internals.
 
 ---
 
@@ -229,44 +312,58 @@ Sidecars share the VM's Docker daemon and the VM's network. `/workspace` is moun
   },
   "aws": {
     "region": "eu-west-1"
+  },
+  "cloudflare": {
+    "accountId": "abc123…",
+    "workerName": "afk-launcher",
+    "workerUrl": "https://afk-launcher.<acct>.workers.dev",
+    "placement": "smart",
+    "defaultInstanceTier": "standard-1",
+    "cachedImages": ["postgres:16", "redis:7"]
   }
 }
 ```
 
-`backend` and `gitUrl` are required. `mainService` defaults to `agent`. `aws.region` selects the region for every AWS call the CLI makes; if omitted it defaults to `us-east-1`. Resource and Golden-Image settings are optional.
+`backend` and `gitUrl` are required. `mainService` defaults to `agent`. Only the block matching the active `backend` is consulted — both `aws:` and `cloudflare:` may coexist, and `afk init --provider <other>` re-runs are non-destructive of the other block.
 
-Most runtime values the CLI needs (VPC ID, subnet IDs, role ARNs) are derived from tags + IAM lookups against the configured region — not read from this file.
+- **AWS-specific.** `aws.region` selects the region for every AWS call the CLI makes; defaults to `us-east-1` if omitted. Resource and Golden-Image settings are optional. Most runtime values the CLI needs (VPC ID, subnet IDs, role ARNs) are derived from tags + IAM lookups against the configured region — not read from this file.
+- **Cloudflare-specific.** `cloudflare.accountId` and `cloudflare.workerUrl` are required for any CF command after `afk init`. `placement` (default `smart`) maps to Cloudflare Containers placement hints. `defaultInstanceTier` (default `standard-1`) is the CF Containers tier per Run. `cachedImages` is the list passed to `afk golden build` for inclusion in the Golden Container image.
 
 ### 4. `.afk.env` (gitignored)
 
-Contains environment variables for Runs. Values may be plain strings (for non-secrets) or SSM references (for secrets).
+Contains environment variables for Runs. Values may be plain strings (for non-secrets) or `secret:<name>` references (for values stored in the active Backend's secret store).
 
 ```
 LOG_LEVEL=debug
-ANTHROPIC_API_KEY=ssm:/afk/anthropic-key
-DATABASE_URL=ssm:/afk/db-url
+ANTHROPIC_API_KEY=secret:anthropic-key
+DATABASE_URL=secret:db-url
 ```
 
-Secrets themselves are stored separately via `afk secrets put <name> <value>` (writes to SSM Parameter Store SecureString) and referenced from `.afk.env`.
+Secrets themselves are stored separately via `afk secrets put <name> <value>`. The backing store is Backend-specific (SSM Parameter Store SecureString on AWS; Workers Secrets on Cloudflare, written via the launcher Worker's `/secrets` route), but the `secret:<name>` reference syntax is canonical and identical across Backends.
 
 ---
 
 ## CLI surface
 
 ```
-afk init [--provider aws] [--region <region>]  # one-time setup in a repo (creates state bucket, scaffolds config)
-afk doctor                                     # check dependencies, AWS creds, Golden Image presence + age
+afk init [--provider <aws|cloudflare>] [--region <region>]
+                                               # one-time setup in a repo (scaffolds config + Backend infra)
+                                               # --provider defaults to aws; --region applies to provider=aws only
+afk doctor                                     # check dependencies, Backend creds, Golden Image presence + age
 afk config                                     # print resolved config (debug)
 
-afk image build                                # build the Golden Image AMI from afk.config.json's cache list
-afk image ls                                   # list Golden Image AMIs in this account/region
-afk image rm <ami-id>                          # delete a Golden Image AMI
+afk golden build                               # build the Golden Image for the active Backend
+                                               #   AWS: an AMI tagged afk:golden=true
+                                               #   CF:  a Container image in the CF managed registry
+afk golden ls                                  # list Golden Images for the active Backend
+afk golden rm <id-or-tag>                      # delete a Golden Image
 
 afk build [--ref <ref>]                        # explicit container image build + push (afk run also builds if needed)
 afk run <command…>                             # launch a Run
   --ref <branch|sha|tag>                       #   defaults to current local branch
-  --instance-type <type>                       #   overrides project default
-  --on-demand                                  #   disable Spot for this Run (default is Spot)
+  --instance-type <type>                       #   AWS only: overrides project default EC2 type
+  --on-demand                                  #   AWS only: disable Spot for this Run (default is Spot)
+  --instance-tier <tier>                       #   CF only: overrides project default CF Containers tier
   --timeout <hours>                            #   overrides default (4h)
   --detach / -d                                #   default: launch and exit (currently the only mode)
 afk ls [--all] [--status <s>]                  # list Runs (yours by default; --all = team-wide if permitted)
@@ -274,13 +371,15 @@ afk attach <run-id> [--service <name>] [--host]
                                                # interactive shell. Default: docker exec into main service.
                                                # --service <name>: attach to a sidecar instead.
                                                # --host:           drop to the VM's host shell.
-afk logs <run-id> [--follow] [--service <name>]
-                                               # tail logs from CloudWatch (uses `aws logs tail` under the hood)
+afk logs <run-id> [--follow] [--service <name>] [--since <duration>]
+                                               # tail logs from the active Backend's log store
+                                               #   AWS: CloudWatch Logs (`aws logs tail` under the hood)
+                                               #   CF:  Workers Logs (via `wrangler tail` for now)
 afk kill <run-id>                              # ec2:TerminateInstances on the Run
 
-afk secrets put <name> [value]                 # write to SSM (prompts if value omitted)
+afk secrets put <name> [value]                 # write to the active Backend's secret store (prompts if value omitted)
 afk secrets ls                                 # list stored secret names
-afk secrets rm <name>                          # delete from SSM
+afk secrets rm <name>                          # delete from the active Backend's secret store
 
 afk team add <name> [--principal <arn>]        # admin: provision a developer (IAM user or trusted principal)
 afk team ls                                    # admin: list members
@@ -295,17 +394,22 @@ afk team rm <name>                             # admin: revoke access
 **Command semantics worth knowing:**
 
 - `afk run "<command>"` and `afk run <command> <args…>` both work. The container's CMD becomes `sh -c "<joined command>"`, so quoting and shell features (`&&`, `|`, `$VARS`) work as you'd expect.
-- The region every command operates on comes from `afk.config.json` → `aws.region`. There is no per-command `--region` flag (apart from `afk init`, which writes the region into the rendered backend.tf and scaffolded config).
+- The region every AWS command operates on comes from `afk.config.json` → `aws.region`. There is no per-command `--region` flag (apart from `afk init`, which writes the region into the rendered backend.tf and scaffolded config).
+- Both `aws` and `cloudflare` Backends are supported as of v2; `--local`, GCE, and Azure VMs are still anticipated.
 
-All AWS calls go through the standard credential chain (`AWS_PROFILE`, env vars, IMDS). Developers act under an IAM role provisioned by the Terraform. The `team` commands require admin IAM permissions (separate policy output by the Terraform).
+All AWS calls go through the standard credential chain (`AWS_PROFILE`, env vars, IMDS). Developers act under an IAM role provisioned by the Terraform. All Cloudflare calls go through the launcher Worker, authenticated by a per-developer Cloudflare Access service token (provisioned by `afk team add`) — the CLI never talks to the CF control-plane API directly except during `afk init` / `afk golden build`. The `team` commands require admin permissions on either Backend (a separate IAM policy on AWS; a Worker secret-gated `/team` route on Cloudflare).
 
 ---
 
-## What the Terraform provisions
+## What the backend provisions
+
+Each Backend has its own one-time infra setup. The CLI surface is identical from there.
+
+### AWS Terraform
 
 A consumer of this repo runs the Terraform once per AWS account/team. It creates:
 
-### Networking
+#### Networking
 
 - A dedicated VPC across 2 AZs.
 - Public subnets only (no NAT).
@@ -313,12 +417,12 @@ A consumer of this repo runs the Terraform once per AWS account/team. It creates
 - A Security Group for Runs: **all inbound denied**, all outbound allowed.
 - Run VMs launch with a public IP. Inbound is unreachable; outbound goes direct.
 
-### Compute
+#### Compute
 
 - No long-running compute. The CLI launches one EC2 instance per Run on demand against the Golden AMI.
 - A **sweeper Lambda** (TypeScript, bundled at `terraform apply` time) on a 15-minute EventBridge schedule. It terminates AFK-managed instances older than their declared timeout. Backstop against crashed agents.
 
-### Identity
+#### Identity
 
 - An `afk-vm-instance-role` — the role attached to every Run VM. Grants:
   - ECR pull on `afk/*` repositories.
@@ -338,27 +442,61 @@ A consumer of this repo runs the Terraform once per AWS account/team. It creates
   - `logs:CreateLogGroup`, `logs:PutRetentionPolicy`, `logs:GetLogEvents` scoped to `/afk/*`.
 - An admin attaches `afk-developer` to whichever IAM users/roles should have access.
 
-### Storage / state
+#### Storage / state
 
 - The Terraform state itself lives in an S3 bucket created by `afk init` (not by Terraform — chicken-and-egg). S3 native state locking (`use_lockfile = true`) replaces the older DynamoDB pattern.
+- A DynamoDB `afk-runs` table holds Run history (used by `afk history`).
 
-### Not created by Terraform
+#### Not created by Terraform
 
-- **The Golden AMI** is built by `afk image build`, not by Terraform. The Terraform grants the permission scope only.
+- **The Golden AMI** is built by `afk golden build`, not by Terraform. The Terraform grants the permission scope only.
 - **ECR repositories** are created lazily by the CLI on first `afk build` for a given source repo, with a 7-day untagged-image lifecycle policy applied at creation.
 - **CloudWatch log groups** (`/afk/<source-repo>`) are created lazily by the CLI with 30-day retention.
+
+### Cloudflare Wrangler
+
+A consumer of this repo runs `wrangler deploy` from `worker/afk/` once per Cloudflare account/team after `afk init --provider cloudflare`. The deploy creates:
+
+#### The launcher Worker
+
+- An HTTP/WSS Worker that fronts every AFK operation: `/runs`, `/runs/:id`, `/runs/:id/attach` (WSS), `/secrets`, `/team`, `/health`. The CLI's `CloudflareCompute` layer talks to this Worker — there is no direct CLI→CF-control-plane traffic for normal commands.
+- Authenticates each request via the caller's CF Access service-token client-id (`Cf-Access-Client-Id`), or a shared bearer fallback for single-dev mode.
+
+#### Durable Objects
+
+- **`RunDO`** — one per Run. Owns the Run's Container instance, captures stdout/stderr for Workers Logs, and sets an alarm at `startedAt + timeoutHours + 30 min` as a backstop against a stuck Run.
+- **`RegistryDO`** — singleton index DO. Backs `afk ls` without fanning out to every per-Run DO.
+- Migrations for both DOs are declared in `wrangler.toml` and applied automatically on `wrangler deploy`.
+
+#### The Container binding
+
+- `RunContainer` — the Container class the launcher Worker dispatches Runs to. Each per-Run `RunDO` owns one instance, booted from the Golden Container image referenced in `afk.config.json`.
+
+#### D1 + KV
+
+- **D1 database** (`afk-launcher-history`) — the historical rows table queried by `afk history`. Schema lives in `worker/cloudflare/migrations/0001_runs.sql`, applied via `wrangler d1 execute … --file=… --remote` at init time.
+- **KV namespace** (`DEVELOPERS_KV`) — maps Cloudflare Access service-token client-ids to developer display names. Written by `afk team add`.
+
+#### Not created by `wrangler deploy`
+
+- **The Golden Container image** is built by `afk golden build` and pushed to the Cloudflare managed registry. Wrangler does not produce it.
+- **Workers Secrets** (`CF_API_TOKEN` and per-Run secrets) are written interactively by `wrangler secret put` (for the admin token) and by the launcher Worker's `/secrets` route (for per-Run secrets the CLI writes via `afk secrets put`).
+
+See [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the launcher Worker's source layout and topology diagram.
 
 ---
 
 ## Local Backend (planned, not yet implemented)
 
-The intent is to let every command accept `--local` to execute against the developer's local Docker daemon instead of EC2, as a faithful rehearsal of the cloud path (same image build, same entrypoint, same compose file, same secret resolution). This is not yet implemented in the current code — `--local` flags will be added once the cloud path is hardened. Until then, every command targets AWS.
+The intent is to let every command accept `--local` to execute against the developer's local Docker daemon instead of the cloud, as a faithful rehearsal of the cloud path (same image build, same entrypoint, same compose file, same secret resolution). This is not yet implemented — `--local` flags will be added once both cloud Backends are hardened. Until then, every command targets the Backend named in `afk.config.json`.
 
 ---
 
 ## Source code handling
 
 A Run's image contains the toolchain and dependencies — **not** the source. The entrypoint clones the repo at the configured ref into `/workspace` (inside the main service's container) before executing the dev's command.
+
+On Cloudflare: identical contract. The clone runs inside the rootless `dind` inside the Container; `/workspace` is a tmpfs mount inside the main service's container, sized off the CF Containers tier.
 
 Why this split:
 - Image rebuilds only when dependencies change (rare).
@@ -377,12 +515,15 @@ The same guards make `afk.Dockerfile` and `afk.compose.yml` trustworthy: both ar
 
 ## Secrets
 
-- Secret values are stored in **SSM Parameter Store SecureString** under `/afk/*`, written by `afk secrets put`.
-- Secret *references* (`ssm:/afk/name`) live in `.afk.env`. The CLI passes them to the VM via the `user_data` script, which resolves them at boot using the VM's instance-profile permissions and exports them as environment variables into the compose stack.
-- Secret values never appear in `DescribeInstances` output, CloudTrail (beyond the parameter name), or instance tags.
+- Secret values are stored in the active Backend's secret store, written by `afk secrets put`.
+- Secret *references* live in `.afk.env` as `secret:<name>`. The reference syntax is canonical across Backends.
 - `.afk.env` is gitignored by default. The CLI refuses to start if `.afk.env` is tracked by git.
 
 The Run needs at minimum a `github-token` secret to clone source.
+
+On AWS: values are stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The CLI passes references to the VM via the `user_data` script, which resolves them at boot using the VM's instance-profile permissions and exports them into the compose stack. Values never appear in `DescribeInstances` output, CloudTrail (beyond the parameter name), or instance tags.
+
+On Cloudflare: values are stored as **Workers Secrets** on the launcher Worker, written via the Worker's `/secrets` route (which the CLI calls on `afk secrets put`). At Run start, the launcher Worker materialises them into the Container's environment. Values never appear in the D1 history table, KV, or Workers Logs.
 
 ---
 
@@ -399,6 +540,8 @@ The Run needs at minimum a `github-token` secret to clone source.
 
 SSM only. No SSH protocol, no bastion, no inbound ports.
 
+On Cloudflare: SSM has no equivalent. The launcher Worker exposes a WSS endpoint at `/runs/:id/attach`; the CLI opens a WebSocket against it, the Worker proxies the frames into a `docker compose exec -it <service>` inside the Run's outer Container (which is running rootless `dind`). `--service <name>` and `--host` work the same way as on AWS, modulo host-shell meaning "shell into the outer Container, not into a sidecar." Access is gated by the caller's CF Access service token matching the Run's Owner.
+
 ---
 
 ## Run lifecycle
@@ -409,45 +552,68 @@ SSM only. No SSH protocol, no bastion, no inbound ports.
 - A sweeper Lambda terminates instances whose agent crashed before reaching `shutdown` (any AFK-managed instance older than its declared timeout, with a grace window).
 - The CLI does **not** stay resident after `afk run` returns. The Run lives entirely on EC2. The developer's laptop dying mid-Run has no effect on the Run.
 
+On Cloudflare: the Run lives entirely inside a Cloudflare Container instance owned by a per-Run Durable Object. `shutdown -h now` doesn't apply — when the main process inside the Container exits, CF terminates the Container automatically (the DO observes the exit, writes the final row to D1, and cleans up). The timeout backstop is the DO's alarm (set to `startedAt + timeoutHours + 30 min`), not a sweeper Lambda. The agent's `timeout(1)` inside the container is still the primary mechanism.
+
 ---
 
 ## Run state and querying
 
-There is no AFK database. AWS is the source of truth:
+`afk ls` reads live Run state from the active Backend's compute-truth source; `afk history` reads persisted historical rows.
+
+On AWS:
 
 - `afk ls` calls `ec2:DescribeInstances` filtered by tags (`afk:owner`, optionally `afk:branch`) and instance-state (`pending`, `running`, `shutting-down`, `stopping`).
 - `afk ls --all` drops the owner filter (requires broader IAM).
-- EC2 retains terminated instances in `DescribeInstances` for ~1 hour, so very-recently-completed Runs are visible; older history requires reading CloudWatch Logs directly.
-- This is intentional. A database can be added later if post-mortem history becomes a real need.
+- EC2 retains terminated instances in `DescribeInstances` for ~1 hour, so very-recently-completed Runs remain visible.
+- `afk history` reads from the DynamoDB `afk-runs` table for older Runs.
+
+On Cloudflare:
+
+- `afk ls` calls the launcher Worker, which reads the singleton `RegistryDO` for currently-alive Runs. Each per-Run `RunDO` holds its own state; the registry is the index.
+- `afk history` reads from the D1 `afk-launcher-history` table.
+- **Logs retention.** Workers Logs retains 3 days on the Free plan, 7 days on the Paid plan. There is no R2 mirror in v1 — if you need longer history, opt into a Cloudflare Logpush export (not AFK-managed).
 
 ---
 
 ## Costs (baseline)
 
+On AWS:
+
 - VPC + IGW: $0.
 - No NAT, no VPC endpoints: $0 baseline.
 - Sweeper Lambda + EventBridge schedule: effectively $0 (a few invocations per hour).
+- DynamoDB on-demand: effectively $0 baseline for the run-history table.
 - Per-Run: EC2 Spot compute (~70% off On-Demand for the same instance type), EBS for the root volume (gp3, ~$0.08/GB-month, only billed while the instance exists), CloudWatch ingest, ECR storage (cycled at 7 days), data egress.
 - Spot interruption risk: an interrupted Run dies. Override with `--on-demand` for workloads that can't tolerate this.
+
+On Cloudflare:
+
+- Workers Paid plan ($5/mo) is a hard prerequisite — Cloudflare Containers, Durable Objects, and Workers Logs (7-day retention) all require it.
+- Launcher Worker invocations, Durable Object requests, D1 reads/writes, KV reads: bundled into the Paid plan's included quotas at this scale.
+- Per-Run: Cloudflare Containers billed per Container-second at the chosen instance tier. No Spot equivalent.
+- No baseline NAT / IGW cost — egress is included in the Workers Paid plan.
+- Cold start is sub-5s in practice (claim, not yet verified against a real deployment).
 
 ---
 
 ## Future Backends
 
-The CLI is structured around a `Backend` interface. AWS EC2 is the first implementation. GCP (Compute Engine) and Azure (Virtual Machines) are anticipated; each is expected to follow the same one-VM-per-Run shape, with its own image-build pipeline mapped onto `afk image build` and its own exec primitive mapped onto `afk attach`.
+The CLI is structured around a `Backend` interface. **AWS EC2** and **Cloudflare Containers** are both shipped. **GCP (Compute Engine)** and **Azure (Virtual Machines)** are anticipated; each is expected to follow the same one-compute-primitive-per-Run shape, with its own image-build pipeline mapped onto `afk golden build` and its own exec primitive mapped onto `afk attach`.
 
 ---
 
-## Out of scope for v1
+## Out of scope for v2
 
 - Notifications on Run completion (no SNS/email/Slack).
 - Artifact retrieval beyond logs (agents push their own results — to git, S3, a PR, etc.).
 - Multi-region.
-- HA NAT / private subnets (single public-subnet AZ topology only).
+- HA NAT / private subnets on AWS (single public-subnet AZ topology only).
 - Single-binary distribution (Bun runtime required).
-- Cost reporting / per-Run accounting.
 - Cron / scheduled Runs.
-- Warm-pool of pre-booted VMs (cold start is ~60–90s — acceptable for multi-minute workloads).
+- Warm-pool of pre-booted compute primitives (cold start is ~60-90s on AWS, sub-5s on Cloudflare — acceptable for multi-minute workloads on either).
 - GPU and bare-metal instance types (deliberately excluded from the default whitelist).
+- The `--local` Backend (still planned).
+- GCE / Azure VM Backends (still anticipated).
+- An R2 mirror of Workers Logs on the Cloudflare Backend (explicitly excluded — users who need >7d retention should opt into a Cloudflare Logpush export, which is not AFK-managed).
 
 These are reachable extensions, not architectural changes.
