@@ -89,19 +89,18 @@ set -eu
 CACHE_DIR="\${AFK_GOLDEN_CACHE_DIR:-/var/afk/cache}"
 DOCKERD_LOG="\${AFK_DOCKERD_LOG:-/var/log/dockerd.log}"
 
-# Start the rootless docker daemon in the background. The base image
-# (docker:28-dind-rootless) ships dockerd-rootless.sh on PATH.
-echo "afk-golden: starting rootless dockerd"
-dockerd-rootless.sh >"\$DOCKERD_LOG" 2>&1 &
-
-# Wait for the socket to come up. dockerd-rootless puts it at
-# /run/user/<uid>/docker.sock by default.
-for i in $(seq 1 60); do
-  if docker info >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
+# Start the Docker engine. On CF Containers (Firecracker microVM) the VM is
+# the isolation boundary, so we run dockerd as ROOT with:
+#   --exec-opt native.cgroupdriver=cgroupfs  (no systemd in the container)
+#   --bridge=none --iptables=false           (CF blocks NAT/netfilter setup)
+# and run workloads with --network host. (Rootless + slirp4netns is not viable
+# here: /dev/net/tun is root-only and netns/netlink ops are denied to non-root.)
+# This combination is verified working on Cloudflare Containers.
+echo "afk-golden: starting dockerd"
+dockerd --bridge=none --iptables=false --exec-opt native.cgroupdriver=cgroupfs \\
+  >"\$DOCKERD_LOG" 2>&1 &
+i=0
+while [ \$i -lt 60 ]; do docker info >/dev/null 2>&1 && break; i=\$((i+1)); sleep 1; done
 if ! docker info >/dev/null 2>&1; then
   echo "afk-golden: dockerd did not become ready in 60s" >&2
   tail -n 200 "\$DOCKERD_LOG" >&2 || true
@@ -158,7 +157,9 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
     docker compose -f /etc/afk/compose.yml down -v --remove-orphans || true
   else
     echo "afk-golden: docker run \$AFK_IMAGE"
-    timeout --preserve-status "\$TIMEOUT" docker run --rm \\
+    # --network host: child containers share the CF container's network (no
+    # bridge/NAT is available — see dockerd flags above).
+    timeout --preserve-status "\$TIMEOUT" docker run --rm --network host \\
       --env-file "\$ENV_FILE" "\$AFK_IMAGE" sh -c "\$AFK_COMMAND"
     RUN_EXIT=\$?
   fi
@@ -192,7 +193,11 @@ const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
   }
   lines.push(`COPY bootstrap.sh /var/afk/bootstrap.sh`)
   lines.push(`RUN chmod +x /var/afk/bootstrap.sh`)
-  lines.push(`USER rootless`)
+  // Run as ROOT (no `USER rootless`). On CF's Firecracker microVM the VM is the
+  // isolation boundary; root is required to run dockerd with a working engine
+  // (open /dev/net/tun, manage cgroups, attach containers to the host network).
+  // Rootless (uid 1000) cannot — /dev/net/tun is root-only and netns ops are
+  // denied. Verified on Cloudflare Containers.
   lines.push(`ENTRYPOINT ["/var/afk/bootstrap.sh"]`)
   // Default CMD just keeps the container alive — the per-Run wrapper
   // (FROM afk-golden:*) overrides this with the agent's actual command.
