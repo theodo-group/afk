@@ -143,6 +143,16 @@ Open follow-ups for the CF Backend are listed below as their own entries.
 
 ---
 
+## 12b. CF single-dev shared bearer (`AFK_SHARED_TOKEN`) ⏳
+
+**Gap.** The launcher Worker's `authenticate()` accepts `Authorization: Bearer <AFK_SHARED_TOKEN>` as a single-developer escape hatch (`worker/cloudflare/src/auth.ts`). The CLI's `CloudflareCompute` / `CloudflareSecretStore` / `CloudflareRunHistory` only emit `Cf-Access-Client-Id` + `Cf-Access-Client-Secret` headers — the bearer path is never reachable from the CLI today.
+
+**Approach.** When `AFK_SHARED_TOKEN` is set in the dev's env and `AFK_CF_CLIENT_ID` is absent, every Cloudflare HTTP call should send `Authorization: Bearer <value>` instead. ~5 lines per file (add a small `cfAuthHeaders()` helper in `cli/src/backends/cloudflare/`). README's "Cloudflare auth model" already cites this gap.
+
+**Touches:** `cli/src/backends/cloudflare/*.ts` (headers helper + call-site updates).
+
+---
+
 ## 12. CF integration test against a real account ⏳
 
 **Gap.** PRs 2-5 are "compiles, looks right." None of the CF Backend has been exercised against a real Cloudflare deployment. The four highest-risk paths — image build/push, `afk run` happy path, attach, history queries — all need at least one end-to-end run on a real account before we recommend CF to anyone outside this repo.
