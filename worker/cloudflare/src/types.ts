@@ -11,6 +11,7 @@
 export interface Env {
   readonly RUN_DO: DurableObjectNamespace
   readonly REGISTRY_DO: DurableObjectNamespace
+  readonly RUN_CONTAINER: DurableObjectNamespace
   readonly DB: D1Database
   readonly DEVELOPERS_KV: KVNamespace
   /** CF API token used by `afk team add` to provision service tokens. */

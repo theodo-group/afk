@@ -74,8 +74,11 @@ export class RunDO extends DurableObject<Env> {
 
   private getContainer(): Container {
     if (!this.container) {
-      const id = this.env.RUN_DO.idFromName(this.ctx.id.toString())
-      this.container = this.env.RUN_DO.get(id) as unknown as Container
+      // Address the RUN_CONTAINER binding (the Container class), NOT RUN_DO —
+      // a RunDO stub has no Container methods like start()/stop(), which threw
+      // `The RPC receiver does not implement the method "start"` on every Run.
+      const id = this.env.RUN_CONTAINER.idFromName(this.ctx.id.toString())
+      this.container = this.env.RUN_CONTAINER.get(id) as unknown as Container
     }
     return this.container
   }
