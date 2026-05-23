@@ -172,50 +172,84 @@ aws s3 rb s3://afk-tf-state-<account-id>-eu-west-1 --force
 
 ### Quickstart on Cloudflare
 
+> **Read first:** the CF Backend uses **rootless Docker-in-Docker** inside one Container instance per Run, gated by a customer-deployed **launcher Worker**. Different topology from AWS; same `afk` CLI surface. Skim [Cloudflare Backend — concepts and limitations](#cloudflare-backend--concepts-and-limitations) below before starting if this is your first CF Backend deploy.
+
 In a fresh consumer repo:
 
 ```sh
-# 0. Export a Cloudflare API token (Workers Scripts:Edit, Containers:Edit,
-#    D1:Edit, Workers KV:Edit, Access:Edit).
+# 0. Prerequisites.
+#    - Cloudflare account on the Workers Paid plan ($5/mo; Containers requires it).
+#    - `wrangler` on PATH (`npm i -g wrangler` or `bun i -g wrangler`).
+#    - A Cloudflare API token in your env. Required scopes:
+#        Account: Workers Scripts:Edit, Workers KV Storage:Edit,
+#                 D1:Edit, Containers:Edit, Access: Edit.
 export CLOUDFLARE_API_TOKEN=<your-token>
 
-# 1. Bootstrap (copies the launcher Worker into worker/afk/, scaffolds files)
+# 1. Bootstrap: copies the launcher Worker into worker/afk/ + scaffolds afk.config.json
+#    with a `cloudflare:` block. Does NOT call any Cloudflare API yet.
 afk init --provider cloudflare
 
-# 2. Provision the launcher Worker's backing resources (one-time)
+# 2. One-time: provision the launcher Worker's backing resources.
 cd worker/afk
 npm install
 wrangler d1 create afk-launcher-history
-#   → paste the database_id into wrangler.toml under [[d1_databases]]
+#   → paste the returned database_id into wrangler.toml under [[d1_databases]]
 wrangler kv:namespace create DEVELOPERS_KV
-#   → paste the namespace id into wrangler.toml under [[kv_namespaces]]
+#   → paste the returned namespace id into wrangler.toml under [[kv_namespaces]]
 wrangler d1 execute afk-launcher-history --file=migrations/0001_runs.sql --remote
 
-# 3. Fill in your Cloudflare account_id in wrangler.toml AND
-#    afk.config.json's cloudflare.accountId.
+# 3. Fill in the obvious placeholders in BOTH files:
+#    - wrangler.toml      → account_id (account ID, not the API token)
+#    - afk.config.json    → cloudflare.accountId, cloudflare.workerName
+#    (You'll come back to fill in `cloudflare.workerUrl` and the wrangler.toml
+#    `image = ...` field after step 5 — they don't exist yet.)
 
-# 4. Build the Golden Container image (one-time per account; ~5 min)
+# 4. Build the Golden Container image. Produces the image the Worker's Container
+#    binding boots from. Pushes to registry.cloudflare.com/<accountId>/afk-golden:<v>.
 afk golden build
+#   → copy the printed image URI into wrangler.toml's [[containers]] image field.
 
-# 5. Deploy the launcher Worker + store its API token
+# 5. Deploy the launcher Worker and set its admin-scoped API token (used by the
+#    Worker to provision Access service tokens for developers via /team).
 wrangler deploy
-wrangler secret put CF_API_TOKEN   # admin-scoped: read+write Containers/D1/KV
-#   → copy the deployed Worker URL into afk.config.json's cloudflare.workerUrl.
+wrangler secret put CF_API_TOKEN
+#   → wrangler prints the deployed Worker URL (https://<name>.<subdomain>.workers.dev).
+#   → paste it into afk.config.json's cloudflare.workerUrl.
 cd -
 
-# 6. Provision yourself as a developer (creates a CF Access service token)
-afk team add <your-name>
+# 6. Auth mode. As of v2, the CLI sends Cloudflare Access service-token
+#    headers (`Cf-Access-Client-Id` + `Cf-Access-Client-Secret`). You must:
+#       (a) Wrap the Worker URL in a Cloudflare Access application via the
+#           Zero Trust dashboard.
+#       (b) Configure that Access app to allow service tokens.
+#       (c) Add the tokens provisioned in step 7 to its allow policy.
+#    The Worker's single-dev `AFK_SHARED_TOKEN` fallback is accepted server-
+#    side but the CLI does not send a bearer token; that path needs a
+#    follow-up commit to be reachable. Until then, use Access service tokens.
 
-# 7. Store secrets (at minimum a GitHub PAT so the Container can clone source)
+# 7. Provision yourself as a developer. On (a) this creates a CF Access service
+#    token via the Worker and prints { clientId, clientSecret } ONCE.
+#    On (b) you can skip this — the shared bearer is your auth.
+afk team add <your-name>
+#   → export the printed values for every subsequent CLI call:
+export AFK_CF_CLIENT_ID=<printed clientId>
+export AFK_CF_CLIENT_SECRET=<printed clientSecret>
+
+# 8. Verify the install.
+afk doctor    # checks wrangler, CLOUDFLARE_API_TOKEN, worker reachability,
+              # golden image presence.
+
+# 9. Store secrets (at minimum a GitHub PAT so the Container can clone source).
+#    Stored as Workers Secrets on the launcher Worker; referenced via secret:<name>.
 afk secrets put github-token <PAT>
 echo "GITHUB_TOKEN=secret:github-token" >> .afk.env
 
-# 8. Author your contract files (commit + push) — same as AWS
-git add afk.Dockerfile afk.compose.yml afk.config.json .afk.env
+# 10. Author your contract files (commit + push) — same as AWS.
+git add afk.Dockerfile afk.compose.yml afk.config.json .afk.env  # .afk.env should already be gitignored
 git commit -m "configure AFK"
 git push
 
-# 9. Launch a Run
+# 11. Launch a Run.
 afk run bun --version
 afk ls
 afk logs <run-id>
@@ -224,13 +258,43 @@ afk logs <run-id>
 Teardown when you're done:
 
 ```sh
-afk golden rm <image-tag>       # delete the Golden Container image
-cd worker/afk && wrangler delete   # remove the launcher Worker + DOs
+afk golden rm <image-tag>            # delete the Golden Container image
+cd worker/afk && wrangler delete     # remove the launcher Worker + DOs
 wrangler d1 delete afk-launcher-history
 wrangler kv:namespace delete --binding DEVELOPERS_KV
+# Optionally delete the Access service tokens via the Zero Trust dashboard.
 ```
 
 See [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the launcher Worker's internals.
+
+#### Cloudflare Backend — concepts and limitations
+
+**Topology you're paying for.** Each Run on CF gets its own Cloudflare Container instance (~equivalent to a tiny VM you don't see), bound to a Durable Object inside the launcher Worker you just deployed. The Container boots from the Golden Container image (rootless dind + your pre-pulled sidecars), the dind spins up, and `docker compose up` runs the dev's `afk.compose.yml` inside it. When the agent exits, the Container stops; the Worker's DO records the row in D1 and unregisters from the in-memory index.
+
+**Two auth boundaries.** The CLI authenticates to the launcher Worker on every call; the Worker authenticates to Cloudflare APIs on the CLI's behalf for admin operations.
+
+- **CLI → Worker** uses `Cf-Access-Client-Id` + `Cf-Access-Client-Secret` headers (CF Access service tokens). The Worker also accepts `Authorization: Bearer <AFK_SHARED_TOKEN>` for single-dev mode, but the CLI does not currently emit a Bearer header — that path is server-side-only as of v2 and is tracked in IMPROVEMENTS.md. Production deploys must use Access service tokens.
+- **Worker → CF API** uses the `CF_API_TOKEN` Worker secret you set in step 5. This is the admin-scoped token; it never leaves the Worker.
+
+**What `afk team add` does.** On the CF Backend it calls the Worker's `/team` route, which uses `CF_API_TOKEN` to create a real CF Access service token and stores the `client_id → display_name` mapping in the DEVELOPERS_KV namespace. The `client_secret` is shown **once**; export it as `AFK_CF_CLIENT_SECRET` and `AFK_CF_CLIENT_ID` for every subsequent CLI call. Losing the secret means re-running `afk team add` under a new name.
+
+**Cloudflare Access application setup (mode (a)).** For Access service tokens to actually gate the Worker, you have to wrap the deployed Worker URL in a Cloudflare Access application via the Zero Trust dashboard. Configure it to allow service tokens and add the ones you created with `afk team add` to its policy. Without this, the Worker is publicly reachable and `authenticate()` falls back to the shared-bearer path (or rejects every request if `AFK_SHARED_TOKEN` isn't set). Mode (b) — `AFK_SHARED_TOKEN` only — skips Access entirely; the Worker URL is still reachable by anyone who knows the URL but rejects requests without the bearer.
+
+**Compose rules the CLI auto-injects on CF.** Every service in your `afk.compose.yml` gets `network_mode: host` plus `extra_hosts:` entries cross-mapping every sibling service name to `127.0.0.1`. You don't write these — the CLI mutates the in-memory compose before sending it to the Worker. Inter-service DNS keeps working (`postgres:5432` resolves to `127.0.0.1:5432`) but two sidecars cannot bind the same port. Port collisions are a hard error at submit time.
+
+**Logs.** Workers Logs only — **3 days retention on Workers Free, 7 days on Workers Paid**. There is no AFK-managed R2 mirror; if you need >7d retention, configure Logpush on your account separately. `afk logs <run-id> --follow` shells out to `wrangler tail` filtered by `runId`.
+
+**Known TODOs (track in `IMPROVEMENTS.md`).**
+
+| Area | Status | Impact on first-time use |
+|---|---|---|
+| CF Container registry listing (`afk golden ls` / the post-build "find latest" check) | ⏳ stubbed — returns `[]` / `null` | `afk run` on CF refuses to launch with `"Run \`afk golden build\` first"` even after a successful build, because the launcher-side presence check can't see the tag yet. **Workaround until shipped:** the CLI's `CloudflareCompute.prepare` check is a soft block; comment it out locally for the first end-to-end smoke test, or wait for the registry listing PR. |
+| GraphQL Analytics for historical Workers Logs | ⏳ shelled out to `wrangler tail` | Historical reads (`afk logs <id>` without `--follow`) miss events older than the tail window. |
+| WSS attach end-to-end | ⏳ code written, not exercised live | `afk attach` likely needs SIGWINCH / header tweaks once tested against a real Container. |
+| Single-dev shared-bearer (`AFK_SHARED_TOKEN`) | ⏳ Worker accepts, CLI never sends | Use Access service tokens; the bearer-only path is half-wired. |
+| Real-account integration test | ⏳ none of PR 2–5 deployed | Expect 1–2 round trips of small fixes during your first deploy. |
+
+The AWS Backend has none of the four caveats above.
 
 ---
 
