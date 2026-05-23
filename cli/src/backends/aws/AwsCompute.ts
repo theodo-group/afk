@@ -194,7 +194,6 @@ export const AwsComputeLive = Layer.effect(
           )
         }
 
-        // Instance type override: --instance-type via backendOverrides.
         const instanceTypeOverride =
           typeof input.backendOverrides?.instanceType === "string"
             ? input.backendOverrides.instanceType
@@ -222,7 +221,6 @@ export const AwsComputeLive = Layer.effect(
         // The orchestrator (RunService) has already done the image build.
         const built = input.built
 
-        // Compose handling.
         const composePath = resolve(projectRoot, COMPOSE_FILE)
         const composePresent = existsSync(composePath)
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
@@ -341,6 +339,7 @@ export const AwsComputeLive = Layer.effect(
 
         const plan: PreparedRun = {
           runId,
+          command: input.command,
           image: built.image,
           branch: built.branch,
           sha: built.sha,

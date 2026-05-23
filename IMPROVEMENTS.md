@@ -237,6 +237,17 @@ First end-to-end CF deploy against a real account (the verification work #12 ant
 
 Net: making `afk run` actually execute on CF is a real implementation effort with live unknowns (does rootless dind work on CF? in-container registry auth? container-log retrieval?), not a small fix. Subsumes the execution half of #11/#12.
 
+**Update — orchestration implemented, container runtime is the blocker (2026-05-23).** The workload-orchestration half (root cause #1) is now built:
+- Golden `bootstrap.sh` (CloudflareGoldenBuilder) now, after `dockerd` is up: `docker login` (with an injected pull credential) → `docker pull $AFK_IMAGE` → `docker run --env-file … $AFK_IMAGE sh -c "$AFK_COMMAND"` (or `docker compose up` with the injected compose), captures the exit code, and exits.
+- `RunDO.handleStart` mints a short-lived registry **pull** credential via `POST …/containers/registries/registry.cloudflare.com/credentials`, base64-encodes the workload env file, and passes `AFK_IMAGE`/`AFK_COMMAND`/`AFK_MAIN_SERVICE`/`AFK_RUN_ENV_B64`/`AFK_REGISTRY_*`/`AFK_COMPOSE_YML` as the Container's control env.
+- The CLI now actually sends the command (`PreparedRun.command`; `CloudflareCompute` was sending `command: []`).
+
+**Remaining blocker (root causes #2/#3 — infra, unresolved):** even with the above, the Container instance crashes (`Container error: Network connection lost`), accumulating retry instances. The failure reason is invisible because container *process* stdout isn't in `wrangler tail` (it shows DO/Worker logs only). `wrangler containers info` shows the app runs with `network.mode = "private"` and **no** `assign_ipv4`/`assign_ipv6` — a candidate cause both for the crash and for an in-container `docker pull` being unable to reach `registry.cloudflare.com`. Open questions to resolve next, in order:
+1. Does rootless `dockerd` even run inside a CF Container? (Verify via `wrangler containers ssh` into a minimal non-dind golden, or a hand-run instance.)
+2. How to read container-instance stdout/logs (Containers observability API / dashboard) — needed to debug everything else.
+3. Container egress under `mode: private` (can it pull from the managed registry / clone GitHub?).
+Until #1–#3 are answered, `afk run` launches and tracks state correctly but the workload does not execute.
+
 **15.17 `afk logs` options must precede the positional run-id ⏳ (cosmetic).** `afk logs <id> --follow` errors with "Received unknown argument '--follow'"; `afk logs --follow <id>` works. An @effect/cli ordering quirk — surface a clearer error or allow interleaving.
 
 **15.11 `/secrets` route addressed an empty script name ✅ (fixed).** `afk secrets put/rm` on CF failed with CF API code 10001 ("Content-Type must be one of: application/javascript, …"). Cause: `getScriptName()` read `globalThis.WORKER_NAME` (always `undefined` — Worker vars live on `env`, not globalThis), so the secrets URL was `/workers/scripts//secrets` with an empty name, which the CF API misrouted to the script-upload endpoint. Fixed: read the name from `env.WORKER_NAME` (new `[vars]` entry, rendered from `worker_name`), default `afk-launcher`. Touches `worker/cloudflare/src/launcher.ts`, `types.ts`, `wrangler.toml.template`.
