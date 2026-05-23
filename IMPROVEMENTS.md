@@ -113,13 +113,19 @@ Open follow-ups for the CF Backend are listed below as their own entries.
 
 ---
 
-## 9. CF Container registry listing ⏳ (highest-priority follow-up)
+## 9. CF Container registry listing ✅ (golden path) / ⏳ (wrapper path)
 
-**Gap.** `CloudflareImageRegistry.imageExists` and `listLatestTagsByPrefix`, and `CloudflareGoldenBuilder.list`/`findLatest`, are stubbed to `false` / `[]` / `null` pending the CF Container Distribution v2 API auth flow being nailed down. Without these, `afk run` on CF cannot resolve the wrapper image or the Golden image, so the path is blocked even after a successful `afk golden build`.
+**Gap.** `CloudflareImageRegistry.imageExists` and `listLatestTagsByPrefix`, and `CloudflareGoldenBuilder.list`/`findLatest`, were stubbed to `false` / `[]` / `null` pending the CF Container Distribution v2 API auth flow being nailed down. Without these, `afk run` on CF cannot resolve the wrapper image or the Golden image, so the path was blocked even after a successful `afk golden build`.
 
-**Approach.** Implement the auth handshake against `registry.cloudflare.com/v2/` using `CLOUDFLARE_API_TOKEN`, then implement `/v2/<repo>/tags/list` with prefix filtering. Verify against a real CF account.
+**Resolution (golden path, shipped during live test 2026-05-23).** Rather than the raw Distribution v2 handshake, the registry ops now shell out to `wrangler containers ...`, which performs the CF managed-registry credential exchange internally:
+- `CloudflareImageRegistry.push` → `wrangler containers push <tag>` (the previous raw-API-token `docker login` to `registry.cloudflare.com` always 401'd — see entry 15.1).
+- `CloudflareGoldenBuilder.list` / `findLatest` → parse `wrangler containers images list --json` (slicing the JSON array out of wrangler's stdout banners).
+- `CloudflareGoldenBuilder.remove` → `wrangler containers images delete <repo>:<tag>`.
+This unblocks `afk doctor`'s golden check and `CloudflareCompute.prepare`'s golden presence check.
 
-**Touches:** `cli/src/backends/cloudflare/CloudflareImageRegistry.ts`, `cli/src/services/ImageService.ts` (CF branch — `CloudflareGoldenBuilder` if extracted).
+**Still ⏳.** `imageExists` / `listLatestTagsByPrefix` (the per-Run *wrapper* image cache lookups) remain stubbed — so `afk build`/`afk run` always rebuild+push the wrapper rather than skipping on a cache hit. Same `wrangler containers images list` approach applies; just not wired into the wrapper path yet.
+
+**Touches (done):** `cli/src/backends/cloudflare/CloudflareImageRegistry.ts`, `cli/src/services/CloudflareGoldenBuilder.ts`. **Remaining:** the `imageExists`/`listLatestTagsByPrefix` call sites in the wrapper build path.
 
 ---
 
@@ -160,6 +166,64 @@ Open follow-ups for the CF Backend are listed below as their own entries.
 **Approach.** Provision a throwaway CF account, run the [Quickstart on Cloudflare](./README.md#quickstart-on-cloudflare) cold, capture what breaks, file follow-ups.
 
 **Touches:** none anticipated in code; this is verification work that will surface the next batch of bugs.
+
+---
+
+## 14. `afk init` should run the provisioner (Terraform / Wrangler) automatically ✅ (both backends)
+
+**Update (shipped 2026-05-23).** A single `afk provision` command now provisions either backend, and `.env` is auto-loaded so no command needs manual sourcing.
+
+- **AWS:** `afk provision` runs `terraform init && terraform apply` against the `terraform/afk` module (region from `afk.config.json`), so the developer never leaves the CLI. (`afk init --provider aws` now points at it.)
+- **Cloudflare:** the 3-command flow below with zero manual file edits:
+- `afk init --provider cloudflare` derives the account id from `CLOUDFLARE_API_TOKEN` (`GET /accounts`), merges a `cloudflare:` block into any existing config (flipping `backend`, preserving the `aws:` block — closes 15.9), and renders `wrangler.toml` with the real `account_id` + `CF_ACCOUNT_ID`.
+- `afk golden build` auto-patches its pushed image URI into `worker/afk/wrangler.toml`.
+- `afk provision` (new) runs `npm install`, creates the D1 DB + KV namespace (idempotent — reuses existing), patches their ids into `wrangler.toml`, applies the migration, `wrangler deploy`s, patches `workerUrl` into `afk.config.json`, and sets the `CF_API_TOKEN` secret.
+
+**Touches (done):** `cli/src/commands/provision.ts` (both backends), `cli/src/adapters/Terraform.ts` (new `apply`), `cli/src/infra/CfToml.ts`, `cli/src/commands/golden/build.ts`, `cli/src/services/BootstrapService.ts` (CF init merge + AWS/CF next-steps), `cli/src/cli.ts` (+ dotenv auto-load so no command needs `.env` sourcing).
+
+---
+
+## 14b. (original AWS-side note retained)
+
+**Gap.** `afk init` only scaffolds files and (on AWS) creates the S3 state bucket. The actual infra provisioning is left to the developer as a manual follow-up, and the two Backends are asymmetric in how much work that is:
+
+- **AWS:** init creates the state bucket + copies the Terraform module + renders `backend.tf`, then prints `cd terraform/afk && terraform init && terraform apply`. One declarative command, but the user still runs it by hand.
+- **Cloudflare:** init creates *nothing* in the cloud — it only copies `worker/afk/` and the `wrangler.toml` template. The developer then runs ~5 imperative `wrangler` commands by hand (`d1 create`, `kv:namespace create`, `d1 execute` migration, `deploy`, `secret put`) **and** manually copies the returned `database_id` / namespace `id` back into `wrangler.toml`. There is no `terraform apply` equivalent — no single-shot provisioner.
+
+Found while testing the CF flow live in a consumer repo: the manual ID-copy round-trips are the most error-prone part of CF onboarding, and the asymmetry vs. AWS is jarring.
+
+**Approach.**
+- **AWS:** add an opt-in `afk init --apply` (or a separate `afk provision`) that shells out to `terraform init && terraform apply` after scaffolding, surfacing the plan for confirmation.
+- **Cloudflare:** add the missing provisioner. Either init (with `--apply`) or a new `afk provision` runs `wrangler d1 create` + `kv:namespace create`, captures the returned IDs, patches them into `wrangler.toml` automatically, runs the migration, and optionally `wrangler deploy`. This is the CF analog of `terraform apply` and removes the hand-copy of IDs entirely.
+- Keep the pure-scaffold behavior as the default (no surprise cloud mutations); gate provisioning behind an explicit flag/subcommand so init stays idempotent and offline by default.
+
+**Touches:** `cli/src/services/BootstrapService.ts` (`initAws` / the CF init path), `cli/src/adapters/Terraform.ts`, a new Wrangler adapter (`cli/src/adapters/Wrangler.ts` or similar) for the CF resource-creation calls, `cli/src/commands/init.ts` (new flag) or a new `cli/src/commands/provision.ts`.
+
+---
+
+## 15. CF live-test findings (first real-account deploy, 2026-05-23)
+
+First end-to-end CF deploy against a real account (the verification work #12 anticipated). Got cleanly through `afk init` → `golden build` → `wrangler deploy` → `afk doctor` (all green). Bugs found and fixed inline; remaining setup-gap findings listed for follow-up.
+
+**15.1 Registry `docker login` could never authenticate ✅ (fixed).** `CloudflareImageRegistry.ensureRepoAndAuth` did `docker login registry.cloudflare.com/<acct> -u cloudflare -p $CLOUDFLARE_API_TOKEN`. The CF managed registry rejects the raw API token (401 every time). Replaced with `wrangler containers push` (see #9). `ensureRepoAndAuth` is now a token-presence check only.
+
+**15.2 Golden registry listing stubbed ✅ (fixed).** See #9 — `list`/`findLatest`/`remove` implemented via `wrangler containers images`.
+
+**15.3 `RunContainer` not declared as a DO class ✅ (fixed in template).** `wrangler.toml.template` referenced `class_name = "RunContainer"` in `[[containers]]` but never declared it as a Durable Object. `wrangler deploy` failed: *"the container class_name RunContainer does not match any durable object class_name."* Added a `RUN_CONTAINER` DO binding and `RunContainer` to `new_sqlite_classes`.
+
+**15.4 `runDO.ts` missing `DurableObject` import ✅ (fixed in template).** `RunDO extends DurableObject<Env>` but the file never imported `DurableObject`. Deploy failed at validation with *"DurableObject is not defined."* `registryDO.ts` imported it correctly; `runDO.ts` didn't. Added `import { DurableObject } from "cloudflare:workers"`.
+
+**15.5 `CF_ACCOUNT_ID` never provided to the Worker ✅ (fixed in template).** The `/team` and `/secrets` routes read `c.env.CF_ACCOUNT_ID`, but the template defined no `[vars]` block, so it was undefined → *"Worker missing API token"* (500). Added `[vars] CF_ACCOUNT_ID = "{{account_id}}"`.
+
+**15.6 README's required-token-scopes list is incomplete ⏳.** The quickstart lists `Workers Scripts / KV / D1 / Containers / Access` (all Edit). Live testing showed the registry push also needs **Cloudflare Images: Edit** (and **Workers Containers: Edit**), and `afk team add` needs **Access: Service Tokens: Edit**. Update the README prerequisites and the `ensureRepoAndAuth` error string (it still says "Containers Edit" only).
+
+**15.7 `afk team add` requires Zero Trust Access to be enabled first ⏳.** Even with correct token scopes + `CF_ACCOUNT_ID`, `POST /access/service_tokens` returns `access.api.error.not_enabled` until the account has enabled Cloudflare Access (a one-time Zero Trust dashboard action — pick a team domain). The quickstart's step 6 assumes an Access app but never says "first enable Access." Document it, and surface the `not_enabled` error from `afk team add` with a dashboard hint instead of a raw API blob.
+
+**15.8 `afk doctor` should precheck the Workers Paid / Containers entitlement ⏳.** CF Containers requires the Workers Paid plan; on a Free-plan account every container op fails with a bare `Unauthorized` (the real *"requires the Workers Paid plan"* message is buried in wrangler's log file). `afk doctor` (and `golden build`) should detect this early via `wrangler containers list` and surface the upgrade URL.
+
+**15.9 init does not scaffold a `cloudflare:` block into an existing config ✅ (fixed).** `afk init --provider cloudflare` now merges a `cloudflare:` block into an existing config and flips `backend`, preserving the `aws:` block. See #14.
+
+**15.6 update (token scope message) ✅ (partial).** `afk init`'s missing-token error now lists `Cloudflare Images:Edit`. The README prerequisites list still needs the same addition (Images + Workers Containers for the push; Access: Service Tokens for `team add`).
 
 ---
 

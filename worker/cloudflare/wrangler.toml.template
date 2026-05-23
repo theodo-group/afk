@@ -9,6 +9,12 @@ compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "{{account_id}}"
 
+# Plain vars (non-secret). CF_ACCOUNT_ID is needed by the /team and /secrets
+# routes to address the Cloudflare REST API. CF_API_TOKEN is set separately as
+# a Worker secret via `wrangler secret put CF_API_TOKEN`.
+[vars]
+CF_ACCOUNT_ID = "{{account_id}}"
+
 # Workers Logs: required for Container stdout/stderr to be captured + queryable.
 [observability]
 enabled = true
@@ -34,10 +40,17 @@ class_name = "RunDO"
 name = "REGISTRY_DO"
 class_name = "RegistryDO"
 
-# DO migrations — first install creates both classes.
+# RunContainer is a @cloudflare/containers Container subclass, which is itself a
+# Durable Object — it must be declared as a DO binding + migration class for the
+# [[containers]] block's class_name to resolve at deploy time.
+[[durable_objects.bindings]]
+name = "RUN_CONTAINER"
+class_name = "RunContainer"
+
+# DO migrations — first install creates all three classes.
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["RunDO", "RegistryDO"]
+new_sqlite_classes = ["RunDO", "RegistryDO", "RunContainer"]
 
 # --- D1 (history table) ---
 [[d1_databases]]

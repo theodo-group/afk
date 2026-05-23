@@ -34,6 +34,11 @@ export class Ecr extends Context.Tag("Ecr")<
     readonly getLoginPassword: (
       region: string,
     ) => Effect.Effect<string, AwsError>
+    /** Delete a repository and all images in it. No-op-safe if absent. */
+    readonly deleteRepository: (
+      region: string,
+      repoName: string,
+    ) => Effect.Effect<void, AwsError>
   }
 >() {}
 
@@ -180,6 +185,28 @@ export const EcrLive = Layer.effect(
           .pipe(
             Effect.map((r) => r.stdout.trim()),
             Effect.mapError(awsError("ecr:GetAuthorizationToken")),
+          ),
+      deleteRepository: (region, repoName) =>
+        sub
+          .run("aws", [
+            "ecr",
+            "delete-repository",
+            "--region",
+            region,
+            "--repository-name",
+            repoName,
+            "--force",
+            "--output",
+            "json",
+          ])
+          .pipe(
+            Effect.asVoid,
+            // Already gone (RepositoryNotFoundException) is success for teardown.
+            Effect.catchAll((e) =>
+              (e.stderr ?? "").includes("RepositoryNotFoundException")
+                ? Effect.void
+                : Effect.fail(awsError("ecr:DeleteRepository")(e)),
+            ),
           ),
     })
   }),

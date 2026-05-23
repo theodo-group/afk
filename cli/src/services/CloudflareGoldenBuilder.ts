@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { Docker } from "../adapters/Docker.ts"
+import { Subprocess } from "../infra/Subprocess.ts"
 import { ConfigService } from "./ConfigService.ts"
 import { ImageRegistry } from "./backend/ImageRegistry.ts"
 import {
@@ -157,6 +158,7 @@ export const CloudflareGoldenBuilderLive = Layer.effect(
   CloudflareGoldenBuilder,
   Effect.gen(function* () {
     const docker = yield* Docker
+    const sub = yield* Subprocess
     const cfg = yield* ConfigService
     const registry = yield* ImageRegistry
 
@@ -176,6 +178,60 @@ export const CloudflareGoldenBuilderLive = Layer.effect(
 
     const goldenUri = (accountId: string, tag: string): string =>
       `${CF_REGISTRY_HOST}/${accountId}/${GOLDEN_REPO}:${tag}`
+
+    // List the golden tags via `wrangler containers images list --json`, which
+    // performs the CF managed-registry auth handshake itself. Output shape:
+    //   [{ "name": "afk-golden", "tags": ["v1-0-…", …] }, …]
+    // The registry exposes only repo/tag here — builtAt / cachedImages aren't
+    // surfaced, so we fill those from the tag (version === tag) and leave the
+    // metadata empty. Newest-first is approximated by descending tag sort.
+    const listImages: Effect.Effect<
+      ReadonlyArray<CloudflareGoldenImage>,
+      CloudflareError | UserError | ConfigError
+    > = Effect.gen(function* () {
+      const accountId = yield* requireAccountId
+      const result = yield* sub
+        .run("wrangler", ["containers", "images", "list", "--json"])
+        .pipe(
+          Effect.mapError(
+            (e) =>
+              new CloudflareError({
+                operation: "registry:list",
+                message: `wrangler containers images list failed: ${e.stderr || String(e)}`,
+              }),
+          ),
+        )
+      // wrangler prints human banners (telemetry notice, "agent skills
+      // available", …) to stdout before the JSON payload, so slice out the
+      // top-level array rather than parsing raw stdout.
+      const repos = yield* Effect.try({
+        try: () => {
+          const start = result.stdout.indexOf("[")
+          const end = result.stdout.lastIndexOf("]")
+          if (start === -1 || end === -1 || end < start) {
+            throw new Error(`no JSON array in output: ${result.stdout.slice(0, 200)}`)
+          }
+          return JSON.parse(result.stdout.slice(start, end + 1)) as ReadonlyArray<{
+            name: string
+            tags?: ReadonlyArray<string>
+          }>
+        },
+        catch: (cause) =>
+          new CloudflareError({
+            operation: "registry:list",
+            message: `could not parse wrangler images JSON: ${String(cause)}`,
+          }),
+      })
+      const repo = repos.find((r) => r.name === GOLDEN_REPO)
+      const tags = [...(repo?.tags ?? [])].sort((a, b) => b.localeCompare(a))
+      return tags.map((tag) => ({
+        tag,
+        version: tag,
+        imageUri: goldenUri(accountId, tag),
+        builtAt: "",
+        cachedImages: [],
+      }))
+    })
 
     return CloudflareGoldenBuilder.of({
       build: Effect.gen(function* () {
@@ -223,32 +279,32 @@ export const CloudflareGoldenBuilderLive = Layer.effect(
         }
       }),
 
-      // TODO: verify against CF registry list API at
-      // https://developers.cloudflare.com/containers/platform-details/image-registry/
-      // The Distribution v2 spec exposes GET /v2/<name>/tags/list, but the
-      // exact auth flow CF uses for that endpoint is not yet pinned down.
-      // Until then we return [] so callers fall back to "no known golden".
-      list: Effect.succeed([]),
+      list: listImages,
 
-      // TODO: verify the CF registry delete tag endpoint. The Distribution v2
-      // spec exposes DELETE /v2/<name>/manifests/<reference>, but Cloudflare's
-      // managed registry may surface deletion through their REST API instead.
-      remove: (_tag) =>
-        Effect.fail(
-          new CloudflareError({
-            operation: "registry:deleteTag",
-            message:
-              "Removing CF golden tags from the CLI is not yet implemented — delete via the Cloudflare dashboard for now.",
-          }),
-        ),
+      // `wrangler containers images delete <repo>:<tag>` removes one tag from
+      // the CF managed registry (it performs the registry auth itself).
+      remove: (tag) =>
+        sub
+          .runInteractive("wrangler", [
+            "containers",
+            "images",
+            "delete",
+            `${GOLDEN_REPO}:${tag}`,
+          ])
+          .pipe(
+            Effect.mapError(
+              (e) =>
+                new CloudflareError({
+                  operation: "registry:deleteTag",
+                  message: `wrangler containers images delete failed: ${e.stderr || String(e)}`,
+                }),
+            ),
+          ),
 
-      findLatest: Effect.gen(function* () {
-        // Once `list` is wired up against the real CF registry API, this just
-        // returns the head of the sorted list. For now it always returns null
-        // — callers must treat that as "we cannot prove a golden exists" and
-        // the developer can override by simply running `afk golden build`.
-        return null
-      }),
+      // Newest golden = head of the descending-sorted tag list; null when none.
+      findLatest: listImages.pipe(
+        Effect.map((images) => images[0] ?? null),
+      ),
     })
   }),
 )

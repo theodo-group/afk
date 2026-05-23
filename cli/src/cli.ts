@@ -30,12 +30,15 @@ import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { config as loadDotenv } from "dotenv"
 
 import { AwsBackendLive } from "./backends/aws/index.ts"
 import { CloudflareBackendLive } from "./backends/cloudflare/index.ts"
 import { CONFIG_FILE } from "./constants.ts"
 
 import { init } from "./commands/init.ts"
+import { provision } from "./commands/provision.ts"
+import { destroy } from "./commands/destroy.ts"
 import { doctor } from "./commands/doctor.ts"
 import { config as configCmd } from "./commands/config.ts"
 import { build } from "./commands/build.ts"
@@ -105,6 +108,33 @@ const L_image = ImageServiceLive.pipe(Layer.provideMerge(L_config))
  * before the Effect runtime is up). Defaults to AWS so `afk init` itself
  * still works in an empty directory.
  */
+/**
+ * Load the project's `.env` into `process.env` before anything reads env vars
+ * (CLOUDFLARE_API_TOKEN, AFK_CF_CLIENT_ID, AWS_*, …). Walks up from cwd to the
+ * directory holding `afk.config.json` (the project root) and loads the `.env`
+ * beside it. dotenv does not override variables already present in the
+ * environment, so an explicitly-exported value still wins.
+ */
+const loadProjectDotenv = (): void => {
+  let dir = process.cwd()
+  while (true) {
+    if (existsSync(resolve(dir, CONFIG_FILE))) {
+      const envPath = resolve(dir, ".env")
+      if (existsSync(envPath)) loadDotenv({ path: envPath, quiet: true })
+      return
+    }
+    const parent = resolve(dir, "..")
+    if (parent === dir) {
+      // No config found; fall back to a `.env` in the current directory.
+      if (existsSync(resolve(process.cwd(), ".env"))) loadDotenv({ quiet: true })
+      return
+    }
+    dir = parent
+  }
+}
+
+loadProjectDotenv()
+
 const pickBackendName = (): "aws" | "cloudflare" => {
   let dir = process.cwd()
   while (true) {
@@ -156,6 +186,8 @@ const rootCommand = Command.make(
 ).pipe(
   Command.withSubcommands([
     init,
+    provision,
+    destroy,
     doctor,
     configCmd,
     build,

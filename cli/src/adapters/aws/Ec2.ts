@@ -39,6 +39,8 @@ export interface Ec2Image {
   readonly creationDate?: string
   readonly state: string
   readonly tags: ReadonlyArray<Tag>
+  /** EBS snapshot ids backing this AMI's block device mappings. */
+  readonly snapshotIds: ReadonlyArray<string>
 }
 
 export interface DescribeInstancesInput {
@@ -138,6 +140,11 @@ export class Ec2 extends Context.Tag("Ec2")<
     readonly deregisterImage: (
       region: string,
       imageId: string,
+    ) => Effect.Effect<void, AwsError>
+    /** Delete an EBS snapshot. No-op-safe if already gone. */
+    readonly deleteSnapshot: (
+      region: string,
+      snapshotId: string,
     ) => Effect.Effect<void, AwsError>
   }
 >() {}
@@ -428,6 +435,9 @@ export const Ec2Live = Layer.effect(
             CreationDate?: string
             State?: string
             Tags?: ReadonlyArray<{ Key?: string; Value?: string }>
+            BlockDeviceMappings?: ReadonlyArray<{
+              Ebs?: { SnapshotId?: string }
+            }>
           }>
         }>("aws", args)
         .pipe(
@@ -438,6 +448,9 @@ export const Ec2Live = Layer.effect(
               creationDate: img.CreationDate,
               state: img.State ?? "unknown",
               tags: parseTags(img.Tags),
+              snapshotIds: (img.BlockDeviceMappings ?? [])
+                .map((m) => m.Ebs?.SnapshotId)
+                .filter((s): s is string => !!s),
             })),
           ),
           Effect.mapError(awsError("ec2:DescribeImages")),
@@ -512,6 +525,27 @@ export const Ec2Live = Layer.effect(
           Effect.mapError(awsError("ec2:DeregisterImage")),
         )
 
+    const deleteSnapshot = (region: string, snapshotId: string) =>
+      sub
+        .run("aws", [
+          "ec2",
+          "delete-snapshot",
+          "--region",
+          region,
+          "--snapshot-id",
+          snapshotId,
+          "--output",
+          "json",
+        ])
+        .pipe(
+          Effect.asVoid,
+          Effect.catchAll((e) =>
+            (e.stderr ?? "").includes("InvalidSnapshot.NotFound")
+              ? Effect.void
+              : Effect.fail(awsError("ec2:DeleteSnapshot")(e)),
+          ),
+        )
+
     return Ec2.of({
       findVpcIdByName,
       findSubnetIdsByVpcId,
@@ -525,6 +559,7 @@ export const Ec2Live = Layer.effect(
       createImage,
       waitForImage,
       deregisterImage,
+      deleteSnapshot,
     })
   }),
 )

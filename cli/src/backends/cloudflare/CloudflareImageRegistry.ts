@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect"
 import { ImageRegistry } from "../../services/backend/ImageRegistry.ts"
-import { Docker } from "../../adapters/Docker.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
+import { Subprocess } from "../../infra/Subprocess.ts"
 import { CloudflareError } from "../../infra/Errors.ts"
 
 const CF_REGISTRY_HOST = "registry.cloudflare.com"
@@ -9,6 +9,12 @@ const CF_REGISTRY_HOST = "registry.cloudflare.com"
 /**
  * Cloudflare implementation of ImageRegistry. Backed by CF's managed Container
  * registry at `registry.cloudflare.com/<account-id>/<repo>:<tag>`.
+ *
+ * Pushes go through `wrangler containers push`, which performs the registry
+ * credential exchange against the CF managed registry internally. (The raw
+ * CLOUDFLARE_API_TOKEN is NOT a valid `docker login` password for
+ * registry.cloudflare.com — it always 401s — so we delegate to wrangler
+ * rather than driving `docker push` ourselves.)
  *
  * Existence checks and tag listing call the Distribution v2 HTTP API. The
  * exact auth flow CF uses for that registry is not 100% pinned down at the
@@ -18,7 +24,7 @@ const CF_REGISTRY_HOST = "registry.cloudflare.com"
 export const CloudflareImageRegistryLive = Layer.effect(
   ImageRegistry,
   Effect.gen(function* () {
-    const docker = yield* Docker
+    const sub = yield* Subprocess
     const cfg = yield* ConfigService
 
     const accountId = cfg.load.pipe(
@@ -69,17 +75,29 @@ export const CloudflareImageRegistryLive = Layer.effect(
               new CloudflareError({
                 operation: "ensureRepoAndAuth",
                 message:
-                  "CLOUDFLARE_API_TOKEN env var is not set. Create a token with 'Containers Edit' scope and export it before running `afk run`.",
+                  "CLOUDFLARE_API_TOKEN env var is not set. Create a token with 'Workers Containers' + 'Cloudflare Images' edit scopes and export it before running `afk run`.",
               }),
             )
           }
-          const id = yield* accountId
-          // docker login against the CF registry. The dev's CF API token works
-          // as the password; the username is "cloudflare" by convention.
-          yield* docker.login(`${CF_REGISTRY_HOST}/${id}`, "cloudflare", apiToken)
+          // No explicit docker login: `wrangler containers push` (used in
+          // `push` below) performs the registry credential exchange itself.
+          // A raw-token `docker login` to registry.cloudflare.com 401s.
         }),
 
-      push: (imageUri) => docker.push(imageUri),
+      // `wrangler containers push <tag>` resolves registry credentials from
+      // CLOUDFLARE_API_TOKEN and pushes the already-built local image.
+      push: (imageUri) =>
+        sub
+          .runInteractive("wrangler", ["containers", "push", imageUri])
+          .pipe(
+            Effect.mapError(
+              (e) =>
+                new CloudflareError({
+                  operation: "registry:push",
+                  message: `wrangler containers push failed: ${e.stderr || String(e)}`,
+                }),
+            ),
+          ),
     })
   }),
 )
