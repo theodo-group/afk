@@ -37,13 +37,12 @@ export const CloudflareLogStoreLive = Layer.effect(
             )
           }
 
-          const args = [
-            "tail",
-            workerName,
-            "--format",
-            "json",
-            ...(input.follow ? [] : ["--since", input.since ?? "30m"]),
-          ]
+          // `wrangler tail` is a LIVE stream only — it has no `--since`/history
+          // flag (passing one errors). Historical reads need the GraphQL
+          // Analytics API (tracked as a separate improvement). For now both
+          // follow and non-follow tail live; non-follow simply streams until
+          // interrupted.
+          const args = ["tail", workerName, "--format", "json"]
 
           // Stream wrangler stdout line-by-line, parse JSON, filter for our
           // runId, and write the `log.message` payload to our stdout. We can't

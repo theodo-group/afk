@@ -57,29 +57,8 @@ app.post("/runs", async (c) => {
   )
   const startResp = (await res.json()) as { runId: string; resourceId: string; startedAt: string }
 
-  // Append to registry + D1 history.
-  const registryId = c.env.REGISTRY_DO.idFromName("singleton")
-  const registry = c.env.REGISTRY_DO.get(registryId)
-  await registry.fetch(
-    new Request("https://registry/add", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        runId: body.runId,
-        owner: caller.id,
-        branch: body.branch,
-        sha: body.sha,
-        image: body.image,
-        repoName: body.repoName,
-        startedAt: startResp.startedAt,
-        timeoutHours: body.timeoutHours,
-        status: "PROVISIONING",
-        mainService: body.mainService,
-        instanceTier: body.instanceTier ?? "standard-1",
-      }),
-    }),
-  )
-
+  // The RunDO registers itself in the index (PROVISIONING) before starting the
+  // container and flips it to RUNNING after — so we only record D1 history here.
   await c.env.DB.prepare(
     `INSERT INTO runs
      (run_id, owner, repo, branch, sha, image, resource_id, status, started_at, timeout_hours, backend_details)
