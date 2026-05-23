@@ -110,6 +110,12 @@ export class RunDO extends DurableObject<Env> {
     }
     await this.ctx.storage.put("state", persisted)
 
+    // Register in the index NOW (PROVISIONING), before container.start(), so
+    // the subsequent markRunning() update lands on an existing row. (The
+    // launcher used to add the row after /start returned, which raced the
+    // RUNNING update and left every Run stuck at PROVISIONING.)
+    await this.addToRegistry(meta)
+
     // Resolve Workers Secrets into the Container env. Each `secretNames` entry
     // points at a Workers Secret bound to this Worker; we read it from `env`.
     const containerEnv: Record<string, string> = {}
@@ -268,6 +274,16 @@ export class RunDO extends DurableObject<Env> {
     await this.ctx.storage.put("state", next)
     await this.updateRegistry(next.meta, stoppedAt)
     await this.recordHistory(next.meta, stoppedAt, exitCode, reason)
+  }
+
+  private async addToRegistry(meta: RunMetadata): Promise<void> {
+    const id = this.env.REGISTRY_DO.idFromName("singleton")
+    const stub = this.env.REGISTRY_DO.get(id)
+    await stub.fetch(new Request("https://registry/add", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(meta),
+    }))
   }
 
   private async updateRegistry(

@@ -1,9 +1,8 @@
 import { Args, Command, Options } from "@effect/cli"
 import { Effect } from "effect"
 import { RunService } from "../services/RunService.ts"
-import { Logs } from "../adapters/aws/Logs.ts"
+import { LogStore } from "../services/backend/LogStore.ts"
 import { ConfigService } from "../services/ConfigService.ts"
-import { DEFAULT_REGION, LOG_GROUP_PREFIX } from "../constants.ts"
 
 const runId = Args.text({ name: "run-id" })
 const follow = Options.boolean("follow", { aliases: ["f"] })
@@ -22,24 +21,20 @@ export const logs = Command.make(
   ({ runId, follow, service, since }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
-      const logsSvc = yield* Logs
+      // Dispatch through the active backend's LogStore (CloudWatch on AWS,
+      // Workers Logs / `wrangler tail` on Cloudflare) rather than a fixed
+      // provider adapter.
+      const logStore = yield* LogStore
       const cfg = yield* ConfigService
 
       yield* runs.findByRunId(runId)
 
-      const { config, sourceRepoName } = yield* cfg.load
-      const region = config.aws?.region ?? DEFAULT_REGION
-      const group = `${LOG_GROUP_PREFIX}/${sourceRepoName}`
+      const { sourceRepoName } = yield* cfg.load
 
-      const streamPrefix =
-        service._tag === "Some"
-          ? `${runId}/${service.value}`
-          : `${runId}/`
-
-      yield* logsSvc.tail({
-        region,
-        group,
-        stream: streamPrefix,
+      yield* logStore.tail({
+        runId,
+        repoName: sourceRepoName,
+        ...(service._tag === "Some" ? { serviceFilter: service.value } : {}),
         follow,
         since,
       })
