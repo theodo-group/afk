@@ -1,7 +1,7 @@
 import { Command, Options } from "@effect/cli"
 import { Effect } from "effect"
 import { RunService } from "../services/RunService.ts"
-import { Sts } from "../adapters/aws/Sts.ts"
+import { Compute } from "../services/backend/Compute.ts"
 import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
 import { DEFAULT_REGION } from "../constants.ts"
@@ -17,16 +17,15 @@ const status = Options.choice("status", ["running", "stopped", "all"]).pipe(
 export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
   Effect.gen(function* () {
     const runs = yield* RunService
-    const sts = yield* Sts
+    const compute = yield* Compute
     const cfg = yield* ConfigService
     const out = yield* Output
 
     const { config } = yield* cfg.load
     const region = config.aws?.region ?? DEFAULT_REGION
 
-    const list = all
-      ? yield* runs.listAll
-      : yield* runs.listMine((yield* sts.callerIdentity).UserId)
+    const me = yield* compute.callerPrincipal
+    const list = all ? yield* runs.listAll : yield* runs.listMine(me.id)
 
     const filtered = list.filter((r) =>
       status === "all"
@@ -44,17 +43,30 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
           { header: "STATUS", value: (r) => r.status },
           { header: "BRANCH", value: (r) => r.branch },
           { header: "SHA", value: (r) => r.sha.slice(0, 12) },
-          { header: "TYPE", value: (r) => `${r.instanceType}${r.spot ? "/spot" : ""}` },
+          {
+            header: "TYPE",
+            value: (r) => {
+              const t =
+                r.backendDetails?.instanceType ??
+                r.backendDetails?.instanceTier ??
+                "-"
+              const spot = r.backendDetails?.spot === "true"
+              return `${t}${spot ? "/spot" : ""}`
+            },
+          },
           { header: "OWNER", value: (r) => r.owner },
           { header: "STARTED", value: (r) => r.startedAt ?? "-" },
           {
             header: "COST",
             value: (r) => {
               if (!r.startedAt) return "-"
+              if (r.backend !== "aws") return "-"
+              const instanceType = r.backendDetails?.instanceType ?? ""
+              const spot = r.backendDetails?.spot === "true"
               const c = estimateCost(
                 region,
-                r.instanceType,
-                r.spot,
+                instanceType,
+                spot,
                 r.startedAt,
                 r.stoppedAt,
               )

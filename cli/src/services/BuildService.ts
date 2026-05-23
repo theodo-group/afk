@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, writeFileSync, copyFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { Git } from "../adapters/Git.ts"
 import { Docker } from "../adapters/Docker.ts"
-import { Ecr } from "../adapters/aws/Ecr.ts"
+import { ImageRegistry } from "./backend/ImageRegistry.ts"
 import { ConfigService } from "./ConfigService.ts"
 import { UserError, AwsError, DockerError, GitError, ConfigError } from "../infra/Errors.ts"
-import { ECR_REPO_PREFIX, ECR_LIFECYCLE_DAYS } from "../constants.ts"
+import { ECR_REPO_PREFIX } from "../constants.ts"
 
 const ENTRYPOINT_SOURCE = resolve(
   import.meta.dir,
@@ -25,11 +25,20 @@ export interface BuildOutput {
   readonly skipped: boolean
 }
 
+/**
+ * Cross-Backend build pipeline. Performs all the steps that look the same
+ * regardless of registry (git checks, wrapper materialization, docker build),
+ * delegating registry-side ops to the active Backend's `ImageRegistry`.
+ *
+ * The `region` argument on `build({region, ref})` is retained for the AWS path
+ * but is unused on Backends where region isn't a registry concern (CF). New
+ * call sites should prefer leaving it implicit (it's just a passthrough).
+ */
 export class BuildService extends Context.Tag("BuildService")<
   BuildService,
   {
     readonly build: (opts: {
-      readonly region: string
+      readonly region?: string
       readonly ref?: string
     }) => Effect.Effect<
       BuildOutput,
@@ -43,15 +52,15 @@ export const BuildServiceLive = Layer.effect(
   Effect.gen(function* () {
     const git = yield* Git
     const docker = yield* Docker
-    const ecr = yield* Ecr
+    const registry = yield* ImageRegistry
     const cfg = yield* ConfigService
 
     return BuildService.of({
-      build: ({ region, ref }) =>
+      build: ({ ref }) =>
         Effect.gen(function* () {
           const { config, projectRoot, sourceRepoName } = yield* cfg.load
 
-          // Hard rules: clean tree + branch pushed
+          // Hard rules: clean tree + branch pushed.
           const clean = yield* git.isClean
           if (!clean) {
             return yield* Effect.fail(
@@ -67,9 +76,6 @@ export const BuildServiceLive = Layer.effect(
             : git.resolveRemoteRef(config.gitUrl, branch)
           ).pipe(
             Effect.mapError((e) => {
-              // The most common GitError on private repos is a broken
-              // credential helper. Convert to a UserError with the actionable
-              // fix surfaced as a hint.
               if (
                 e._tag === "GitError" &&
                 /git-credential|could not read Username|Authentication failed|Permission denied/i.test(
@@ -88,24 +94,18 @@ export const BuildServiceLive = Layer.effect(
           const repoName = `${ECR_REPO_PREFIX}/${sourceRepoName}`
           const tag = `${branch}-${sha.slice(0, 12)}`
 
-          // Ensure ECR repo exists
-          yield* ecr.ensureRepository(region, repoName, ECR_LIFECYCLE_DAYS)
-          const registry = yield* ecr.registryUri(region)
-          const image = `${registry}/${repoName}:${tag}`
+          // Ensure repo + auth, resolve registry URI.
+          yield* registry.ensureRepoAndAuth(repoName)
+          const registryHost = yield* registry.registryUri
+          const image = `${registryHost}/${repoName}:${tag}`
 
-          // Skip if image already exists
-          const exists = yield* ecr.imageExists(region, repoName, tag)
+          // Skip if image already exists.
+          const exists = yield* registry.imageExists(repoName, tag)
           if (exists) {
-            return {
-              image,
-              tag,
-              sha,
-              branch,
-              skipped: true,
-            }
+            return { image, tag, sha, branch, skipped: true }
           }
 
-          // Locate user Dockerfile
+          // Locate user Dockerfile.
           const userDockerfile = resolve(projectRoot, "afk.Dockerfile")
           if (!existsSync(userDockerfile)) {
             return yield* Effect.fail(
@@ -116,13 +116,10 @@ export const BuildServiceLive = Layer.effect(
             )
           }
 
-          // Materialize wrapper Dockerfile
+          // Materialize wrapper Dockerfile.
           const buildDir = resolve(projectRoot, ".afk", "build")
           mkdirSync(buildDir, { recursive: true })
-          copyFileSync(
-            ENTRYPOINT_SOURCE,
-            resolve(buildDir, "entrypoint.sh"),
-          )
+          copyFileSync(ENTRYPOINT_SOURCE, resolve(buildDir, "entrypoint.sh"))
           copyFileSync(userDockerfile, resolve(buildDir, "Dockerfile.user"))
           const userImageTag = `afk-user:${tag}`
           const wrapperDockerfile = resolve(buildDir, "Dockerfile.wrapper")
@@ -137,22 +134,16 @@ export const BuildServiceLive = Layer.effect(
             ].join("\n"),
           )
 
-          // Pre-pull cache from the most recent previously-pushed image on
-          // this branch (if any). BuildKit will warm its layer cache from it.
-          // Requires we authenticate to ECR first so the pull works.
-          const password = yield* ecr.getLoginPassword(region)
-          yield* docker.login(registry, "AWS", password)
-
-          const prevTags = yield* ecr.listLatestTagsByPrefix(
-            region,
+          // Cache-from sourced from prior tags in the same registry.
+          const prevTags = yield* registry.listLatestTagsByPrefix(
             repoName,
             `${branch}-`,
             1,
           )
-          const cacheFromImages = prevTags.map((t) => `${registry}/${repoName}:${t}`)
+          const cacheFromImages = prevTags.map(
+            (t) => `${registryHost}/${repoName}:${t}`,
+          )
 
-          // Build user image (with inline cache + cache-from), then wrapper
-          // image. BuildKit is enabled by the Docker adapter.
           yield* docker.build({
             contextDir: projectRoot,
             dockerfile: userDockerfile,
@@ -170,16 +161,9 @@ export const BuildServiceLive = Layer.effect(
             inlineCache: true,
           })
 
-          // Push.
-          yield* docker.push(image)
+          yield* registry.push(image)
 
-          return {
-            image,
-            tag,
-            sha,
-            branch,
-            skipped: false,
-          }
+          return { image, tag, sha, branch, skipped: false }
         }),
     })
   }),

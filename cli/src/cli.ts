@@ -28,11 +28,13 @@ import { SecretServiceLive } from "./services/SecretService.ts"
 import { TeamServiceLive } from "./services/TeamService.ts"
 import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
+import { AwsBackendLive } from "./backends/aws/index.ts"
+
 import { init } from "./commands/init.ts"
 import { doctor } from "./commands/doctor.ts"
 import { config as configCmd } from "./commands/config.ts"
 import { build } from "./commands/build.ts"
-import { image } from "./commands/image/index.ts"
+import { golden } from "./commands/golden/index.ts"
 import { run } from "./commands/run.ts"
 import { ls } from "./commands/ls.ts"
 import { logs } from "./commands/logs.ts"
@@ -54,6 +56,23 @@ const quiet = Options.boolean("quiet", { aliases: ["q"] }).pipe(
 )
 
 // ---------- Layers ----------
+//
+// Layer composition (bottom to top):
+//
+//   Subprocess (infra)
+//     └── adapter layer (Git, Docker, AWS SDK clients, Terraform, …)
+//           └── ConfigService
+//                 └── ImageService (AWS-specific Golden Image builder)
+//                       └── Backend layer (AwsBackendLive picks an Aws*Live
+//                            for every abstract service tag — Compute,
+//                            ImageRegistry, SecretStore, LogStore, RunHistory)
+//                            └── BuildService (cross-cutting, uses ImageRegistry)
+//                                  └── facade services (RunService, SecretService,
+//                                       HistoryService) + Bootstrap + Team
+//
+// To add another Backend (e.g. Cloudflare), replace `AwsBackendLive` with
+// `CloudflareBackendLive` (or dispatch at runtime based on `config.backend`).
+
 const L_infra = SubprocessLive
 
 const L_adapters = Layer.mergeAll(
@@ -71,15 +90,16 @@ const L_adapters = Layer.mergeAll(
 ).pipe(Layer.provideMerge(L_infra))
 
 const L_config = ConfigServiceLive.pipe(Layer.provideMerge(L_adapters))
-const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_config))
-const L_image = ImageServiceLive.pipe(Layer.provideMerge(L_build))
-const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_image))
-const L_run = RunServiceLive.pipe(Layer.provideMerge(L_history))
+const L_image = ImageServiceLive.pipe(Layer.provideMerge(L_config))
+const L_backend = AwsBackendLive.pipe(Layer.provideMerge(L_image))
+const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_backend))
+const L_run = RunServiceLive.pipe(Layer.provideMerge(L_build))
+const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_run))
 const AppLive = Layer.mergeAll(
   SecretServiceLive,
   TeamServiceLive,
   BootstrapServiceLive,
-).pipe(Layer.provideMerge(L_run))
+).pipe(Layer.provideMerge(L_history))
 
 // ---------- Root command ----------
 const rootCommand = Command.make(
@@ -95,7 +115,7 @@ const rootCommand = Command.make(
     doctor,
     configCmd,
     build,
-    image,
+    golden,
     run,
     ls,
     logs,

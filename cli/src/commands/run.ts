@@ -9,7 +9,7 @@ import { DEFAULT_REGION, LOG_GROUP_PREFIX } from "../constants.ts"
 const ref = Options.text("ref").pipe(Options.optional)
 const instanceType = Options.text("instance-type").pipe(Options.optional)
 const onDemand = Options.boolean("on-demand").pipe(
-  Options.withDescription("disable Spot (Runs use Spot by default)"),
+  Options.withDescription("disable Spot on AWS (Runs use Spot by default)"),
 )
 const timeout = Options.integer("timeout").pipe(
   Options.optional,
@@ -17,12 +17,12 @@ const timeout = Options.integer("timeout").pipe(
 )
 const detach = Options.boolean("detach", { aliases: ["d"] }).pipe(
   Options.withDescription(
-    "return immediately after launch; without this flag, afk run streams logs until the VM terminates",
+    "return immediately after launch; without this flag, afk run streams logs until the Run terminates",
   ),
 )
 const dryRun = Options.boolean("dry-run").pipe(
   Options.withDescription(
-    "print the resolved launch plan (instance type, AMI, env, compose, user_data preview) and exit without launching",
+    "print the resolved launch plan (instance type/tier, image, env, compose, …) and exit without launching",
   ),
 )
 
@@ -31,10 +31,15 @@ const command = Args.text({ name: "command" }).pipe(Args.repeated)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /**
- * After RunInstances returns, follow logs until the VM reaches a terminal
- * state. Kills the tail process on termination or Ctrl-C.
+ * AWS-only fallback streaming behavior for `afk run` (no --detach). Other
+ * Backends will own their own streaming impl; this function is referenced
+ * only when `RunService.backendName === "aws"`.
+ *
+ * After RunInstances returns, polls for the VM to reach `running`, then
+ * spawns `aws logs tail --follow` and polls for terminal state to know when
+ * to stop the tail. Honors Ctrl-C as a clean detach.
  */
-const streamUntilTerminated = (input: {
+const streamAwsUntilTerminated = (input: {
   readonly region: string
   readonly instanceId: string
   readonly runId: string
@@ -43,7 +48,6 @@ const streamUntilTerminated = (input: {
   Effect.gen(function* () {
     const ec2 = yield* Ec2
 
-    // Wait for the instance to reach `running` so logs have started flowing.
     yield* Effect.sync(() => process.stderr.write("waiting for VM to boot…"))
     while (true) {
       const insts = yield* ec2
@@ -55,7 +59,6 @@ const streamUntilTerminated = (input: {
       const state = insts[0]?.state
       if (state === "running") break
       if (state && state !== "pending") {
-        // Already past running (stopped/terminated/etc.)
         process.stderr.write(` (state: ${state})\n`)
         return
       }
@@ -67,8 +70,6 @@ const streamUntilTerminated = (input: {
     const group = `${LOG_GROUP_PREFIX}/${input.repoName}`
     const streamPrefix = `${input.runId}/`
 
-    // Spawn `aws logs tail --follow` with inherited stdio so users see output
-    // as it arrives. Keep the handle so we can kill it on termination.
     const proc = Bun.spawn(
       [
         "aws",
@@ -94,13 +95,12 @@ const streamUntilTerminated = (input: {
       try {
         proc.kill()
       } catch {
-        // ignore
+        /* ignore */
       }
     }
     process.once("SIGINT", onSig)
     process.once("SIGTERM", onSig)
 
-    // Poll instance state every 10s; when terminated, kill tail and exit.
     const poll = (async () => {
       while (!detached) {
         await sleep(10_000)
@@ -119,17 +119,16 @@ const streamUntilTerminated = (input: {
             state === "terminated" ||
             state === undefined
           ) {
-            // Give the tail one extra cycle to flush late events.
             await sleep(3_000)
             try {
               proc.kill()
             } catch {
-              // ignore
+              /* ignore */
             }
             return
           }
         } catch {
-          // transient DescribeInstances failures: keep polling
+          /* transient errors: keep polling */
         }
       }
     })()
@@ -139,12 +138,17 @@ const streamUntilTerminated = (input: {
       try {
         proc.kill()
       } catch {
-        // ignore
+        /* ignore */
       }
       process.removeListener("SIGINT", onSig)
       process.removeListener("SIGTERM", onSig)
     })
   })
+
+const formatBackendDetails = (d: Record<string, string>): string => {
+  const keys = Object.keys(d).sort()
+  return keys.map((k) => `${k}=${d[k]}`).join(", ")
+}
 
 export const run = Command.make(
   "run",
@@ -155,12 +159,16 @@ export const run = Command.make(
       const cfg = yield* ConfigService
       const out = yield* Output
 
+      const backendOverrides: Record<string, string | boolean> = {}
+      if (instanceType._tag === "Some")
+        backendOverrides.instanceType = instanceType.value
+      if (onDemand) backendOverrides.onDemand = true
+
       const planInput = {
         command,
         ref: ref._tag === "Some" ? ref.value : undefined,
-        instanceType: instanceType._tag === "Some" ? instanceType.value : undefined,
-        onDemand,
         timeoutHours: timeout._tag === "Some" ? timeout.value : undefined,
+        backendOverrides,
       }
 
       if (dryRun) {
@@ -172,21 +180,18 @@ export const run = Command.make(
               [
                 `Dry-run plan (no resources launched):`,
                 `  run id            ${plan.runId}`,
-                `  region            ${plan.region}`,
-                `  instance type     ${plan.instanceType}${plan.spot ? " (spot)" : " (on-demand)"}`,
-                `  golden AMI        ${plan.amiId}`,
-                `  subnet candidates ${plan.subnetIds.join(", ")}`,
-                `  security group    ${plan.securityGroupId}`,
-                `  timeout           ${plan.timeoutHours}h (${plan.timeoutSeconds}s)`,
-                `  image             ${plan.image}${plan.imageWasSkipped ? " (already in ECR)" : " (would be built+pushed)"}`,
+                `  backend           ${runs.backendName}`,
+                `  image             ${plan.image}`,
                 `  branch            ${plan.branch}`,
                 `  sha               ${plan.sha}`,
-                `  compose           ${plan.composePresent ? "yes (main: " + plan.mainService + ")" : "no"}`,
+                `  compose           ${plan.composeUsed ? `yes (main: ${plan.mainService})` : "no"}`,
+                `  timeout           ${plan.timeoutHours}h (${plan.timeoutSeconds}s)`,
                 `  env (plain)       ${plan.env.map((e) => e.name).join(", ") || "(none)"}`,
-                `  secrets (ssm)     ${plan.secrets.map((s) => `${s.name}->${s.ssmName}`).join(", ") || "(none)"}`,
-                `  log group         ${plan.logGroup}`,
+                `  secrets           ${plan.secrets.map((s) => `${s.name}→${s.secretName}`).join(", ") || "(none)"}`,
+                `  log channel       ${plan.logChannel}`,
+                `  backend plan      ${JSON.stringify(plan.backendPlan, null, 2)}`,
                 ``,
-                `Add --dry-run=false (or just remove it) to actually launch.`,
+                `Remove --dry-run to launch.`,
               ].join("\n"),
             ),
         })
@@ -201,12 +206,13 @@ export const run = Command.make(
           out.print(
             [
               `Run started: ${started.runId}`,
-              `  instance     ${started.instanceId} (${started.instanceType}${started.spot ? ", spot" : ", on-demand"})`,
+              `  backend      ${runs.backendName}`,
+              `  resource     ${started.resourceId} (${formatBackendDetails(started.backendDetails)})`,
               `  image        ${started.image}`,
               `  branch       ${started.branch}`,
               `  sha          ${started.sha}`,
               `  compose      ${started.composeUsed ? "yes" : "no"}`,
-              `  logs         ${started.logGroup}`,
+              `  logs         ${started.logChannel}`,
               ``,
               detach
                 ? `Follow with: afk logs ${started.runId} --follow`
@@ -218,12 +224,12 @@ export const run = Command.make(
           ),
       })
 
-      if (!detach) {
+      if (!detach && runs.backendName === "aws") {
         const { config, sourceRepoName } = yield* cfg.load
         const region = config.aws?.region ?? DEFAULT_REGION
-        yield* streamUntilTerminated({
+        yield* streamAwsUntilTerminated({
           region,
-          instanceId: started.instanceId,
+          instanceId: started.resourceId,
           runId: started.runId,
           repoName: sourceRepoName,
         })

@@ -8,9 +8,9 @@ The unit of work in this system. A Run is one ephemeral execution of a developer
 
 A Run has a bounded lifetime: it starts when its entrypoint command begins and ends when that command exits. While alive, a developer may optionally attach to it to observe or intervene; attach is not required for a Run to be useful.
 
-A Run is backed by exactly one cloud VM (an EC2 instance on AWS). The Run's workload executes as one or more containers on that VM's Docker daemon; the VM exists only for the duration of the Run and self-terminates when it ends. The VM is the implementation; the Run is the concept the developer interacts with through the CLI (`afk run`, `afk attach <run>`, `afk logs <run>`, `afk kill <run>`).
+A Run is backed by exactly one **compute primitive** in the active [[backend]]: an EC2 instance on AWS, a Container instance on Cloudflare, etc. The Run's workload executes as one or more containers — on the VM's host Docker daemon on AWS, or inside rootless `dind` on Cloudflare. That compute primitive exists only for the duration of the Run and is reclaimed when it ends. The compute primitive is the implementation; the Run is the concept the developer interacts with through the CLI (`afk run`, `afk attach <run>`, `afk logs <run>`, `afk kill <run>`).
 
-Not to be confused with: an EC2 instance (AWS resource), a TodoWrite task (work item inside an agent), or an agent sub-task (delegated work inside Claude).
+Not to be confused with: an EC2 instance / Container instance (provider resources), a TodoWrite task (work item inside an agent), or an agent sub-task (delegated work inside Claude).
 
 ## Backend
 
@@ -19,13 +19,14 @@ A provider-specific implementation of the operations a Run depends on: launching
 The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`) is the default for every command. A per-command `--local` flag overrides it for that invocation only.
 
 Backends:
-- **AWS EC2** — first and only cloud Backend in v1. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit.
-- **GCP (Compute Engine)**, **Azure (Virtual Machines)** — anticipated future cloud Backends. Each is expected to follow the same one-VM-per-Run shape.
+- **AWS EC2** — first cloud Backend. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
+- **Cloudflare Containers** — second cloud Backend. Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. Runs `dockerd` rootless inside the Container to host the workload. Compose Contract honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
+- **GCP (Compute Engine)**, **Azure (Virtual Machines)** — anticipated future cloud Backends. Each is expected to follow the same one-VM-per-Run shape as AWS.
 - **Local** — a peer Backend that launches the Run on the developer's local Docker daemon instead of in the cloud. Same image, entrypoint, env, secrets, and lifecycle rules as the cloud Backends; differs only in where the containers run. Selected via `--local` on any command.
 
 ## Owner
 
-The IAM principal that launched a Run. Recorded as the `afk:owner` tag on the underlying EC2 instance and used to scope what the developer can see, attach to, or terminate. A developer is normally only permitted to act on Runs whose Owner matches their own principal; team-wide views (`afk ls --all`) are a separate, broader permission.
+The developer principal that launched a Run. The form of the principal is [[backend]]-specific — an IAM userid on AWS, a Cloudflare Access service-token client-id on Cloudflare — but the role is the same: it scopes what the developer can see, attach to, or terminate. The Owner is recorded on the underlying compute primitive (an `afk:owner` EC2 tag on AWS, a metadata field on the launcher Worker's [[run-registry]] on Cloudflare). A developer is normally only permitted to act on Runs whose Owner matches their own principal; team-wide views (`afk ls --all`) are a separate, broader permission.
 
 ## Dockerfile Contract
 
@@ -35,11 +36,19 @@ The set of rules a developer's `afk.Dockerfile` must follow for their image to b
 
 The (optional) rules a developer's `afk.compose.yml` must follow when a Run needs sidecar services (e.g. a Postgres, a Redis the agent talks to). The compose file lives at the repo root and declares a graph of services; one of them — the "main service," named in `afk.config.json` (default: `agent`) — is the agent itself, and its image is the one built from `afk.Dockerfile`. The Run's lifetime is the main service's lifetime; sidecars are torn down when it exits. The compose file is optional: a Run with no sidecars omits it entirely and the agent's image runs directly.
 
+The compose file is portable across [[backend]]s without dev changes. Some Backends impose structural addenda that the CLI applies automatically at submit time — e.g. on the Cloudflare Backend, every service is augmented with `network_mode: host` and `extra_hosts` cross-mappings so service-name DNS keeps working under rootless `dind`. The only Compose Contract rule that the CLI cannot auto-fix is port collision between sidecars of the same Run, which remains a hard error.
+
 ## Golden Image
 
-A per-account, per-region VM image (an AMI on AWS) used as the boot image for every Run. Its sole purpose is to cache the Docker images the developer's Runs commonly pull (e.g. `postgres:16`, `redis:7`), so `docker compose up` inside a Run does not re-pull them from a registry each time. The Golden Image contains Docker itself and the developer-specified pre-pull list — nothing else. Run-time behavior (cloning source, running the workload, shipping logs, self-terminating) is injected fresh via `user_data` on each Run, not baked into the image.
+The per-account, per-[[backend]] **boot artifact** used by every Run. Its sole purpose is to pre-cache the Docker engine plus a developer-specified list of sidecar images (e.g. `postgres:16`, `redis:7`), so per-Run cold-starts don't re-pull them.
 
-Golden Images are built explicitly by `afk image build`, which reads the pre-pull list from `afk.config.json`. A Run refuses to start if no Golden Image exists in the account/region; there is no implicit on-demand build.
+The concrete artifact type is Backend-specific:
+- On **AWS EC2**, the Golden Image is an **AMI** (a VM disk image) containing Amazon Linux + Docker + the pre-pulled images in `/var/lib/docker`.
+- On **Cloudflare Containers**, the Golden Image is a **Container image** (pushed to CF managed registry) containing rootless `dockerd` + the pre-pulled images baked into `/var/afk/cache/`.
+
+Despite the artifact difference, the role is identical: it's the layer below the dev's per-build agent image, providing the runtime engine + sidecar cache. Run-time behavior (cloning source, running the workload, shipping logs, self-terminating) is injected fresh per Run, not baked into the Golden Image.
+
+Golden Images are built explicitly by `afk golden build`, which reads the pre-pull list from the active backend's section of `afk.config.json`. A Run refuses to start if no Golden Image exists for the active Backend; there is no implicit on-demand build.
 
 ## Ref
 

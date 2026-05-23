@@ -5,7 +5,7 @@ import { ConfigService } from "../../services/ConfigService.ts"
 import { Output } from "../../infra/Output.ts"
 import { DEFAULT_REGION } from "../../constants.ts"
 
-export const imageLs = Command.make("ls", {}, () =>
+export const goldenLs = Command.make("ls", {}, () =>
   Effect.gen(function* () {
     const images = yield* ImageService
     const cfg = yield* ConfigService

@@ -7,7 +7,7 @@ import { DEFAULT_REGION } from "../../constants.ts"
 
 const imageId = Args.text({ name: "ami-id" })
 
-export const imageRm = Command.make("rm", { imageId }, ({ imageId }) =>
+export const goldenRm = Command.make("rm", { imageId }, ({ imageId }) =>
   Effect.gen(function* () {
     const images = yield* ImageService
     const cfg = yield* ConfigService

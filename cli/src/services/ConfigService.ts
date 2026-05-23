@@ -30,7 +30,13 @@ const findProjectRoot = (start: string): string | null => {
   }
 }
 
-const parseEnvLine = (raw: string): EnvEntry | null => {
+/**
+ * Parse one line of `.afk.env`. Accepts:
+ *   PLAIN_VAR=value                          → kind: "plain"
+ *   SOME_VAR=secret:my-secret-name           → kind: "secret", secretName: "my-secret-name"
+ *   GITHUB_TOKEN=ssm:/afk/secrets/github-token  (legacy AWS-only form)  → kind: "secret"
+ */
+const parseEnvLine = (raw: string): EnvEntry | { _malformed: true; reason: string; name: string } | null => {
   const line = raw.trim()
   if (!line || line.startsWith("#")) return null
   const eq = line.indexOf("=")
@@ -38,8 +44,26 @@ const parseEnvLine = (raw: string): EnvEntry | null => {
   const name = line.slice(0, eq).trim()
   const value = line.slice(eq + 1).trim()
   if (!name) return null
+  if (value.startsWith("secret:")) {
+    return { kind: "secret", name, secretName: value.slice("secret:".length) }
+  }
   if (value.startsWith("ssm:")) {
-    return { kind: "ssm", name, ssmName: value.slice(4) }
+    // Legacy form: SSM absolute path. Strip the `/afk/secrets/` prefix to
+    // recover the canonical short name. Reject anything outside the AFK
+    // namespace — that was already a hard rule.
+    const path = value.slice("ssm:".length)
+    if (!path.startsWith(`${SSM_SECRET_PREFIX}/`)) {
+      return {
+        _malformed: true,
+        name,
+        reason: `legacy ssm: reference must start with '${SSM_SECRET_PREFIX}/' (got '${path}')`,
+      }
+    }
+    return {
+      kind: "secret",
+      name,
+      secretName: path.slice(SSM_SECRET_PREFIX.length + 1),
+    }
   }
   return { kind: "plain", name, value }
 }
@@ -99,20 +123,16 @@ export const ConfigServiceLive = Layer.succeed(
         })
         for (const line of envRaw.split("\n")) {
           const entry = parseEnvLine(line)
-          if (entry) {
-            if (
-              entry.kind === "ssm" &&
-              !entry.ssmName.startsWith(SSM_SECRET_PREFIX)
-            ) {
-              return yield* Effect.fail(
-                new ConfigError({
-                  path: envPath,
-                  message: `SSM reference for '${entry.name}' must start with '${SSM_SECRET_PREFIX}/' (got '${entry.ssmName}')`,
-                }),
-              )
-            }
-            envEntries.push(entry)
+          if (!entry) continue
+          if ("_malformed" in entry) {
+            return yield* Effect.fail(
+              new ConfigError({
+                path: envPath,
+                message: `Reference for '${entry.name}': ${entry.reason}`,
+              }),
+            )
           }
+          envEntries.push(entry)
         }
       }
 

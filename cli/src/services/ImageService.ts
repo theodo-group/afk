@@ -144,7 +144,8 @@ export const ImageServiceLive = Layer.effect(
       build: Effect.gen(function* () {
         const { config } = yield* cfg.load
         const region = config.aws?.region ?? DEFAULT_REGION
-        const cachedImages = config.golden?.cachedImages ?? []
+        // Prefer `aws.cachedImages` (canonical); fall back to legacy `golden.cachedImages`.
+        const cachedImages = config.aws?.cachedImages ?? config.golden?.cachedImages ?? []
 
         const vpcId = yield* ec2.findVpcIdByName(region, AFK_VPC_NAME)
         const subnetIds = yield* ec2.findSubnetIdsByVpcId(region, vpcId)

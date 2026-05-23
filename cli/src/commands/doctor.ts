@@ -78,14 +78,14 @@ export const doctor = Command.make("doctor", {}, () =>
           name: "golden image",
           ok: true,
           detail: stale
-            ? `${g.imageId} (${ageDays}d old — consider \`afk image build\`)`
+            ? `${g.imageId} (${ageDays}d old — consider \`afk golden build\`)`
             : `${g.imageId} (${ageDays >= 0 ? `${ageDays}d` : "unknown age"})`,
         })
       } else if (golden._tag === "Right") {
         checks.push({
           name: "golden image",
           ok: false,
-          detail: `none found in ${region} — run \`afk image build\``,
+          detail: `none found in ${region} — run \`afk golden build\``,
         })
       } else {
         checks.push({
