@@ -12,6 +12,14 @@ A Run is backed by exactly one **compute primitive** in the active [[backend]]: 
 
 Not to be confused with: an EC2 instance / Container instance (provider resources), a TodoWrite task (work item inside an agent), or an agent sub-task (delegated work inside Claude).
 
+## Run Plan
+
+The fully-resolved description of a [[run]] before any compute primitive is launched: the resolved image, [[ref]], command, timeout, environment, secret references, and (if present) the linted [[compose-contract]] graph. A Run Plan is the output of resolving a developer's request against `afk.config.json` and the built image — deterministic and side-effect-free to compute.
+
+It is the thing `afk run --dry-run` prints: the developer sees exactly what would launch without anything being launched. The [[backend]] is split so this resolution (`prepare`) is separable from the irreversible launch step, and the backend-neutral core of the plan (env, secrets, timeout, compose) is assembled identically regardless of [[backend]]; only the launch-vehicle specifics (instance type/tier, boot script, registry coordinates) are filled in per-Backend.
+
+Not to be confused with the launch itself: a Run Plan describes intent; launching it creates the compute primitive that makes it a live Run.
+
 ## Backend
 
 A provider-specific implementation of the operations a Run depends on: launching a container, attaching an interactive shell, streaming logs, terminating. The CLI is written against a Backend interface so the user-facing surface (`afk run`, `afk attach`, …) stays identical across providers.
