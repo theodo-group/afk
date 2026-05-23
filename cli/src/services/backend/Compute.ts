@@ -68,6 +68,8 @@ export interface RunStarted {
  */
 export interface PreparedRun {
   readonly runId: string
+  /** The developer's command (from `afk run <args…>`), as exec argv. */
+  readonly command: ReadonlyArray<string>
   readonly image: string
   readonly branch: string
   readonly sha: string

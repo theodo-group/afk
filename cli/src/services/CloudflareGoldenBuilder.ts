@@ -117,13 +117,61 @@ if [ -d "\$CACHE_DIR" ]; then
   done
 fi
 
-echo "afk-golden: bootstrap complete; exec \$@"
+echo "afk-golden: bootstrap complete"
+
+# --- Run the per-Run workload, if one was injected -------------------------
+# The RunDO passes the wrapped agent image + command + (optional) compose +
+# a short-lived registry pull credential + the workload env (base64) via the
+# Container's environment. This is the CF analog of the AWS user_data: golden
+# provides the engine, the workload runs inside it. Absent these (e.g. an
+# \`afk attach --host\` debug boot), we fall back to the container's own CMD.
+if [ -n "\${AFK_IMAGE:-}" ]; then
+  ENV_FILE=/var/afk/run.env
+  if [ -n "\${AFK_RUN_ENV_B64:-}" ]; then
+    echo "\$AFK_RUN_ENV_B64" | base64 -d > "\$ENV_FILE"
+  else
+    : > "\$ENV_FILE"
+  fi
+  chmod 600 "\$ENV_FILE"
+
+  if [ -n "\${AFK_REGISTRY_PASSWORD:-}" ]; then
+    echo "afk-golden: docker login registry.cloudflare.com"
+    echo "\$AFK_REGISTRY_PASSWORD" | docker login registry.cloudflare.com \\
+      -u "\${AFK_REGISTRY_USER:-v1}" --password-stdin
+  fi
+
+  echo "afk-golden: pulling \$AFK_IMAGE"
+  docker pull "\$AFK_IMAGE"
+
+  TIMEOUT="\${AFK_TIMEOUT_SECONDS:-14400}"
+  # Don't let a non-zero workload exit abort the script before we capture it.
+  set +e
+  if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
+    mkdir -p /etc/afk
+    printf '%s' "\$AFK_COMPOSE_YML" > /etc/afk/compose.yml
+    export AFK_COMMAND
+    set -a; . "\$ENV_FILE"; set +a
+    echo "afk-golden: docker compose up (main: \${AFK_MAIN_SERVICE:-agent})"
+    timeout --preserve-status "\$TIMEOUT" docker compose -f /etc/afk/compose.yml \\
+      up --exit-code-from "\${AFK_MAIN_SERVICE:-agent}" --abort-on-container-exit
+    RUN_EXIT=\$?
+    docker compose -f /etc/afk/compose.yml down -v --remove-orphans || true
+  else
+    echo "afk-golden: docker run \$AFK_IMAGE"
+    timeout --preserve-status "\$TIMEOUT" docker run --rm \\
+      --env-file "\$ENV_FILE" "\$AFK_IMAGE" sh -c "\$AFK_COMMAND"
+    RUN_EXIT=\$?
+  fi
+  echo "afk-golden: workload exited \$RUN_EXIT"
+  exit "\$RUN_EXIT"
+fi
+
+echo "afk-golden: no AFK_IMAGE; exec \$@"
 exec "\$@"
 `
 
 const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
   const lines: string[] = []
-  // Stage 1: pull skopeo (alpine) and pre-fetch each image as an OCI archive.
   lines.push(`# syntax=docker/dockerfile:1.7`)
   lines.push(`FROM alpine:3.20 AS skopeo-bake`)
   lines.push(`RUN apk add --no-cache skopeo ca-certificates`)
@@ -135,7 +183,6 @@ const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
       `RUN skopeo copy --override-os linux docker://${img} oci-archive:/out/${name}.tar`,
     )
   }
-  // Stage 2: final image — rootless dind + baked archives + entrypoint.
   lines.push(``)
   lines.push(`FROM docker:28-dind-rootless`)
   lines.push(`USER root`)

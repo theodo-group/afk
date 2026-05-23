@@ -20,6 +20,14 @@ import type {
 
 const SWEEPER_GRACE_MINUTES = 30
 
+/** UTF-8-safe base64 (Workers `btoa` is Latin1-only). */
+const utf8ToBase64 = (s: string): string => {
+  const bytes = new TextEncoder().encode(s)
+  let bin = ""
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin)
+}
+
 interface PersistedState {
   readonly meta: RunMetadata
   readonly secrets: ReadonlyArray<{ name: string; secretName: string }>
@@ -31,9 +39,8 @@ interface PersistedState {
 /** Container subclass the binding refers to. The class itself only needs to
  *  exist; the lifecycle hooks below stream stdout into Workers Logs. */
 export class RunContainer extends Container<Env> {
-  // CF Containers SDK fires `onActivityExpired` on idle, and stops on
-  // explicit stop()/destroy(). stdout/stderr flow into Workers Logs
-  // automatically when observability is enabled on the Worker.
+  // stdout/stderr flow into Workers Logs automatically once observability is
+  // enabled on the Worker.
   override sleepAfter = "8h"  // upper bound; the RunDO alarm enforces the real timeout
 }
 
@@ -116,23 +123,35 @@ export class RunDO extends DurableObject<Env> {
     // RUNNING update and left every Run stuck at PROVISIONING.)
     await this.addToRegistry(meta)
 
-    // Resolve Workers Secrets into the Container env. Each `secretNames` entry
-    // points at a Workers Secret bound to this Worker; we read it from `env`.
-    const containerEnv: Record<string, string> = {}
-    for (const e of body.env) containerEnv[e.name] = e.value
+    // Assemble the *workload* env file (forwarded into the inner `docker run`/
+    // `docker compose` by golden's bootstrap). This is the dev's plain env plus
+    // resolved Workers Secrets — same shape as the AWS run.env.
+    const runEnvLines: string[] = []
+    for (const e of body.env) runEnvLines.push(`${e.name}=${e.value}`)
     for (const s of body.secretNames) {
       const v = (this.env as unknown as Record<string, unknown>)[s.secretName]
-      if (typeof v === "string") containerEnv[s.name] = v
+      if (typeof v === "string") runEnvLines.push(`${s.name}=${v}`)
     }
-    // The wrapped image already FROMs afk-golden, so dind + cached sidecars
-    // are baked in. The Container's command is the entrypoint chain.
+    const runEnvB64 = utf8ToBase64(runEnvLines.join("\n") + "\n")
+
+    // Mint a short-lived pull credential so the container can pull the wrapped
+    // image from the CF managed registry (the golden image only has the engine).
+    const cred = await this.mintRegistryPullCredential()
+
+    // Control env consumed by golden's bootstrap.sh to run the workload. The
+    // golden image (declared in wrangler.toml) is the fixed Container image;
+    // the per-Run wrapper image runs *inside* it via Docker.
+    const controlEnv: Record<string, string> = {
+      AFK_IMAGE: body.image,
+      AFK_COMMAND: (body.command ?? []).join(" "),
+      AFK_MAIN_SERVICE: body.mainService,
+      AFK_RUN_ENV_B64: runEnvB64,
+      AFK_TIMEOUT_SECONDS: String(Math.floor(body.timeoutHours * 3600)),
+      ...(cred ? { AFK_REGISTRY_USER: cred.username, AFK_REGISTRY_PASSWORD: cred.password } : {}),
+      ...(body.compose !== undefined ? { AFK_COMPOSE_YML: body.compose } : {}),
+    }
     const container = this.getContainer()
-    await container.start({
-      env: containerEnv,
-      // CF Container start args. The image is declared in wrangler.toml and
-      // the per-Run image is set via the CF API to `body.image` (this is the
-      // wrapped image that extends afk-golden).
-    })
+    await container.start({ env: controlEnv })
 
     // Schedule timeout backstop.
     const deadline =
@@ -177,7 +196,6 @@ export class RunDO extends DurableObject<Env> {
     this.ctx.acceptWebSocket(serverWs, [
       JSON.stringify({ kind: "attach", service, host }),
     ])
-    // The actual exec piping is handled in `webSocketMessage` (below).
     return new Response(null, { status: 101, webSocket: clientWs })
   }
 
@@ -185,8 +203,6 @@ export class RunDO extends DurableObject<Env> {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
-    // The first tag attached at acceptWebSocket() time describes what kind
-    // of session this is. We retrieve it via getTags().
     const tags = this.ctx.getTags(ws)
     const first = tags[0]
     if (!first) return ws.close(1011, "missing session tag")
@@ -202,7 +218,6 @@ export class RunDO extends DurableObject<Env> {
           : ["docker", "compose", "-f", "/etc/afk/compose.yml", "exec", info.service ?? "agent", "bash"],
         { tty: true },
       )
-      // Pipe in both directions.
       ;(async () => {
         for await (const chunk of exec.stdout) {
           try {
@@ -213,7 +228,6 @@ export class RunDO extends DurableObject<Env> {
         }
         ws.close(1000, "exec-exited")
       })()
-      // Caller's stdin → exec.stdin
       ;(async () => {
         const buf =
           typeof message === "string"
@@ -274,6 +288,31 @@ export class RunDO extends DurableObject<Env> {
     await this.ctx.storage.put("state", next)
     await this.updateRegistry(next.meta, stoppedAt)
     await this.recordHistory(next.meta, stoppedAt, exitCode, reason)
+  }
+
+  /** Mint a short-lived pull credential for registry.cloudflare.com so the
+   *  container can `docker pull` the wrapped image. Returns null (best-effort)
+   *  if the Worker lacks CF_API_TOKEN/CF_ACCOUNT_ID. */
+  private async mintRegistryPullCredential(): Promise<{ username: string; password: string } | null> {
+    const apiToken = this.env.CF_API_TOKEN
+    const accountId = this.env.CF_ACCOUNT_ID
+    if (!apiToken || !accountId) return null
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/containers/registries/registry.cloudflare.com/credentials`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ expiration_minutes: 360, permissions: ["pull"] }),
+      },
+    )
+    const body = (await res.json()) as {
+      success: boolean
+      result?: { username: string; password: string }
+    }
+    if (!res.ok || !body.success || !body.result) {
+      throw new Error(`could not mint registry pull credential: ${JSON.stringify(body)}`)
+    }
+    return { username: body.result.username, password: body.result.password }
   }
 
   private async addToRegistry(meta: RunMetadata): Promise<void> {

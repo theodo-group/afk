@@ -27,7 +27,6 @@ import { lintCompose, substituteImage } from "../../services/Compose.ts"
 
 const DEFAULT_INSTANCE_TIER = "standard-1"
 
-/** Map the Worker-level Run status to the abstract RunStatus. */
 const mapStatus = (s: string): RunStatus => {
   switch (s) {
     case "PROVISIONING":
@@ -190,7 +189,6 @@ export const CloudflareComputeLive = Layer.effect(
           config.defaultInstanceType ??
           DEFAULT_INSTANCE_TIER
 
-        // Compose handling — CF requires host-network mutation.
         const composePath = resolve(projectRoot, COMPOSE_FILE)
         const composePresent = existsSync(composePath)
         let composeContent: string | undefined
@@ -250,6 +248,7 @@ export const CloudflareComputeLive = Layer.effect(
 
         const plan: PreparedRun = {
           runId,
+          command: input.command,
           image: built.image,
           branch: built.branch,
           sha: built.sha,
@@ -272,7 +271,8 @@ export const CloudflareComputeLive = Layer.effect(
         const cf = plan.backendPlan as unknown as CloudflareBackendPlan
         const startRequest = {
           runId: plan.runId,
-          command: [] as string[], // The CLI passes the command via env or compose; CF runs the container's own ENTRYPOINT.
+          command: plan.command, // golden's bootstrap runs `docker run … sh -c "<command>"` inside the container
+
           timeoutHours: plan.timeoutHours,
           image: plan.image,
           branch: plan.branch,
