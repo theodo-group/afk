@@ -14,6 +14,7 @@ account_id = "{{account_id}}"
 # a Worker secret via `wrangler secret put CF_API_TOKEN`.
 [vars]
 CF_ACCOUNT_ID = "{{account_id}}"
+WORKER_NAME = "{{worker_name}}"
 
 # Workers Logs: required for Container stdout/stderr to be captured + queryable.
 [observability]
