@@ -28,6 +28,7 @@ import {
   CONFIG_FILE,
   ECR_REPO_PREFIX,
   ENV_FILE,
+  SESSION_ARTIFACT_DIR,
   SSM_SECRET_PREFIX,
   TAG_GOLDEN,
 } from "../constants.ts"
@@ -119,7 +120,7 @@ const upsertGitignore = (projectDir: string): boolean => {
   appendFileSync(
     gitignorePath,
     (gitignoreContents.endsWith("\n") || gitignoreContents === "" ? "" : "\n") +
-      `${ENV_FILE}\n.afk/\n`,
+      `${ENV_FILE}\n.afk/\n${SESSION_ARTIFACT_DIR}/\n`,
   )
   return true
 }

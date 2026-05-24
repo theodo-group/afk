@@ -37,7 +37,7 @@ import {
 } from "../../constants.ts"
 import type { Run } from "../../schema/Run.ts"
 import { ensureDir, runDir, runLogsDir } from "./localPaths.ts"
-import { isExpired, retainedUntilIso } from "./localRetention.ts"
+import { isExpired, retainedUntilIso } from "../../services/retention.ts"
 import { readSecretValue } from "./localSecrets.ts"
 import {
   listAfkContainers,
@@ -377,31 +377,46 @@ export const LocalComputeLive = Layer.effect(
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
         const service = opts.service ?? mainService
         const container = run.resourceId
-        const compose = `${LOCAL_RUN_MOUNT}/compose.yml`
 
-        // A retained (STOPPED) Run must be resumed before we can enter it: its
-        // outer container is parked. `docker start` re-runs the re-entrant
-        // bootstrap, which — seeing the exit marker — revives the sidecars and
-        // idles; it does NOT re-run the workload. We re-park on detach so
-        // "retained" stays the Run's only resting state.
-        const live = run.status === "RUNNING"
-        const resumed = !live
-        if (resumed) {
-          if (!existsSync(resolve(runDir(runId), "exit"))) {
-            return yield* Effect.fail(
-              new UserError({
-                message: `Run ${runId} did not complete cleanly; cannot resume it.`,
-                hint: "Use `afk attach <run> --host` to inspect the host, or `afk kill <run>`.",
-              }),
-            )
+        // A finished Run is "retained": the exit marker on the mount is the
+        // truth, NOT the outer container's run-state — a primitive resumed for a
+        // previous attach is also "running" yet its workload has ended. So we
+        // resume/commit based on the marker; a Run with no marker is live
+        // (workload still in progress), and a stopped Run with no marker crashed
+        // before completing and cannot be resumed.
+        const retained = existsSync(resolve(runDir(runId), "exit"))
+        if (!retained && run.status !== "RUNNING") {
+          return yield* Effect.fail(
+            new UserError({
+              message: `Run ${runId} did not complete cleanly; cannot resume it.`,
+              hint: "Use `afk attach <run> --host` to inspect the host, or `afk kill <run>`.",
+            }),
+          )
+        }
+
+        // Resume a retained primitive: start the outer container if it is parked
+        // (the re-entrant bootstrap then revives the sidecars and idles — it does
+        // NOT re-run the workload), then wait for the inner rootless dockerd. We
+        // re-park on detach so "retained" stays the only resting state, which
+        // also tidies a primitive left running by an interrupted earlier attach.
+        if (retained) {
+          if (run.status !== "RUNNING") {
+            yield* sub
+              .run("docker", ["start", container])
+              .pipe(Effect.mapError(toUserError("docker start")))
           }
+          // The probe must point at the inner rootless socket — `docker exec`
+          // doesn't inherit the bootstrap's DOCKER_HOST, so without this it hits
+          // the default socket and never succeeds.
           yield* sub
-            .run("docker", ["start", container])
-            .pipe(Effect.mapError(toUserError("docker start")))
-          // Wait for the inner rootless dockerd to come back up (the bootstrap
-          // restarts it in resume mode).
-          yield* sub
-            .run("docker", ["exec", container, "docker", "info"])
+            .run("docker", [
+              "exec",
+              "-e",
+              `DOCKER_HOST=${LOCAL_INNER_DOCKER_HOST}`,
+              container,
+              "docker",
+              "info",
+            ])
             .pipe(
               Effect.retry(
                 Schedule.spaced("1 seconds").pipe(
@@ -412,45 +427,54 @@ export const LocalComputeLive = Layer.effect(
             )
         }
 
-        // Re-park the primitive when the attach session ends (only if we
-        // resumed it — never stop a live Run). Never-failing so it always runs.
+        // Re-park the primitive when the attach session ends (only for a
+        // retained Run — never stop a live one). Never-failing so it always runs.
         const stopOuter = sub
           .run("docker", ["stop", container])
           .pipe(Effect.catchAll(() => Effect.void))
 
-        // Pick the drop-in shell. The exec'd shells point DOCKER_HOST at the
-        // inner rootless socket (they don't inherit the bootstrap's env).
+        // Locate an inner service container by its compose service label (with a
+        // name fallback for the no-compose Run, whose single container is named
+        // after the main service). Using the label avoids `docker compose exec`,
+        // which would re-interpolate compose.yml and warn on the unset
+        // AFK_ENV_FILE. `mode` is the `docker ps` filter flag: `-qf`
+        // (running-only) or `-aqf` (include stopped).
+        const findCid = (mode: string) =>
+          `C=$(docker ps ${mode} "label=com.docker.compose.service=${service}" | head -n1); ` +
+          `[ -n "$C" ] || C=$(docker ps ${mode} "name=^${service}$" | head -n1); `
+
         let args: ReadonlyArray<string>
         if (opts.host) {
-          // The outer dind host (works once the container is up).
+          // The outer dind host shell.
           args = ["exec", "-it", container, "sh"]
-        } else if (resumed && service === mainService) {
+        } else if (retained && service === mainService) {
           // The main service of a retained Run: its process has exited, so
           // `exec` is impossible. Commit its final filesystem to an image and
-          // run a shell from it on host networking, so it reaches the revived
+          // run a shell from it on host networking so it reaches the revived
           // sidecars (commit-then-run; see CONTEXT.md "Retention").
           const img = `afk-postmortem-${runId.slice(0, 8)}`
           const env = `${LOCAL_RUN_MOUNT}/run.env`
+          // --entrypoint overrides the image's baked afk entrypoint (which would
+          // re-clone /workspace and fail) so we land directly in a shell on the
+          // committed filesystem.
+          const run = (sh: string) =>
+            `docker run -it --rm --network host --entrypoint ${sh} --env-file ${env} ${img}`
           const inner =
             `export DOCKER_HOST=${LOCAL_INNER_DOCKER_HOST}; ` +
-            `if [ -f ${compose} ]; then C=$(docker compose -f ${compose} ps -aq ${service}); ` +
-            `else C=$(docker ps -aqf name=^${service}$); fi; ` +
+            findCid("-aqf") +
+            `if [ -z "$C" ]; then echo "main service container not found" >&2; exit 1; fi; ` +
             `docker commit "$C" ${img} >/dev/null && ` +
-            `docker run -it --rm --network host --env-file ${env} ${img} bash 2>/dev/null || ` +
-            `docker run -it --rm --network host --env-file ${env} ${img} sh; ` +
+            `{ ${run("bash")} 2>/dev/null || ${run("sh")}; }; ` +
             `docker image rm ${img} >/dev/null 2>&1 || true`
           args = ["exec", "-it", container, "sh", "-lc", inner]
         } else {
-          // A live main service, or a sidecar (live, or revived on resume): a
-          // plain nested `exec` into the running container. compose path first,
-          // then a bare `docker exec` against the service-named container (the
-          // no-compose Run names its single container after the main service).
+          // A live main service, or a sidecar (live, or revived on resume):
+          // `docker exec` into the running container located by service label.
           const inner =
             `export DOCKER_HOST=${LOCAL_INNER_DOCKER_HOST}; ` +
-            `if [ -f ${compose} ]; then ` +
-            `docker compose -f ${compose} exec ${service} bash 2>/dev/null || ` +
-            `docker compose -f ${compose} exec ${service} sh; ` +
-            `else docker exec -it ${service} bash 2>/dev/null || docker exec -it ${service} sh; fi`
+            findCid("-qf") +
+            `if [ -z "$C" ]; then echo "service ${service} is not running" >&2; exit 1; fi; ` +
+            `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
           args = ["exec", "-it", container, "sh", "-lc", inner]
         }
 
@@ -458,7 +482,7 @@ export const LocalComputeLive = Layer.effect(
           .runInteractive("docker", args)
           .pipe(Effect.mapError(toUserError("docker exec")))
 
-        yield* resumed ? dropIn.pipe(Effect.ensuring(stopOuter)) : dropIn
+        yield* retained ? dropIn.pipe(Effect.ensuring(stopOuter)) : dropIn
       })
 
     const callerPrincipal = Effect.sync(() => {

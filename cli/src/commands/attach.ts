@@ -1,8 +1,10 @@
 import { Args, Command, Options } from "@effect/cli"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { RunService } from "../services/RunService.ts"
+import { HistoryService } from "../services/HistoryService.ts"
+import { pickRunId } from "./pickRun.ts"
 
-const runId = Args.text({ name: "run-id" })
+const runId = Args.text({ name: "run-id" }).pipe(Args.optional)
 const service = Options.text("service").pipe(
   Options.optional,
   Options.withDescription(
@@ -21,7 +23,16 @@ export const attach = Command.make(
   ({ runId, service, host }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
-      yield* runs.attach(runId, {
+      const hist = yield* HistoryService
+
+      // No run-id given: prompt from recent Runs, matching `afk logs`.
+      const picked =
+        runId._tag === "Some"
+          ? Option.some(runId.value)
+          : yield* pickRunId(hist, "Select a Run to attach to")
+      if (Option.isNone(picked)) return
+
+      yield* runs.attach(picked.value, {
         service: service._tag === "Some" ? service.value : undefined,
         host,
       })

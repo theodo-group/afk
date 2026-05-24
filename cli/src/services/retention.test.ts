@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { isExpired, retainedUntilIso } from "./localRetention.ts"
+import { isExpired, retainedUntilIso } from "./retention.ts"
 
 const FINISHED = "2026-05-01T00:00:00.000Z"
 const finishedMs = Date.parse(FINISHED)

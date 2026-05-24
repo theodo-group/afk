@@ -42,6 +42,8 @@ export const TAG_MANAGED = "afk:managed"
 export const TAG_TIMEOUT_HOURS = "afk:timeout-hours"
 export const TAG_STARTED_AT = "afk:started-at"
 export const TAG_REPO = "afk:repo"
+/** Retention window (days) for a stopped on-demand Run; read by the sweeper. */
+export const TAG_RETENTION_DAYS = "afk:retention-days"
 
 export const TAG_GOLDEN = "afk:golden"
 export const TAG_GOLDEN_VERSION = "afk:golden-version"

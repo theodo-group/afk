@@ -11,17 +11,20 @@ import { UserError } from "../../infra/Errors.ts"
 import { assembleRunPlan } from "../../services/RunPlan.ts"
 import { buildUserData } from "../../services/UserData.ts"
 import { collectionBases } from "../../services/SessionArtifact.ts"
+import { retainedUntilIso } from "../../services/retention.ts"
 import {
   AFK_ARTIFACTS_BUCKET_PREFIX,
   DEFAULT_INSTANCE_TYPE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
+  DEFAULT_RETENTION_DAYS,
   LOG_GROUP_PREFIX,
   SESSION_ARTIFACT_MAX_BYTES,
   TAG_BRANCH,
   TAG_MANAGED,
   TAG_OWNER,
   TAG_REPO,
+  TAG_RETENTION_DAYS,
   TAG_RUN_ID,
   TAG_SHA,
   TAG_STARTED_AT,
@@ -71,6 +74,15 @@ export const ec2InstanceToRun = (i: {
   const owner = m[TAG_OWNER]
   if (!runId || !owner) return null
   const spot = Boolean(i.spotInstanceRequestId)
+  const startedAt = m[TAG_STARTED_AT] ?? i.launchTime
+  // A *stopped* (not terminated) instance is a retained Run — its EBS root
+  // volume survives, so it is resumable via `afk attach` until the window
+  // closes. `terminated` maps to STOPPED too but is gone, so no retainedUntil.
+  const retentionDays = Number(m[TAG_RETENTION_DAYS])
+  const retainedUntil =
+    i.state === "stopped" && startedAt && Number.isFinite(retentionDays)
+      ? retainedUntilIso(startedAt, retentionDays)
+      : undefined
   return {
     runId: runId as Run["runId"],
     resourceId: i.instanceId,
@@ -84,9 +96,10 @@ export const ec2InstanceToRun = (i: {
       instanceType: i.instanceType,
       spot: String(spot),
     },
-    startedAt: m[TAG_STARTED_AT] ?? i.launchTime,
+    startedAt,
     stoppedAt: undefined,
     stopReason: i.stateReason,
+    ...(retainedUntil ? { retainedUntil } : {}),
   }
 }
 
@@ -103,6 +116,8 @@ export type AwsBackendPlan = {
   readonly amiId: string
   readonly instanceType: string
   readonly spot: boolean
+  /** On-demand + retention enabled: stop (not terminate) on exit, EBS preserved. */
+  readonly retain: boolean
   readonly subnetIds: ReadonlyArray<string>
   readonly securityGroupId: string
   readonly tags: ReadonlyArray<Ec2Tag>
@@ -218,10 +233,16 @@ export const planAwsRun = (
     sessionArtifactMaxBytes: SESSION_ARTIFACT_MAX_BYTES,
   })
 
-  const onDemandOverride =
-    input.backendOverrides?.onDemand === true ||
-    input.backendOverrides?.onDemand === "true"
-  const spot = !onDemandOverride
+  // On-demand is the default; Spot is opt-in via `--spot`. On-demand Runs can be
+  // stopped (EBS preserved) and so are retainable; one-time Spot cannot.
+  const spot =
+    input.backendOverrides?.spot === true ||
+    input.backendOverrides?.spot === "true"
+  const retentionDays = config.retentionDays ?? DEFAULT_RETENTION_DAYS
+  // Retain only when the Run can actually be stopped (on-demand) and a window
+  // is configured. The instance then stops (not terminates) on exit; the
+  // sweeper reclaims it past the window.
+  const retain = !spot && retentionDays > 0
 
   const tags: ReadonlyArray<Ec2Tag> = [
     { key: TAG_OWNER, value: identity.UserId },
@@ -233,6 +254,11 @@ export const planAwsRun = (
     { key: TAG_TIMEOUT_HOURS, value: String(timeoutHours) },
     { key: TAG_STARTED_AT, value: i.startedAt },
     { key: "Name", value: `afk-${i.sourceRepoName}-${i.runId.slice(0, 8)}` },
+    // Read by the sweeper to reclaim a stopped (retained) instance past its
+    // window, and surfaced as retainedUntil on the Run.
+    ...(retain
+      ? [{ key: TAG_RETENTION_DAYS, value: String(retentionDays) }]
+      : []),
   ]
 
   return Either.right({
@@ -260,6 +286,7 @@ export const planAwsRun = (
       amiId: i.latestGoldenId,
       instanceType,
       spot,
+      retain,
       tags,
       userData,
       imageWasSkipped: built.skipped,

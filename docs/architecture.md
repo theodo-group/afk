@@ -133,7 +133,7 @@ Output mode and log level come from `argv` (`--json/--verbose/--quiet`) and are 
 
 ## Request flow: `afk run`
 
-1. `commands/run.ts` parses flags, packs `--instance-type`/`--on-demand`/etc. into a neutral `backendOverrides` bag, `yield* RunService`.
+1. `commands/run.ts` parses flags, packs `--instance-type`/`--spot`/etc. into a neutral `backendOverrides` bag, `yield* RunService`.
 2. `RunService.prepare` loads config, runs the cross-Backend image build via `BuildService`, hands a neutral `StartInput` to `Compute.prepare`. RunService is the orchestrator — cross-cutting concerns (audit, retries) belong here, not in the backend.
 3. `Compute.prepare` (active `backends/*/…Compute.ts`) resolves the full `PreparedRun`, provider specifics in its opaque `backendPlan`.
 4. `--dry-run` stops here and prints via `Output.emit`. Otherwise `Compute.launch` performs the irreversible launch, returns a neutral `RunStarted`.

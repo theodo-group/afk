@@ -17,6 +17,12 @@ export interface RunInstanceInput {
   readonly iamInstanceProfileName: string
   readonly userData: string
   readonly spot: boolean
+  /**
+   * What `shutdown -h now` inside the instance does. "terminate" reclaims the
+   * instance (and EBS) on exit; "stop" preserves the EBS root volume so the Run
+   * can be retained and resumed. Spot must be "terminate".
+   */
+  readonly shutdownBehavior: "stop" | "terminate"
   /** Tags applied to the instance + volumes at launch. */
   readonly tags: ReadonlyArray<Tag>
 }
@@ -129,6 +135,16 @@ export class Ec2 extends Context.Tag("Ec2")<
       input: DescribeInstancesInput,
     ) => Effect.Effect<ReadonlyArray<Ec2Instance>, AwsError>
     readonly terminateInstances: (
+      region: string,
+      instanceIds: ReadonlyArray<string>,
+    ) => Effect.Effect<void, AwsError>
+    /** Start stopped instances (resume a retained Run). */
+    readonly startInstances: (
+      region: string,
+      instanceIds: ReadonlyArray<string>,
+    ) => Effect.Effect<void, AwsError>
+    /** Stop running instances, preserving EBS (re-park a retained Run). */
+    readonly stopInstances: (
       region: string,
       instanceIds: ReadonlyArray<string>,
     ) => Effect.Effect<void, AwsError>
@@ -279,7 +295,7 @@ export const Ec2Live = Layer.effect(
         "--user-data",
         Buffer.from(input.userData, "utf8").toString("base64"),
         "--instance-initiated-shutdown-behavior",
-        "terminate",
+        input.shutdownBehavior,
         "--metadata-options",
         "HttpTokens=required,HttpEndpoint=enabled,InstanceMetadataTags=enabled",
         "--tag-specifications",
@@ -384,6 +400,36 @@ export const Ec2Live = Layer.effect(
         : aws.run("ec2:TerminateInstances", [
             "ec2",
             "terminate-instances",
+            "--region",
+            region,
+            "--instance-ids",
+            ...instanceIds,
+          ])
+
+    const startInstances = (
+      region: string,
+      instanceIds: ReadonlyArray<string>,
+    ) =>
+      instanceIds.length === 0
+        ? Effect.void
+        : aws.run("ec2:StartInstances", [
+            "ec2",
+            "start-instances",
+            "--region",
+            region,
+            "--instance-ids",
+            ...instanceIds,
+          ])
+
+    const stopInstances = (
+      region: string,
+      instanceIds: ReadonlyArray<string>,
+    ) =>
+      instanceIds.length === 0
+        ? Effect.void
+        : aws.run("ec2:StopInstances", [
+            "ec2",
+            "stop-instances",
             "--region",
             region,
             "--instance-ids",
@@ -529,6 +575,8 @@ export const Ec2Live = Layer.effect(
       runInstance,
       describeInstances,
       terminateInstances,
+      startInstances,
+      stopInstances,
       waitForInstance,
       describeImages,
       createImage,
