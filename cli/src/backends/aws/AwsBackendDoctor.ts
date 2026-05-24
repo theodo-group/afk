@@ -23,16 +23,29 @@ export const AwsBackendDoctorLive = Layer.effect(
     const toolchainChecks = Effect.all([
       binaryCheck("terraform", "not on PATH"),
       binaryCheck("aws", "not on PATH"),
-      binaryCheck("session-manager-plugin", "not on PATH (required for `afk attach`)"),
+      binaryCheck(
+        "session-manager-plugin",
+        "not on PATH (required for `afk attach`)",
+      ),
     ])
 
     const credentialsChecks = sts.callerIdentity.pipe(
       Effect.match({
         onFailure: (): ReadonlyArray<CheckResult> => [
-          check("aws credentials", false, "", "could not call sts:GetCallerIdentity"),
+          check(
+            "aws credentials",
+            false,
+            "",
+            "could not call sts:GetCallerIdentity",
+          ),
         ],
         onSuccess: (id): ReadonlyArray<CheckResult> => [
-          check("aws credentials", true, `${id.Arn} (account ${id.Account})`, ""),
+          check(
+            "aws credentials",
+            true,
+            `${id.Arn} (account ${id.Account})`,
+            "",
+          ),
         ],
       }),
     )

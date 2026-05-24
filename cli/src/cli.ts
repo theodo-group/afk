@@ -122,7 +122,8 @@ const loadProjectDotenv = (): void => {
     const parent = resolve(dir, "..")
     if (parent === dir) {
       // No config found; fall back to a `.env` in the current directory.
-      if (existsSync(resolve(process.cwd(), ".env"))) loadDotenv({ quiet: true })
+      if (existsSync(resolve(process.cwd(), ".env")))
+        loadDotenv({ quiet: true })
       return
     }
     dir = parent
@@ -184,13 +185,10 @@ const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_run))
 const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(L_history))
 
 // ---------- Root command ----------
-const rootCommand = Command.make(
-  "afk",
-  { json, verbose, quiet, local },
-  () =>
-    Effect.sync(() => {
-      console.log("Run `afk --help` for available commands.")
-    }),
+const rootCommand = Command.make("afk", { json, verbose, quiet, local }, () =>
+  Effect.sync(() => {
+    console.log("Run `afk --help` for available commands.")
+  }),
 ).pipe(
   Command.withSubcommands([
     init,
@@ -252,10 +250,17 @@ BunRuntime.runMain(
   program.pipe(
     Effect.catchAllCause((cause) =>
       Effect.sync(() => {
-        const failure = (cause as { failureOption?: () => unknown }).failureOption?.()
+        const failure = (
+          cause as { failureOption?: () => unknown }
+        ).failureOption?.()
         const message =
-          failure && typeof failure === "object" && failure !== null && "_tag" in failure
-            ? renderAfkError(failure as { _tag: string; message?: string; hint?: string })
+          failure &&
+          typeof failure === "object" &&
+          failure !== null &&
+          "_tag" in failure
+            ? renderAfkError(
+                failure as { _tag: string; message?: string; hint?: string },
+              )
             : String(cause)
         console.error(message)
         process.exit(1)

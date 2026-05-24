@@ -24,7 +24,9 @@ const CF_REGISTRY_HOST = "registry.cloudflare.com"
 
 /** Drop a leading `<accountId>/` prefix; the registry lists repos bare. */
 const bareRepo = (repoName: string): string =>
-  repoName.includes("/") ? repoName.slice(repoName.lastIndexOf("/") + 1) : repoName
+  repoName.includes("/")
+    ? repoName.slice(repoName.lastIndexOf("/") + 1)
+    : repoName
 
 export const CloudflareImageRegistryLive = Layer.effect(
   ImageRegistry,
@@ -37,28 +39,26 @@ export const CloudflareImageRegistryLive = Layer.effect(
     // JSON payload, so slice out the top-level array rather than parsing raw.
     // The registry lists repos by their bare name (no `<accountId>/` prefix).
     const tagsForRepo = (repoName: string) =>
-      sub
-        .run("wrangler", ["containers", "images", "list", "--json"])
-        .pipe(
-          Effect.mapError(
-            (e) =>
-              new CloudflareError({
-                operation: "registry:list",
-                message: `wrangler containers images list failed: ${e.stderr || String(e)}`,
-              }),
-          ),
-          Effect.flatMap((result) =>
-            parseWranglerJsonArray<{
-              name: string
-              tags?: ReadonlyArray<string>
-            }>(result.stdout, "registry:list"),
-          ),
-          Effect.map((repos) => {
-            const target = bareRepo(repoName)
-            const repo = repos.find((r) => r.name === target)
-            return [...(repo?.tags ?? [])]
-          }),
-        )
+      sub.run("wrangler", ["containers", "images", "list", "--json"]).pipe(
+        Effect.mapError(
+          (e) =>
+            new CloudflareError({
+              operation: "registry:list",
+              message: `wrangler containers images list failed: ${e.stderr || String(e)}`,
+            }),
+        ),
+        Effect.flatMap((result) =>
+          parseWranglerJsonArray<{
+            name: string
+            tags?: ReadonlyArray<string>
+          }>(result.stdout, "registry:list"),
+        ),
+        Effect.map((repos) => {
+          const target = bareRepo(repoName)
+          const repo = repos.find((r) => r.name === target)
+          return [...(repo?.tags ?? [])]
+        }),
+      )
 
     const accountId = cfg.load.pipe(
       Effect.mapError(
@@ -125,17 +125,15 @@ export const CloudflareImageRegistryLive = Layer.effect(
       // `wrangler containers push <tag>` resolves registry credentials from
       // CLOUDFLARE_API_TOKEN and pushes the already-built local image.
       push: (imageUri) =>
-        sub
-          .runInteractive("wrangler", ["containers", "push", imageUri])
-          .pipe(
-            Effect.mapError(
-              (e) =>
-                new CloudflareError({
-                  operation: "registry:push",
-                  message: `wrangler containers push failed: ${e.stderr || String(e)}`,
-                }),
-            ),
+        sub.runInteractive("wrangler", ["containers", "push", imageUri]).pipe(
+          Effect.mapError(
+            (e) =>
+              new CloudflareError({
+                operation: "registry:push",
+                message: `wrangler containers push failed: ${e.stderr || String(e)}`,
+              }),
           ),
+        ),
     })
   }),
 )

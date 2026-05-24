@@ -5,10 +5,14 @@ import { RunService } from "../services/RunService.ts"
 const runId = Args.text({ name: "run-id" })
 const service = Options.text("service").pipe(
   Options.optional,
-  Options.withDescription("attach to a specific compose service (default: main service)"),
+  Options.withDescription(
+    "attach to a specific compose service (default: main service)",
+  ),
 )
 const host = Options.boolean("host").pipe(
-  Options.withDescription("drop to the VM's host shell instead of `docker exec` into the container"),
+  Options.withDescription(
+    "drop to the VM's host shell instead of `docker exec` into the container",
+  ),
 )
 
 export const attach = Command.make(

@@ -7,7 +7,9 @@ import { DEFAULT_REGION } from "../constants.ts"
 
 const ref = Options.text("ref").pipe(
   Options.optional,
-  Options.withDescription("git ref (branch, sha, or tag); defaults to current branch"),
+  Options.withDescription(
+    "git ref (branch, sha, or tag); defaults to current branch",
+  ),
 )
 
 export const build = Command.make("build", { ref }, ({ ref }) =>

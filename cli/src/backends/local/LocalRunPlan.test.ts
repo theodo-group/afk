@@ -55,9 +55,7 @@ describe("planLocalRun", () => {
   })
 
   it("rejects an invalid compose graph with a UserError", () => {
-    const result = planLocalRun(
-      baseInput({ composeContent: "version: '3'\n" }),
-    )
+    const result = planLocalRun(baseInput({ composeContent: "version: '3'\n" }))
     expect(Either.isLeft(result)).toBe(true)
     if (Either.isLeft(result)) {
       expect(result.left._tag).toBe("UserError")

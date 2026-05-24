@@ -50,7 +50,10 @@ export const patchWranglerToml = (
   let toml = readFileSync(path, "utf8")
 
   if (patch.accountId !== undefined) {
-    toml = toml.replace(/account_id = "[^"]*"/, `account_id = "${patch.accountId}"`)
+    toml = toml.replace(
+      /account_id = "[^"]*"/,
+      `account_id = "${patch.accountId}"`,
+    )
     toml = toml.replace(
       /CF_ACCOUNT_ID = "[^"]*"/,
       `CF_ACCOUNT_ID = "${patch.accountId}"`,

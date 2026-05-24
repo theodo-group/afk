@@ -25,18 +25,20 @@ export const LocalTeamLive = Layer.succeed(
   Team.of({
     add: () => unsupported("add"),
     rm: () => unsupported("rm"),
-    ls: Effect.sync((): ReadonlyArray<TeamMember> => [
-      {
-        name: (() => {
-          try {
-            return userInfo().username
-          } catch {
-            return LOCAL_OWNER_ID
-          }
-        })(),
-        kind: "trusted-principal",
-        arn: LOCAL_OWNER_ID,
-      },
-    ]),
+    ls: Effect.sync(
+      (): ReadonlyArray<TeamMember> => [
+        {
+          name: (() => {
+            try {
+              return userInfo().username
+            } catch {
+              return LOCAL_OWNER_ID
+            }
+          })(),
+          kind: "trusted-principal",
+          arn: LOCAL_OWNER_ID,
+        },
+      ],
+    ),
   }),
 )

@@ -37,11 +37,9 @@ export const TerraformLive = Layer.effect(
         .pipe(Effect.map((r) => r.stdout.trim())),
       destroy: ({ dir, vars }) =>
         Effect.gen(function* () {
-          yield* sub.runInteractive(
-            "terraform",
-            ["init", "-input=false"],
-            { cwd: dir },
-          )
+          yield* sub.runInteractive("terraform", ["init", "-input=false"], {
+            cwd: dir,
+          })
           const varArgs = Object.entries(vars ?? {}).flatMap(([k, v]) => [
             "-var",
             `${k}=${v}`,
@@ -54,11 +52,9 @@ export const TerraformLive = Layer.effect(
         }),
       apply: ({ dir, vars }) =>
         Effect.gen(function* () {
-          yield* sub.runInteractive(
-            "terraform",
-            ["init", "-input=false"],
-            { cwd: dir },
-          )
+          yield* sub.runInteractive("terraform", ["init", "-input=false"], {
+            cwd: dir,
+          })
           const varArgs = Object.entries(vars ?? {}).flatMap(([k, v]) => [
             "-var",
             `${k}=${v}`,

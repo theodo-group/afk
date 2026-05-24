@@ -14,7 +14,12 @@ import { Ec2 } from "../adapters/aws/Ec2.ts"
 import { Ssm } from "../adapters/aws/Ssm.ts"
 import { Ecr } from "../adapters/aws/Ecr.ts"
 import { Terraform } from "../adapters/Terraform.ts"
-import { AwsError, CloudflareError, SubprocessError, UserError } from "../infra/Errors.ts"
+import {
+  AwsError,
+  CloudflareError,
+  SubprocessError,
+  UserError,
+} from "../infra/Errors.ts"
 import { deriveAccountId } from "../infra/CfToml.ts"
 import { Subprocess } from "../infra/Subprocess.ts"
 import {
@@ -108,9 +113,8 @@ const upsertGitignore = (projectDir: string): boolean => {
   if (gitignoreContents.split("\n").includes(ENV_FILE)) return false
   appendFileSync(
     gitignorePath,
-    (gitignoreContents.endsWith("\n") || gitignoreContents === ""
-      ? ""
-      : "\n") + `${ENV_FILE}\n.afk/\n`,
+    (gitignoreContents.endsWith("\n") || gitignoreContents === "" ? "" : "\n") +
+      `${ENV_FILE}\n.afk/\n`,
   )
   return true
 }
@@ -144,7 +148,9 @@ export const BootstrapServiceLive = Layer.effect(
     const terraform = yield* Terraform
     const sub = yield* Subprocess
 
-    const initAws = (input: InitInput): Effect.Effect<InitResult, AwsError | UserError> =>
+    const initAws = (
+      input: InitInput,
+    ): Effect.Effect<InitResult, AwsError | UserError> =>
       Effect.gen(function* () {
         const { region, projectDir } = input
         const identity = yield* sts.callerIdentity
@@ -363,7 +369,11 @@ export const BootstrapServiceLive = Layer.effect(
           existing.backend = "cloudflare"
           // Preserve any values the developer already set (e.g. cachedImages,
           // a custom workerUrl), only filling the accountId + defaults.
-          existing.cloudflare = { ...cloudflareBlock, ...(existing.cloudflare ?? {}), accountId }
+          existing.cloudflare = {
+            ...cloudflareBlock,
+            ...(existing.cloudflare ?? {}),
+            accountId,
+          }
           writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
           configAction = hadCf
             ? "updated cloudflare block"
@@ -477,28 +487,36 @@ export const BootstrapServiceLive = Layer.effect(
         const done: string[] = []
 
         for (const id of goldenIds) {
-          yield* ec2.deregisterImage(region, id).pipe(
-            Effect.catchAll((e) =>
-              Effect.sync(() =>
-                done.push(`! failed to deregister ${id}: ${e.message}`),
+          yield* ec2
+            .deregisterImage(region, id)
+            .pipe(
+              Effect.catchAll((e) =>
+                Effect.sync(() =>
+                  done.push(`! failed to deregister ${id}: ${e.message}`),
+                ),
               ),
-            ),
-          )
+            )
         }
-        if (goldenIds.length > 0) done.push(`deregistered ${goldenIds.length} golden AMI(s)`)
+        if (goldenIds.length > 0)
+          done.push(`deregistered ${goldenIds.length} golden AMI(s)`)
 
         // Snapshots only become deletable once the AMI referencing them is
         // deregistered, so this runs after the deregister loop above.
         for (const snap of snapshotIds) {
-          yield* ec2.deleteSnapshot(region, snap).pipe(
-            Effect.catchAll((e) =>
-              Effect.sync(() =>
-                done.push(`! failed to delete snapshot ${snap}: ${e.message}`),
+          yield* ec2
+            .deleteSnapshot(region, snap)
+            .pipe(
+              Effect.catchAll((e) =>
+                Effect.sync(() =>
+                  done.push(
+                    `! failed to delete snapshot ${snap}: ${e.message}`,
+                  ),
+                ),
               ),
-            ),
-          )
+            )
         }
-        if (snapshotIds.length > 0) done.push(`deleted ${snapshotIds.length} backing snapshot(s)`)
+        if (snapshotIds.length > 0)
+          done.push(`deleted ${snapshotIds.length} backing snapshot(s)`)
 
         if (hasTerraform) {
           yield* terraform.destroy({
@@ -509,23 +527,32 @@ export const BootstrapServiceLive = Layer.effect(
         }
 
         for (const s of secrets) {
-          yield* ssm.deleteParameter(region, s.name).pipe(
+          yield* ssm
+            .deleteParameter(region, s.name)
+            .pipe(
+              Effect.catchAll((e) =>
+                Effect.sync(() =>
+                  done.push(
+                    `! failed to delete secret ${s.name}: ${e.message}`,
+                  ),
+                ),
+              ),
+            )
+        }
+        if (secrets.length > 0)
+          done.push(`deleted ${secrets.length} SSM secret(s)`)
+
+        yield* ecr
+          .deleteRepository(region, ecrRepo)
+          .pipe(
             Effect.catchAll((e) =>
               Effect.sync(() =>
-                done.push(`! failed to delete secret ${s.name}: ${e.message}`),
+                done.push(
+                  `! failed to delete ECR repo ${ecrRepo}: ${e.message}`,
+                ),
               ),
             ),
           )
-        }
-        if (secrets.length > 0) done.push(`deleted ${secrets.length} SSM secret(s)`)
-
-        yield* ecr.deleteRepository(region, ecrRepo).pipe(
-          Effect.catchAll((e) =>
-            Effect.sync(() =>
-              done.push(`! failed to delete ECR repo ${ecrRepo}: ${e.message}`),
-            ),
-          ),
-        )
         done.push(`deleted ECR repository ${ecrRepo} (if it existed)`)
 
         if (bucketExists) {
@@ -552,7 +579,10 @@ export const BootstrapServiceLive = Layer.effect(
 
     const destroyCloudflare = (
       input: DestroyInput,
-    ): Effect.Effect<DestroyResult, CloudflareError | UserError | SubprocessError> =>
+    ): Effect.Effect<
+      DestroyResult,
+      CloudflareError | UserError | SubprocessError
+    > =>
       Effect.gen(function* () {
         const projectDir = input.projectDir
         const workerName = "afk-launcher"
@@ -564,23 +594,23 @@ export const BootstrapServiceLive = Layer.effect(
         // Run wrangler from the project root so it picks up CLOUDFLARE_API_TOKEN
         // from the inherited env (.env is auto-loaded by the CLI at startup).
         const wrangler = (args: ReadonlyArray<string>) =>
-          sub
-            .run("wrangler", args, { cwd: projectDir })
-            .pipe(
-              Effect.mapError(
-                (e) =>
-                  new CloudflareError({
-                    operation: `wrangler ${args[0]}`,
-                    message: e.stderr || e.stdout || String(e),
-                  }),
-              ),
-            )
+          sub.run("wrangler", args, { cwd: projectDir }).pipe(
+            Effect.mapError(
+              (e) =>
+                new CloudflareError({
+                  operation: `wrangler ${args[0]}`,
+                  message: e.stderr || e.stdout || String(e),
+                }),
+            ),
+          )
         const sliceArray = (s: string): Array<Record<string, string>> => {
           const a = s.indexOf("[")
           const b = s.lastIndexOf("]")
           if (a === -1 || b === -1 || b < a) return []
           try {
-            return JSON.parse(s.slice(a, b + 1)) as Array<Record<string, string>>
+            return JSON.parse(s.slice(a, b + 1)) as Array<
+              Record<string, string>
+            >
           } catch {
             return []
           }
@@ -614,7 +644,12 @@ export const BootstrapServiceLive = Layer.effect(
         ) as Array<{ name?: string; tags?: string[] }>
         const golden = imgs.find((i) => i.name === goldenRepo)
         for (const tag of golden?.tags ?? []) {
-          yield* wrangler(["containers", "images", "delete", `${goldenRepo}:${tag}`])
+          yield* wrangler([
+            "containers",
+            "images",
+            "delete",
+            `${goldenRepo}:${tag}`,
+          ])
           done.push(`deleted golden ${goldenRepo}:${tag}`)
         }
 
@@ -643,7 +678,13 @@ export const BootstrapServiceLive = Layer.effect(
           (n) => n.title === kvTitle || (n.title ?? "").endsWith(`-${kvTitle}`),
         )
         if (kv?.id) {
-          yield* wrangler(["kv", "namespace", "delete", "--namespace-id", kv.id])
+          yield* wrangler([
+            "kv",
+            "namespace",
+            "delete",
+            "--namespace-id",
+            kv.id,
+          ])
           done.push(`deleted KV ${kvTitle}`)
         }
 
@@ -665,7 +706,9 @@ export const BootstrapServiceLive = Layer.effect(
     // Local: fully self-contained, so `init` only scaffolds config + .afk.env +
     // .gitignore (no cloud bucket, no Terraform module, no Worker). The Golden
     // Image is still built explicitly via `afk golden build`.
-    const initLocal = (input: InitInput): Effect.Effect<InitResult, UserError> =>
+    const initLocal = (
+      input: InitInput,
+    ): Effect.Effect<InitResult, UserError> =>
       Effect.gen(function* () {
         const { projectDir } = input
         const configPath = resolve(projectDir, CONFIG_FILE)
@@ -736,7 +779,9 @@ export const BootstrapServiceLive = Layer.effect(
     // secrets, run scratch) and the local Golden Image(s). Live Runs are plain
     // containers the developer can `afk kill`; we don't reach into the daemon
     // here. Self-contained: no cloud calls.
-    const destroyLocal = (input: DestroyInput): Effect.Effect<DestroyResult, never> =>
+    const destroyLocal = (
+      input: DestroyInput,
+    ): Effect.Effect<DestroyResult, never> =>
       Effect.sync(() => {
         const actions = [
           "remove local Golden Image(s) (docker rmi afk-golden-local:*)",

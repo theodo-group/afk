@@ -43,7 +43,12 @@ export const AwsImageRegistryLive = Layer.effect(
       listLatestTagsByPrefix: (repoName, tagPrefix, limit) =>
         Effect.gen(function* () {
           const r = yield* region
-          return yield* ecr.listLatestTagsByPrefix(r, repoName, tagPrefix, limit)
+          return yield* ecr.listLatestTagsByPrefix(
+            r,
+            repoName,
+            tagPrefix,
+            limit,
+          )
         }),
 
       ensureRepoAndAuth: (repoName) =>

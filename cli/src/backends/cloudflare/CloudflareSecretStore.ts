@@ -16,9 +16,13 @@ export const CloudflareSecretStoreLive = Layer.effect(
     return SecretStore.of({
       put: (name, value) =>
         worker
-          .postJson("POST /secrets/:name", `/secrets/${encodeURIComponent(name)}`, {
-            value,
-          })
+          .postJson(
+            "POST /secrets/:name",
+            `/secrets/${encodeURIComponent(name)}`,
+            {
+              value,
+            },
+          )
           .pipe(Effect.asVoid),
 
       delete: (name) =>

@@ -22,7 +22,10 @@ export type GoldenTag = { readonly key: string; readonly value: string }
 /** The pre-pull script run on the builder VM via SSM. Pure. */
 export const buildScript = (cachedImages: ReadonlyArray<string>): string => {
   const pulls = cachedImages
-    .map((img) => `docker pull ${img} || echo "warning: failed to pre-pull ${img}"`)
+    .map(
+      (img) =>
+        `docker pull ${img} || echo "warning: failed to pre-pull ${img}"`,
+    )
     .join("\n")
   return [
     "#!/bin/bash",
@@ -66,7 +69,8 @@ export const planAwsGolden = (i: {
   readonly config: AfkConfig
   readonly builtAt: string
 }): AwsGoldenPlan => {
-  const cachedImages = i.config.aws?.cachedImages ?? i.config.golden?.cachedImages ?? []
+  const cachedImages =
+    i.config.aws?.cachedImages ?? i.config.golden?.cachedImages ?? []
   const version = goldenVersionHash(cachedImages)
   const amiName = `afk-golden-${version}-${i.builtAt.replace(/[:.]/g, "-")}`
 

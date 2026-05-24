@@ -4,7 +4,10 @@ import { checkBinary } from "../infra/Subprocess.ts"
 import { Output } from "../infra/Output.ts"
 import { UserError } from "../infra/Errors.ts"
 import { GoldenImageStore } from "../services/backend/GoldenImage.ts"
-import { BackendDoctor, type CheckResult } from "../services/backend/BackendDoctor.ts"
+import {
+  BackendDoctor,
+  type CheckResult,
+} from "../services/backend/BackendDoctor.ts"
 import { Compute } from "../services/backend/Compute.ts"
 import { GOLDEN_IMAGE_STALE_DAYS } from "../constants.ts"
 
@@ -56,7 +59,11 @@ export const doctor = Command.make("doctor", {}, () =>
     }
 
     yield* out.emit({
-      data: { backend: compute.backendName, checks, ok: checks.every((c) => c.ok) },
+      data: {
+        backend: compute.backendName,
+        checks,
+        ok: checks.every((c) => c.ok),
+      },
       human: () =>
         Effect.gen(function* () {
           yield* out.print(`backend: ${compute.backendName}`)

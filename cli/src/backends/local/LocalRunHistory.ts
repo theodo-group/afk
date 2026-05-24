@@ -1,9 +1,16 @@
 import { DateTime, Effect, Layer } from "effect"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { Subprocess } from "../../infra/Subprocess.ts"
-import { RunHistory, type HistoryRow } from "../../services/backend/RunHistory.ts"
+import {
+  RunHistory,
+  type HistoryRow,
+} from "../../services/backend/RunHistory.ts"
 import { afkHome, historyFile } from "./localPaths.ts"
-import { listAfkContainers, mapDockerState, type LocalContainer } from "./localDocker.ts"
+import {
+  listAfkContainers,
+  mapDockerState,
+  type LocalContainer,
+} from "./localDocker.ts"
 import {
   LABEL_BRANCH,
   LABEL_IMAGE,
@@ -47,9 +54,7 @@ const readArchive = (): Map<string, HistoryRow> => {
 
 const writeArchive = (map: Map<string, HistoryRow>): void => {
   mkdirSync(afkHome(), { recursive: true })
-  const body = [...map.values()]
-    .map((row) => JSON.stringify(row))
-    .join("\n")
+  const body = [...map.values()].map((row) => JSON.stringify(row)).join("\n")
   writeFileSync(historyFile(), body ? body + "\n" : "")
 }
 
@@ -98,7 +103,9 @@ export const LocalRunHistoryLive = Layer.effect(
             status: "RUNNING",
             startedAt: input.startedAt,
             timeoutHours: input.timeoutHours,
-            ...(input.backendDetails ? { backendDetails: input.backendDetails } : {}),
+            ...(input.backendDetails
+              ? { backendDetails: input.backendDetails }
+              : {}),
           })
           writeArchive(map)
         }),
@@ -112,7 +119,9 @@ export const LocalRunHistoryLive = Layer.effect(
             ...existing,
             status: "STOPPED",
             stoppedAt: input.stoppedAt,
-            ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+            ...(input.exitCode !== undefined
+              ? { exitCode: input.exitCode }
+              : {}),
           })
           writeArchive(map)
         }),
@@ -122,7 +131,9 @@ export const LocalRunHistoryLive = Layer.effect(
           // Reconcile: the daemon is authoritative for containers that still
           // exist; the archive preserves the rest.
           const containers = yield* listAfkContainers(sub).pipe(
-            Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<LocalContainer>)),
+            Effect.catchAll(() =>
+              Effect.succeed([] as ReadonlyArray<LocalContainer>),
+            ),
           )
           const map = readArchive()
           for (const c of containers) {

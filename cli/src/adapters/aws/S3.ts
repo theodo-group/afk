@@ -2,18 +2,17 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
 
-const awsError = (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-  new AwsError({
-    operation: op,
-    message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-  })
+const awsError =
+  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
+    new AwsError({
+      operation: op,
+      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
+    })
 
 export class S3 extends Context.Tag("S3")<
   S3,
   {
-    readonly bucketExists: (
-      bucket: string,
-    ) => Effect.Effect<boolean, AwsError>
+    readonly bucketExists: (bucket: string) => Effect.Effect<boolean, AwsError>
     readonly createStateBucket: (input: {
       readonly bucket: string
       readonly region: string
@@ -42,17 +41,22 @@ export const S3Live = Layer.effect(
 
     return S3.of({
       bucketExists: (bucket) =>
-        sub
-          .run("aws", ["s3api", "head-bucket", "--bucket", bucket])
-          .pipe(
-            Effect.map(() => true),
-            Effect.catchAll(() => Effect.succeed(false)),
-          ),
+        sub.run("aws", ["s3api", "head-bucket", "--bucket", bucket]).pipe(
+          Effect.map(() => true),
+          Effect.catchAll(() => Effect.succeed(false)),
+        ),
       createStateBucket: ({ bucket, region }) =>
         Effect.gen(function* () {
           const createArgs =
             region === "us-east-1"
-              ? ["s3api", "create-bucket", "--bucket", bucket, "--region", region]
+              ? [
+                  "s3api",
+                  "create-bucket",
+                  "--bucket",
+                  bucket,
+                  "--region",
+                  region,
+                ]
               : [
                   "s3api",
                   "create-bucket",
@@ -170,7 +174,10 @@ export const S3Live = Layer.effect(
                 "--output",
                 "json",
               ])
-              .pipe(Effect.asVoid, Effect.mapError(awsError("s3:DeleteObjects")))
+              .pipe(
+                Effect.asVoid,
+                Effect.mapError(awsError("s3:DeleteObjects")),
+              )
           }
 
           yield* sub

@@ -1,8 +1,4 @@
-import {
-  LOG_GROUP_PREFIX,
-  VM_AFK_DIR,
-  VM_COMPOSE_PATH,
-} from "../constants.ts"
+import { LOG_GROUP_PREFIX, VM_AFK_DIR, VM_COMPOSE_PATH } from "../constants.ts"
 import { injectAwsLogging } from "./Compose.ts"
 
 export interface UserDataInput {
@@ -17,7 +13,10 @@ export interface UserDataInput {
   /** Plain environment variables to pass to the container(s). */
   readonly env: ReadonlyArray<{ readonly name: string; readonly value: string }>
   /** SSM Parameter Store references to dereference at boot. */
-  readonly secrets: ReadonlyArray<{ readonly name: string; readonly ssmName: string }>
+  readonly secrets: ReadonlyArray<{
+    readonly name: string
+    readonly ssmName: string
+  }>
   /**
    * Compose file content as authored by the developer. Undefined for no-compose Runs.
    * The CLI has already substituted ${AFK_IMAGE}; ${AFK_COMMAND} is interpolated at boot.
@@ -56,7 +55,11 @@ const renderSecretFetches = (
     .join("\n")
 }
 
-const renderDaemonJson = (logGroup: string, region: string, runId: string): string =>
+const renderDaemonJson = (
+  logGroup: string,
+  region: string,
+  runId: string,
+): string =>
   JSON.stringify(
     {
       "log-driver": "awslogs",

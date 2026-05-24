@@ -10,7 +10,10 @@ import {
   type Item,
 } from "../../adapters/aws/DynamoDb.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
-import { RunHistory, type HistoryRow } from "../../services/backend/RunHistory.ts"
+import {
+  RunHistory,
+  type HistoryRow,
+} from "../../services/backend/RunHistory.ts"
 import { DEFAULT_REGION } from "../../constants.ts"
 
 const TABLE_NAME = "afk-runs"
@@ -108,7 +111,9 @@ export const AwsRunHistoryLive = Layer.effect(
           const sinceIsoUtc = since ? DateTime.formatIso(since) : undefined
 
           if (owner) {
-            const values: Record<string, ReturnType<typeof S>> = { ":o": S(owner) }
+            const values: Record<string, ReturnType<typeof S>> = {
+              ":o": S(owner),
+            }
             const names: Record<string, string> = { "#o": "owner" }
             let keyExpr = "#o = :o"
             if (sinceIsoUtc) {

@@ -7,11 +7,12 @@ export interface LogEvent {
   readonly message: string
 }
 
-const awsError = (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-  new AwsError({
-    operation: op,
-    message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-  })
+const awsError =
+  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
+    new AwsError({
+      operation: op,
+      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
+    })
 
 export class Logs extends Context.Tag("Logs")<
   Logs,
@@ -141,9 +142,7 @@ export const LogsLive = Layer.effect(
             ...(input.follow ? ["--follow"] : []),
             "--since",
             input.since ?? "24h",
-            ...(input.stream
-              ? ["--log-stream-name-prefix", input.stream]
-              : []),
+            ...(input.stream ? ["--log-stream-name-prefix", input.stream] : []),
           ])
           .pipe(Effect.mapError(awsError("logs:Tail"))),
     })

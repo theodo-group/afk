@@ -2,10 +2,7 @@ import { Effect, Layer } from "effect"
 import { SecretStore } from "../../services/backend/SecretStore.ts"
 import { Ssm } from "../../adapters/aws/Ssm.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
-import {
-  DEFAULT_REGION,
-  SSM_SECRET_PREFIX,
-} from "../../constants.ts"
+import { DEFAULT_REGION, SSM_SECRET_PREFIX } from "../../constants.ts"
 import type { Secret } from "../../schema/Secret.ts"
 
 const fullName = (name: string) => `${SSM_SECRET_PREFIX}/${name}`

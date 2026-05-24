@@ -6,7 +6,9 @@ import { UserError } from "../infra/Errors.ts"
  * token (`7d`, `24h`, `30m`, `10s`) into an Effect `Duration`. Pure: no Clock,
  * no `Date`, no I/O — callers resolve it to an instant against `DateTime.now`.
  */
-export const parseSince = (token: string): Either.Either<Duration.Duration, UserError> => {
+export const parseSince = (
+  token: string,
+): Either.Either<Duration.Duration, UserError> => {
   const m = /^(\d+)([smhd])$/.exec(token.trim())
   if (!m) {
     return Either.left(

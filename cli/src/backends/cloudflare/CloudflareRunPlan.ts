@@ -139,8 +139,14 @@ export const planCloudflareRun = (
   if (assembled.composeError) {
     return Either.left(new UserError({ message: assembled.composeError }))
   }
-  const { timeoutHours, timeoutSeconds, env, secrets, composeContent, composeUsed } =
-    assembled
+  const {
+    timeoutHours,
+    timeoutSeconds,
+    env,
+    secrets,
+    composeContent,
+    composeUsed,
+  } = assembled
 
   const backendPlan: CloudflareBackendPlan = {
     workerUrl: i.workerUrl,

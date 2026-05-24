@@ -76,7 +76,9 @@ export const AwsGoldenImageLive = Layer.effect(
     )
 
     const remove = (id: string) =>
-      resolveRegion.pipe(Effect.flatMap((region) => ec2.deregisterImage(region, id)))
+      resolveRegion.pipe(
+        Effect.flatMap((region) => ec2.deregisterImage(region, id)),
+      )
 
     const build = Effect.gen(function* () {
       const { config } = yield* cfg.load
@@ -106,13 +108,13 @@ export const AwsGoldenImageLive = Layer.effect(
         tags: [...plan.builderTags],
       })
 
-      const cleanup = ec2.terminateInstances(region, [builderId]).pipe(
-        Effect.catchAll(() => Effect.void),
-      )
+      const cleanup = ec2
+        .terminateInstances(region, [builderId])
+        .pipe(Effect.catchAll(() => Effect.void))
 
-      yield* ec2.waitForInstance(region, builderId, "running").pipe(
-        Effect.tapError(() => cleanup),
-      )
+      yield* ec2
+        .waitForInstance(region, builderId, "running")
+        .pipe(Effect.tapError(() => cleanup))
 
       const cmd = yield* ssm
         .sendShellCommand({
@@ -165,7 +167,9 @@ export const AwsGoldenImageLive = Layer.effect(
         })
         .pipe(Effect.tapError(() => cleanup))
 
-      yield* ec2.waitForImage(region, imageId).pipe(Effect.tapError(() => cleanup))
+      yield* ec2
+        .waitForImage(region, imageId)
+        .pipe(Effect.tapError(() => cleanup))
       yield* cleanup
 
       return {

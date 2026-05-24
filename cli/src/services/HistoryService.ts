@@ -1,6 +1,11 @@
 import { Context, type DateTime, Effect, Layer } from "effect"
 import { RunHistory } from "./backend/RunHistory.ts"
-import { AwsError, CloudflareError, ConfigError, UserError } from "../infra/Errors.ts"
+import {
+  AwsError,
+  CloudflareError,
+  ConfigError,
+  UserError,
+} from "../infra/Errors.ts"
 
 export type RunHistoryStatus = "running" | "stopped" | "failed" | "killed"
 
@@ -38,7 +43,10 @@ export class HistoryService extends Context.Tag("HistoryService")<
   {
     readonly query: (
       input: QueryInput,
-    ) => Effect.Effect<ReadonlyArray<RunHistoryRow>, AwsError | CloudflareError | ConfigError | UserError>
+    ) => Effect.Effect<
+      ReadonlyArray<RunHistoryRow>,
+      AwsError | CloudflareError | ConfigError | UserError
+    >
   }
 >() {}
 

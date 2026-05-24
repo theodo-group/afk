@@ -36,7 +36,9 @@ const findProjectRoot = (start: string): string | null => {
  *   SOME_VAR=secret:my-secret-name           → kind: "secret", secretName: "my-secret-name"
  *   GITHUB_TOKEN=ssm:/afk/secrets/github-token  (legacy AWS-only form)  → kind: "secret"
  */
-const parseEnvLine = (raw: string): EnvEntry | { _malformed: true; reason: string; name: string } | null => {
+const parseEnvLine = (
+  raw: string,
+): EnvEntry | { _malformed: true; reason: string; name: string } | null => {
   const line = raw.trim()
   if (!line || line.startsWith("#")) return null
   const eq = line.indexOf("=")
@@ -105,8 +107,7 @@ export const ConfigServiceLive = Layer.succeed(
       })
       const config = yield* Schema.decodeUnknown(AfkConfig)(parsed).pipe(
         Effect.mapError(
-          (e) =>
-            new ConfigError({ path: configPath, message: String(e) }),
+          (e) => new ConfigError({ path: configPath, message: String(e) }),
         ),
       )
 

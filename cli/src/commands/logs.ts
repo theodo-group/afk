@@ -4,7 +4,10 @@ import type { Terminal } from "@effect/platform"
 import { RunService } from "../services/RunService.ts"
 import { LogStore } from "../services/backend/LogStore.ts"
 import { ConfigService } from "../services/ConfigService.ts"
-import { HistoryService, type RunHistoryRow } from "../services/HistoryService.ts"
+import {
+  HistoryService,
+  type RunHistoryRow,
+} from "../services/HistoryService.ts"
 import { UserError } from "../infra/Errors.ts"
 import { DEFAULT_MAIN_SERVICE } from "../constants.ts"
 
@@ -19,7 +22,9 @@ const all = Options.boolean("all").pipe(
 )
 const since = Options.text("since").pipe(
   Options.withDefault("30d"),
-  Options.withDescription("time window for historical reads (e.g. 1h, 24h, 7d). default 30d"),
+  Options.withDescription(
+    "time window for historical reads (e.g. 1h, 24h, 7d). default 30d",
+  ),
 )
 
 const choiceTitle = (r: RunHistoryRow): string => {
@@ -34,10 +39,17 @@ const pickRunId = (
   hist: typeof HistoryService.Service,
 ): Effect.Effect<Option.Option<string>, UserError, Terminal.Terminal> =>
   Effect.gen(function* () {
-    const since = DateTime.subtractDuration(yield* DateTime.now, Duration.days(30))
+    const since = DateTime.subtractDuration(
+      yield* DateTime.now,
+      Duration.days(30),
+    )
     const rows = yield* hist
       .query({ since, limit: 25 })
-      .pipe(Effect.catchAll((e) => Effect.fail(new UserError({ message: String(e) }))))
+      .pipe(
+        Effect.catchAll((e) =>
+          Effect.fail(new UserError({ message: String(e) })),
+        ),
+      )
     if (rows.length === 0) {
       return yield* Effect.fail(
         new UserError({ message: "No Runs in history to choose from." }),
@@ -58,7 +70,9 @@ const pickRunId = (
     }).pipe(
       Effect.map(Option.some),
       // Ctrl-C / quit out of the picker is a clean cancel, not an error.
-      Effect.catchTag("QuitException", () => Effect.succeed(Option.none<string>())),
+      Effect.catchTag("QuitException", () =>
+        Effect.succeed(Option.none<string>()),
+      ),
     )
   })
 
@@ -74,7 +88,9 @@ export const logs = Command.make(
       const hist = yield* HistoryService
 
       const picked =
-        runId._tag === "Some" ? Option.some(runId.value) : yield* pickRunId(hist)
+        runId._tag === "Some"
+          ? Option.some(runId.value)
+          : yield* pickRunId(hist)
       if (Option.isNone(picked)) return
       const resolvedRunId = picked.value
 

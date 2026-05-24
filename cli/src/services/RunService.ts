@@ -1,5 +1,10 @@
 import { Context, Effect, Fiber, Layer } from "effect"
-import { Compute, type AttachOptions, type PreparedRun, type RunStarted } from "./backend/Compute.ts"
+import {
+  Compute,
+  type AttachOptions,
+  type PreparedRun,
+  type RunStarted,
+} from "./backend/Compute.ts"
 import { LogStore } from "./backend/LogStore.ts"
 import { BuildService } from "./BuildService.ts"
 import { ConfigService } from "./ConfigService.ts"
@@ -44,34 +49,59 @@ export class RunService extends Context.Tag("RunService")<
       input: RunRequest,
     ) => Effect.Effect<
       PreparedRun,
-      AwsError | CloudflareError | UserError | DockerError | GitError | ConfigError
+      | AwsError
+      | CloudflareError
+      | UserError
+      | DockerError
+      | GitError
+      | ConfigError
     >
     readonly launch: (
       plan: PreparedRun,
-    ) => Effect.Effect<RunStarted, AwsError | CloudflareError | UserError | ConfigError>
+    ) => Effect.Effect<
+      RunStarted,
+      AwsError | CloudflareError | UserError | ConfigError
+    >
     readonly start: (
       input: RunRequest,
     ) => Effect.Effect<
       RunStarted,
-      AwsError | CloudflareError | UserError | DockerError | GitError | ConfigError
+      | AwsError
+      | CloudflareError
+      | UserError
+      | DockerError
+      | GitError
+      | ConfigError
     >
     readonly listMine: (
       ownerUserId: string,
-    ) => Effect.Effect<ReadonlyArray<Run>, AwsError | CloudflareError | ConfigError | UserError>
+    ) => Effect.Effect<
+      ReadonlyArray<Run>,
+      AwsError | CloudflareError | ConfigError | UserError
+    >
     readonly listAll: Effect.Effect<
       ReadonlyArray<Run>,
       AwsError | CloudflareError | ConfigError | UserError
     >
     readonly findByRunId: (
       runId: string,
-    ) => Effect.Effect<Run, AwsError | CloudflareError | UserError | ConfigError>
+    ) => Effect.Effect<
+      Run,
+      AwsError | CloudflareError | UserError | ConfigError
+    >
     readonly kill: (
       runId: string,
-    ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
+    ) => Effect.Effect<
+      void,
+      AwsError | CloudflareError | UserError | ConfigError
+    >
     readonly attach: (
       runId: string,
       opts: AttachOptions,
-    ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
+    ) => Effect.Effect<
+      void,
+      AwsError | CloudflareError | UserError | ConfigError
+    >
     /**
      * Follow a Run's logs to the terminal until it stops, then return. Backend-
      * neutral: it waits for the Run to reach RUNNING, tails via the `LogStore`
@@ -114,7 +144,9 @@ export const RunServiceLive = Layer.effect(
 
     const streamUntilTerminated = (runId: string, repoName: string) =>
       Effect.gen(function* () {
-        yield* Effect.sync(() => process.stderr.write("waiting for the Run to boot…"))
+        yield* Effect.sync(() =>
+          process.stderr.write("waiting for the Run to boot…"),
+        )
         let status = yield* probeStatus(runId)
         while (status === "TRANSIENT" || status === "PROVISIONING") {
           yield* Effect.sync(() => process.stderr.write("."))
@@ -183,4 +215,8 @@ export const RunServiceLive = Layer.effect(
 )
 
 // Re-export types for commands that import them.
-export type { PreparedRun, RunStarted, AttachOptions } from "./backend/Compute.ts"
+export type {
+  PreparedRun,
+  RunStarted,
+  AttachOptions,
+} from "./backend/Compute.ts"

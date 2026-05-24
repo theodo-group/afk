@@ -20,9 +20,12 @@ export const provision = Command.make("provision", {}, () =>
       data: report.details,
       human: () =>
         out.print(
-          [report.summary, ``, `Next:`, ...report.nextSteps.map((s) => `  ${s}`)].join(
-            "\n",
-          ),
+          [
+            report.summary,
+            ``,
+            `Next:`,
+            ...report.nextSteps.map((s) => `  ${s}`),
+          ].join("\n"),
         ),
     })
   }),

@@ -7,7 +7,9 @@ describe("parseSince", () => {
     const r = parseSince("7d")
     expect(Either.isRight(r)).toBe(true)
     if (Either.isRight(r)) {
-      expect(Duration.toSeconds(r.right)).toBe(Duration.toSeconds(Duration.days(7)))
+      expect(Duration.toSeconds(r.right)).toBe(
+        Duration.toSeconds(Duration.days(7)),
+      )
     }
   })
 
@@ -15,7 +17,9 @@ describe("parseSince", () => {
     const r = parseSince("24h")
     expect(Either.isRight(r)).toBe(true)
     if (Either.isRight(r)) {
-      expect(Duration.toSeconds(r.right)).toBe(Duration.toSeconds(Duration.hours(24)))
+      expect(Duration.toSeconds(r.right)).toBe(
+        Duration.toSeconds(Duration.hours(24)),
+      )
     }
   })
 
@@ -23,7 +27,9 @@ describe("parseSince", () => {
     const r = parseSince("30m")
     expect(Either.isRight(r)).toBe(true)
     if (Either.isRight(r)) {
-      expect(Duration.toSeconds(r.right)).toBe(Duration.toSeconds(Duration.minutes(30)))
+      expect(Duration.toSeconds(r.right)).toBe(
+        Duration.toSeconds(Duration.minutes(30)),
+      )
     }
   })
 
@@ -31,7 +37,9 @@ describe("parseSince", () => {
     const r = parseSince("10s")
     expect(Either.isRight(r)).toBe(true)
     if (Either.isRight(r)) {
-      expect(Duration.toSeconds(r.right)).toBe(Duration.toSeconds(Duration.seconds(10)))
+      expect(Duration.toSeconds(r.right)).toBe(
+        Duration.toSeconds(Duration.seconds(10)),
+      )
     }
   })
 

@@ -14,11 +14,7 @@ import {
   type PreparedRun,
   type StartInput,
 } from "../../services/backend/Compute.ts"
-import {
-  CloudflareError,
-  ConfigError,
-  UserError,
-} from "../../infra/Errors.ts"
+import { CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
 import { COMPOSE_FILE, DEFAULT_MAIN_SERVICE } from "../../constants.ts"
 import type { Run } from "../../schema/Run.ts"
 import {
@@ -73,7 +69,8 @@ export const CloudflareComputeLive = Layer.effect(
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
         // Shell: gather the effectful inputs the core needs.
-        const { config, envEntries, projectRoot, sourceRepoName } = yield* cfg.load
+        const { config, envEntries, projectRoot, sourceRepoName } =
+          yield* cfg.load
         const workerUrl = yield* resolveWorkerUrl
 
         // Refuse to launch if no Golden Image has been built. The agent's
@@ -84,8 +81,7 @@ export const CloudflareComputeLive = Layer.effect(
         if (!latestGolden) {
           return yield* Effect.fail(
             new UserError({
-              message:
-                "No Cloudflare Golden Image found for this account.",
+              message: "No Cloudflare Golden Image found for this account.",
               hint: "Run `afk golden build` first.",
             }),
           )
@@ -172,23 +168,27 @@ export const CloudflareComputeLive = Layer.effect(
       runId: string,
     ): Effect.Effect<Run, CloudflareError | UserError | ConfigError> =>
       Effect.gen(function* () {
-        const wire: RunMetadataWire = yield* worker.getJson<RunMetadataWire>(
-          `GET /runs/${runId}`,
-          `/runs/${encodeURIComponent(runId)}`,
-        ).pipe(
-          Effect.catchTag(
-            "CloudflareError",
-            (e): Effect.Effect<RunMetadataWire, CloudflareError | UserError> =>
-              e.status === 404
-                ? Effect.fail(
-                    new UserError({
-                      message: `Run ${runId} not found.`,
-                      hint: "Use `afk ls` to see available Runs.",
-                    }),
-                  )
-                : Effect.fail(e),
-          ),
-        )
+        const wire: RunMetadataWire = yield* worker
+          .getJson<RunMetadataWire>(
+            `GET /runs/${runId}`,
+            `/runs/${encodeURIComponent(runId)}`,
+          )
+          .pipe(
+            Effect.catchTag(
+              "CloudflareError",
+              (
+                e,
+              ): Effect.Effect<RunMetadataWire, CloudflareError | UserError> =>
+                e.status === 404
+                  ? Effect.fail(
+                      new UserError({
+                        message: `Run ${runId} not found.`,
+                        hint: "Use `afk ls` to see available Runs.",
+                      }),
+                    )
+                  : Effect.fail(e),
+            ),
+          )
         return wireToRun(wire)
       })
 
@@ -219,7 +219,8 @@ export const CloudflareComputeLive = Layer.effect(
         if ((process.env.CLOUDFLARE_API_TOKEN ?? "").length === 0) {
           return yield* Effect.fail(
             new UserError({
-              message: "CLOUDFLARE_API_TOKEN is required for `afk attach` on Cloudflare.",
+              message:
+                "CLOUDFLARE_API_TOKEN is required for `afk attach` on Cloudflare.",
               hint: "Attach shells out to `wrangler containers ssh`, which needs account-level auth. Export a token with Workers Containers:Edit and retry.",
             }),
           )

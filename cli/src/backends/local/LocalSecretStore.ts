@@ -22,16 +22,25 @@ export const LocalSecretStoreLive = Layer.effect(
 
     const gitUrl = cfg.load.pipe(Effect.map((r) => r.config.gitUrl))
 
-    const writeFile = (url: string, data: SecretFile): Effect.Effect<void, UserError> =>
+    const writeFile = (
+      url: string,
+      data: SecretFile,
+    ): Effect.Effect<void, UserError> =>
       Effect.try({
         try: () => {
           mkdirSync(secretsDir(), { recursive: true })
-          writeFileSync(secretsFile(url), JSON.stringify(data, null, 2) + "\n", {
-            mode: 0o600,
-          })
+          writeFileSync(
+            secretsFile(url),
+            JSON.stringify(data, null, 2) + "\n",
+            {
+              mode: 0o600,
+            },
+          )
         },
         catch: (cause) =>
-          new UserError({ message: `could not write local secret store: ${String(cause)}` }),
+          new UserError({
+            message: `could not write local secret store: ${String(cause)}`,
+          }),
       })
 
     return SecretStore.of({

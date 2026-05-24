@@ -24,17 +24,23 @@ const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
   lines.push(`RUN apk add --no-cache skopeo ca-certificates`)
   lines.push(`WORKDIR /out`)
   for (const img of cachedImages) {
-    lines.push(`RUN skopeo copy docker://${img} oci-archive:/out/${safeName(img)}.tar`)
+    lines.push(
+      `RUN skopeo copy docker://${img} oci-archive:/out/${safeName(img)}.tar`,
+    )
   }
   lines.push(``)
   lines.push(`FROM docker:28-dind-rootless`)
   lines.push(`USER root`)
-  lines.push(`RUN mkdir -p /var/afk/cache /var/afk/run && chown -R rootless:rootless /var/afk`)
+  lines.push(
+    `RUN mkdir -p /var/afk/cache /var/afk/run && chown -R rootless:rootless /var/afk`,
+  )
   if (cachedImages.length > 0) {
     lines.push(`COPY --from=skopeo-bake /out/ /var/afk/cache/`)
   }
   lines.push(`COPY bootstrap.sh /var/afk/bootstrap.sh`)
-  lines.push(`RUN chmod +x /var/afk/bootstrap.sh && chown rootless:rootless /var/afk/bootstrap.sh`)
+  lines.push(
+    `RUN chmod +x /var/afk/bootstrap.sh && chown rootless:rootless /var/afk/bootstrap.sh`,
+  )
   // Run as the rootless user (uid 1000): on a developer's own machine the
   // container is the isolation boundary and rootless dind avoids needing
   // --privileged at `docker run`. Mirrors the Cloudflare Golden Image shape.
@@ -69,12 +75,7 @@ export const LocalGoldenImageLive = Layer.effect(
 
     const list = Effect.gen(function* () {
       const rows = yield* sub
-        .run("docker", [
-          "images",
-          LOCAL_GOLDEN_REPO,
-          "--format",
-          "{{json .}}",
-        ])
+        .run("docker", ["images", LOCAL_GOLDEN_REPO, "--format", "{{json .}}"])
         .pipe(Effect.either)
       if (rows._tag === "Left") return [] as ReadonlyArray<GoldenImage>
       return rows.right.stdout
@@ -106,14 +107,16 @@ export const LocalGoldenImageLive = Layer.effect(
     const findLatest = list.pipe(Effect.map((images) => images[0] ?? null))
 
     const remove = (id: string) =>
-      sub
-        .run("docker", ["rmi", id])
-        .pipe(
-          Effect.asVoid,
-          Effect.mapError(
-            (e) => new DockerError({ operation: "rmi", message: e.stderr || String(e) }),
-          ),
-        )
+      sub.run("docker", ["rmi", id]).pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          (e) =>
+            new DockerError({
+              operation: "rmi",
+              message: e.stderr || String(e),
+            }),
+        ),
+      )
 
     const build = Effect.gen(function* () {
       const { config, projectRoot } = yield* cfg.load
@@ -124,8 +127,13 @@ export const LocalGoldenImageLive = Layer.effect(
 
       const buildDir = resolve(projectRoot, ".afk", "local-golden-build")
       mkdirSync(buildDir, { recursive: true })
-      writeFileSync(resolve(buildDir, "Dockerfile"), dockerfileFor(cachedImages))
-      writeFileSync(resolve(buildDir, "bootstrap.sh"), LOCAL_BOOTSTRAP, { mode: 0o755 })
+      writeFileSync(
+        resolve(buildDir, "Dockerfile"),
+        dockerfileFor(cachedImages),
+      )
+      writeFileSync(resolve(buildDir, "bootstrap.sh"), LOCAL_BOOTSTRAP, {
+        mode: 0o755,
+      })
 
       // Built into the local daemon at the host's native architecture (no
       // --platform, no push): this image only ever runs here.

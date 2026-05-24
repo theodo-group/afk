@@ -30,4 +30,6 @@ const Leaves = Layer.mergeAll(
   LocalProvisionerLive,
 )
 
-export const LocalBackendLive = LocalComputeLive.pipe(Layer.provideMerge(Leaves))
+export const LocalBackendLive = LocalComputeLive.pipe(
+  Layer.provideMerge(Leaves),
+)

@@ -33,10 +33,9 @@ const renderTable = <T>(
   const widths = columns.map((c) =>
     Math.max(c.header.length, ...rows.map((r) => c.value(r).length)),
   )
-  const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length))
-  const headerLine = columns
-    .map((c, i) => pad(c.header, widths[i]!))
-    .join("  ")
+  const pad = (s: string, w: number) =>
+    s + " ".repeat(Math.max(0, w - s.length))
+  const headerLine = columns.map((c, i) => pad(c.header, widths[i]!)).join("  ")
   const sep = widths.map((w) => "-".repeat(w)).join("  ")
   const body = rows.map((r) =>
     columns.map((c, i) => pad(c.value(r), widths[i]!)).join("  "),
