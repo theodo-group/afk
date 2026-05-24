@@ -33,6 +33,9 @@ const app = new Hono<{ Bindings: Env }>()
 // Caller principal middleware. Falls through for /health.
 app.use("/*", async (c, next) => {
   if (c.req.path === "/health") return next()
+  // The Run's container posts its completion callback here without Access
+  // creds; it's authorized by the unguessable runId in the path.
+  if (c.req.method === "POST" && c.req.path.endsWith("/complete")) return next()
   const caller = await authenticate(c.req.raw, c.env)
   if (!caller) return c.json({ error: "unauthorized" }, 401)
   c.set("caller" as never, caller as never)
@@ -40,6 +43,25 @@ app.use("/*", async (c, next) => {
 })
 
 app.get("/health", (c) => c.json({ ok: true }))
+
+// Completion callback from the Run's container (logs + exit code).
+app.post("/runs/:id/complete", async (c) => {
+  const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
+  return stub.fetch(
+    new Request("https://run/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: await c.req.text(),
+    }),
+  )
+})
+
+// Read a Run's captured logs.
+app.get("/runs/:id/logs", async (c) => {
+  const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
+  const r = await stub.fetch(new Request("https://run/logs"))
+  return new Response(await r.text(), { headers: { "content-type": "text/plain" } })
+})
 
 // --- Runs ---
 
@@ -222,7 +244,7 @@ app.delete("/secrets/:name", async (c) => {
 })
 
 app.get("/secrets", (c) => {
-  // Listing is best-effort: enumerate env keys starting with AFK_SECRET_.
+  // Best-effort: Workers offers no secret-listing API, so we infer from env keys.
   const names: string[] = []
   for (const k of Object.keys(c.env as Record<string, unknown>)) {
     if (k.startsWith("AFK_SECRET_")) names.push(k.slice("AFK_SECRET_".length))

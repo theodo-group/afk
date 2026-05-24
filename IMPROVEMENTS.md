@@ -263,6 +263,16 @@ Live-verified inside a CF container instance: `dockerd_up=YES`, `docker run --ne
 3. Container egress under `mode: private` (can it pull from the managed registry / clone GitHub?).
 Until #1–#3 are answered, `afk run` launches and tracks state correctly but the workload does not execute.
 
+**RESOLVED end-to-end (2026-05-23/24).** `afk run` now executes on CF and is fully observable. Final fixes on top of the dind recipe:
+- `container.start({ envVars })` (was `{ env }`, silently ignored → the container got no `AFK_IMAGE` and idled — this was the "stuck" mystery).
+- BusyBox `timeout` (drop GNU `--preserve-status`).
+- **Logs + status via a completion callback** (the CF analog of the AWS `awslogs` driver): the golden bootstrap captures the workload's combined output and, on exit, POSTs `{exitCode, logB64}` to the launcher Worker's unauthenticated `POST /runs/:id/complete` (authorized by the unguessable runId). The RunDO stores the log and calls `markStopped(exitCode)`. `afk logs` reads `GET /runs/:id/logs`; `afk ls` shows STOPPED. Replaces the `wrangler tail` path (#15.14) and the missing exit wiring (#15.15) — both now closed.
+- SSH-as-root works once `authorized_keys` is actually deployed (the earlier 500s were a *dropped* key, not root). `wrangler containers ssh` needs a PTY (`script -qec …`) for non-interactive driving.
+
+Verified live: `afk logs <run>` shows the full container output ending in `hello world`, and status flips to STOPPED.
+
+**Remaining (minor):** `afk logs --follow` can't stream a still-running container (logs are shipped at exit) — needs incremental log push; and `POST /runs/:id/complete` should carry a per-run token rather than relying on runId unguessability.
+
 **15.17 `afk logs` options must precede the positional run-id ⏳ (cosmetic).** `afk logs <id> --follow` errors with "Received unknown argument '--follow'"; `afk logs --follow <id>` works. An @effect/cli ordering quirk — surface a clearer error or allow interleaving.
 
 **15.11 `/secrets` route addressed an empty script name ✅ (fixed).** `afk secrets put/rm` on CF failed with CF API code 10001 ("Content-Type must be one of: application/javascript, …"). Cause: `getScriptName()` read `globalThis.WORKER_NAME` (always `undefined` — Worker vars live on `env`, not globalThis), so the secrets URL was `/workers/scripts//secrets` with an empty name, which the CF API misrouted to the script-upload endpoint. Fixed: read the name from `env.WORKER_NAME` (new `[vars]` entry, rendered from `worker_name`), default `afk-launcher`. Touches `worker/cloudflare/src/launcher.ts`, `types.ts`, `wrangler.toml.template`.

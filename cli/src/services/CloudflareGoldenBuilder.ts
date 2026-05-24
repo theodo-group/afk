@@ -125,6 +125,9 @@ echo "afk-golden: bootstrap complete"
 # provides the engine, the workload runs inside it. Absent these (e.g. an
 # \`afk attach --host\` debug boot), we fall back to the container's own CMD.
 if [ -n "\${AFK_IMAGE:-}" ]; then
+  LOG=/var/afk/workload.log
+  : > "\$LOG"
+
   ENV_FILE=/var/afk/run.env
   if [ -n "\${AFK_RUN_ENV_B64:-}" ]; then
     echo "\$AFK_RUN_ENV_B64" | base64 -d > "\$ENV_FILE"
@@ -133,37 +136,46 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
   fi
   chmod 600 "\$ENV_FILE"
 
+  # Authenticate to the CF managed registry with the minted pull credential.
   if [ -n "\${AFK_REGISTRY_PASSWORD:-}" ]; then
-    echo "afk-golden: docker login registry.cloudflare.com"
-    echo "\$AFK_REGISTRY_PASSWORD" | docker login registry.cloudflare.com \\
-      -u "\${AFK_REGISTRY_USER:-v1}" --password-stdin
+    echo "\$AFK_REGISTRY_PASSWORD" | timeout 60 docker login registry.cloudflare.com \\
+      -u "\${AFK_REGISTRY_USER:-v1}" --password-stdin >>"\$LOG" 2>&1
   fi
 
-  echo "afk-golden: pulling \$AFK_IMAGE"
-  docker pull "\$AFK_IMAGE"
+  echo "afk-golden: pulling \$AFK_IMAGE" >>"\$LOG"
+  timeout 600 docker pull "\$AFK_IMAGE" >>"\$LOG" 2>&1
 
   TIMEOUT="\${AFK_TIMEOUT_SECONDS:-14400}"
-  # Don't let a non-zero workload exit abort the script before we capture it.
   set +e
   if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
     mkdir -p /etc/afk
     printf '%s' "\$AFK_COMPOSE_YML" > /etc/afk/compose.yml
     export AFK_COMMAND
     set -a; . "\$ENV_FILE"; set +a
-    echo "afk-golden: docker compose up (main: \${AFK_MAIN_SERVICE:-agent})"
-    timeout --preserve-status "\$TIMEOUT" docker compose -f /etc/afk/compose.yml \\
-      up --exit-code-from "\${AFK_MAIN_SERVICE:-agent}" --abort-on-container-exit
+    timeout "\$TIMEOUT" docker compose -f /etc/afk/compose.yml \\
+      up --exit-code-from "\${AFK_MAIN_SERVICE:-agent}" --abort-on-container-exit \\
+      >>"\$LOG" 2>&1
     RUN_EXIT=\$?
-    docker compose -f /etc/afk/compose.yml down -v --remove-orphans || true
+    docker compose -f /etc/afk/compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
   else
-    echo "afk-golden: docker run \$AFK_IMAGE"
     # --network host: child containers share the CF container's network (no
     # bridge/NAT is available — see dockerd flags above).
-    timeout --preserve-status "\$TIMEOUT" docker run --rm --network host \\
-      --env-file "\$ENV_FILE" "\$AFK_IMAGE" sh -c "\$AFK_COMMAND"
+    timeout "\$TIMEOUT" docker run --rm --network host \\
+      --env-file "\$ENV_FILE" "\$AFK_IMAGE" sh -c "\$AFK_COMMAND" \\
+      >>"\$LOG" 2>&1
     RUN_EXIT=\$?
   fi
+  cat "\$LOG" 2>/dev/null || true
   echo "afk-golden: workload exited \$RUN_EXIT"
+
+  # Ship logs + exit code back to the launcher Worker (the CF analog of the AWS
+  # awslogs driver). The Worker stores them so \`afk logs\` and \`afk ls\` work.
+  if [ -n "\${AFK_COMPLETE_URL:-}" ]; then
+    LOG_B64=\$(tail -c 131072 "\$LOG" 2>/dev/null | base64 | tr -d '\\n')
+    wget -qO- --header="Content-Type: application/json" \\
+      --post-data="{\\"exitCode\\":\$RUN_EXIT,\\"logB64\\":\\"\$LOG_B64\\"}" \\
+      "\$AFK_COMPLETE_URL" >/dev/null 2>&1 || true
+  fi
   exit "\$RUN_EXIT"
 fi
 

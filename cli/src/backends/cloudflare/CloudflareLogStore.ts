@@ -1,139 +1,82 @@
 import { Effect, Layer } from "effect"
 import { LogStore } from "../../services/backend/LogStore.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
-import { Subprocess } from "../../infra/Subprocess.ts"
 import { CloudflareError, UserError } from "../../infra/Errors.ts"
 
 /**
- * Cloudflare implementation of LogStore. Streams via `wrangler tail` and
- * filters its JSON output for the requested runId.
+ * Cloudflare implementation of LogStore. Reads the logs the Run's container
+ * shipped back to the launcher Worker on completion (`GET /runs/:id/logs`),
+ * the CF analog of CloudWatch on AWS.
  *
- * For `follow=false` we fall back to `wrangler tail --since <since>` (which
- * exits when there are no more events) rather than going through CF GraphQL
- * Analytics, since the exact GraphQL query shape for Workers Logs is fiddly
- * and varies by account plan. A future revision should switch to the
- * GraphQL endpoint to avoid the wrangler runtime dependency.
- *
- * TODO: verify GraphQL Analytics shape at
- * https://developers.cloudflare.com/analytics/graphql-api/
+ * Logs are captured when the workload exits (the golden bootstrap POSTs them to
+ * the Worker's `/runs/:id/complete`), so they're available once the Run is
+ * STOPPED. `--follow` against a still-running container can't stream yet — that
+ * would need an incremental log push; for now follow just polls the stored log.
  */
 export const CloudflareLogStoreLive = Layer.effect(
   LogStore,
   Effect.gen(function* () {
     const cfg = yield* ConfigService
-    const _sub = yield* Subprocess // ensure the dep is satisfied for layer wiring
+
+    const authHeaders = (): Record<string, string> => {
+      const id = process.env.AFK_CF_CLIENT_ID
+      const secret = process.env.AFK_CF_CLIENT_SECRET
+      const out: Record<string, string> = {}
+      if (id) out["CF-Access-Client-Id"] = id
+      if (secret) out["CF-Access-Client-Secret"] = secret
+      return out
+    }
 
     return LogStore.of({
       tail: (input) =>
         Effect.gen(function* () {
           const { config } = yield* cfg.load
-          const workerName = config.cloudflare?.workerName
-          if (!workerName) {
+          const workerUrl = config.cloudflare?.workerUrl?.replace(/\/$/, "")
+          if (!workerUrl) {
             return yield* Effect.fail(
               new UserError({
-                message: "cloudflare.workerName is not set in afk.config.json.",
-                hint: "Set it to the name of the deployed launcher Worker.",
+                message: "cloudflare.workerUrl is not set in afk.config.json.",
+                hint: "Run `afk provision` (or set it to the deployed Worker URL).",
               }),
             )
           }
-
-          // `wrangler tail` is a LIVE stream only — it has no `--since`/history
-          // flag (passing one errors). Historical reads need the GraphQL
-          // Analytics API (tracked as a separate improvement). For now both
-          // follow and non-follow tail live; non-follow simply streams until
-          // interrupted.
-          const args = ["tail", workerName, "--format", "json"]
-
-          // Stream wrangler stdout line-by-line, parse JSON, filter for our
-          // runId, and write the `log.message` payload to our stdout. We can't
-          // use the inheritStdio Subprocess.run for this because we need to
-          // see + filter each line.
-          yield* Effect.tryPromise({
-            try: () =>
-              new Promise<void>((resolveP, rejectP) => {
-                const proc = Bun.spawn(["wrangler", ...args], {
-                  stdout: "pipe",
-                  stderr: "inherit",
-                  stdin: "ignore",
-                })
-                let buf = ""
-                const reader = proc.stdout.getReader()
-                const decoder = new TextDecoder()
-                const drain = async () => {
-                  try {
-                    for (;;) {
-                      const { value, done } = await reader.read()
-                      if (done) break
-                      buf += decoder.decode(value, { stream: true })
-                      let nl: number
-                      while ((nl = buf.indexOf("\n")) >= 0) {
-                        const line = buf.slice(0, nl)
-                        buf = buf.slice(nl + 1)
-                        if (!line.trim()) continue
-                        try {
-                          const ev = JSON.parse(line) as {
-                            logs?: Array<{ message?: unknown[] }>
-                            outcome?: string
-                            event?: unknown
-                          }
-                          // Find anything that looks like a runId match in the
-                          // log payload — the Worker logs `{runId, line}` as
-                          // its own JSON, so a substring match is enough.
-                          if (line.includes(input.runId)) {
-                            // Extract `line` from the structured payload if
-                            // present, else dump the whole line.
-                            const fromLogs =
-                              ev.logs?.flatMap((l) => l.message ?? []) ?? []
-                            for (const item of fromLogs) {
-                              if (typeof item === "string") {
-                                process.stdout.write(item + "\n")
-                              } else if (
-                                item &&
-                                typeof item === "object" &&
-                                "line" in (item as Record<string, unknown>) &&
-                                typeof (item as { line: unknown }).line === "string" &&
-                                ((item as { runId?: unknown }).runId === undefined ||
-                                  (item as { runId?: unknown }).runId === input.runId)
-                              ) {
-                                process.stdout.write(
-                                  (item as { line: string }).line + "\n",
-                                )
-                              }
-                            }
-                            if (fromLogs.length === 0) {
-                              process.stdout.write(line + "\n")
-                            }
-                          }
-                        } catch {
-                          /* not JSON — skip */
-                        }
-                      }
-                    }
-                    resolveP()
-                  } catch (e) {
-                    rejectP(e)
-                  }
+          const url = `${workerUrl}/runs/${encodeURIComponent(input.runId)}/logs`
+          const fetchOnce = () =>
+            Effect.tryPromise({
+              try: async () => {
+                const res = await fetch(url, { headers: authHeaders() })
+                if (!res.ok) {
+                  throw new CloudflareError({
+                    operation: "GET /runs/:id/logs",
+                    status: res.status,
+                    message: (await res.text()) || res.statusText,
+                  })
                 }
-                const onSig = () => {
-                  try {
-                    proc.kill()
-                  } catch {
-                    /* ignore */
-                  }
-                }
-                process.once("SIGINT", onSig)
-                process.once("SIGTERM", onSig)
-                drain().finally(() => {
-                  process.removeListener("SIGINT", onSig)
-                  process.removeListener("SIGTERM", onSig)
-                })
-              }),
-            catch: (e): CloudflareError =>
-              new CloudflareError({
-                operation: "wrangler tail",
-                message: String(e),
-              }),
-          })
+                return res.text()
+              },
+              catch: (e): CloudflareError =>
+                e instanceof CloudflareError
+                  ? e
+                  : new CloudflareError({ operation: "logs", message: String(e) }),
+            })
+
+          if (!input.follow) {
+            const body = yield* fetchOnce()
+            yield* Effect.sync(() => process.stdout.write(body.endsWith("\n") || body === "" ? body : body + "\n"))
+            return
+          }
+
+          // Follow: poll until logs appear (the container ships them on exit),
+          // then print once. Ctrl-C to stop.
+          let printed = 0
+          for (;;) {
+            const body = yield* fetchOnce()
+            if (body.length > printed) {
+              yield* Effect.sync(() => process.stdout.write(body.slice(printed)))
+              printed = body.length
+            }
+            yield* Effect.sleep("3 seconds")
+          }
         }),
     })
   }),

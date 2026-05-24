@@ -35,6 +35,8 @@ export interface StartRequest {
   readonly sha: string
   readonly mainService: string
   readonly repoName: string
+  /** Public Worker URL, so the container can POST its completion callback. */
+  readonly workerUrl?: string
   readonly env: ReadonlyArray<{ readonly name: string; readonly value: string }>
   /**
    * Names of Workers Secrets to inject into the Container's environment.
