@@ -9,7 +9,9 @@ import { DEFAULT_REGION } from "../constants.ts"
 import { estimateCost, formatUsd } from "../services/Pricing.ts"
 
 const all = Options.boolean("all").pipe(
-  Options.withDescription("show Runs across all team members (requires broader IAM)"),
+  Options.withDescription(
+    "show Runs across all team members (requires broader IAM)",
+  ),
 )
 const since = Options.text("since").pipe(
   Options.withDefault("7d"),
@@ -50,7 +52,10 @@ export const history = Command.make(
       const region = config.aws?.region ?? DEFAULT_REGION
 
       const duration = yield* parseSince(since)
-      const sinceInstant = DateTime.subtractDuration(yield* DateTime.now, duration)
+      const sinceInstant = DateTime.subtractDuration(
+        yield* DateTime.now,
+        duration,
+      )
       const owner = all ? undefined : (yield* compute.callerPrincipal).id
 
       const rows = yield* hist.query({
@@ -84,7 +89,8 @@ export const history = Command.make(
                 },
                 {
                   header: "EXIT",
-                  value: (r) => (r.exitCode === undefined ? "-" : String(r.exitCode)),
+                  value: (r) =>
+                    r.exitCode === undefined ? "-" : String(r.exitCode),
                 },
                 {
                   header: "COST",
@@ -100,7 +106,12 @@ export const history = Command.make(
                   },
                 },
                 ...(all
-                  ? [{ header: "OWNER", value: (r: typeof filtered[number]) => r.owner }]
+                  ? [
+                      {
+                        header: "OWNER",
+                        value: (r: (typeof filtered)[number]) => r.owner,
+                      },
+                    ]
                   : []),
               ]),
       })

@@ -37,7 +37,12 @@ const probeWorkerHealth = (url: string): Effect.Effect<CheckResult> =>
     ),
     Effect.catchAll((cause) =>
       Effect.succeed(
-        check("launcher Worker /health", false, "", `unreachable (${String(cause)})`),
+        check(
+          "launcher Worker /health",
+          false,
+          "",
+          `unreachable (${String(cause)})`,
+        ),
       ),
     ),
   )
@@ -101,7 +106,12 @@ export const CloudflareBackendDoctorLive = Layer.effect(
       Effect.matchEffect({
         onFailure: () =>
           Effect.succeed<ReadonlyArray<CheckResult>>([
-            check("afk.config.json", false, "", "not found — run `afk init --provider cloudflare`"),
+            check(
+              "afk.config.json",
+              false,
+              "",
+              "not found — run `afk init --provider cloudflare`",
+            ),
           ]),
         onSuccess: ({ config, projectRoot }) => {
           const url = config.cloudflare?.workerUrl

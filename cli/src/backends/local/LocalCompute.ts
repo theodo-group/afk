@@ -36,7 +36,11 @@ import {
 import type { Run } from "../../schema/Run.ts"
 import { ensureDir, runDir, runLogsDir } from "./localPaths.ts"
 import { readSecretValue } from "./localSecrets.ts"
-import { listAfkContainers, mapDockerState, type LocalContainer } from "./localDocker.ts"
+import {
+  listAfkContainers,
+  mapDockerState,
+  type LocalContainer,
+} from "./localDocker.ts"
 
 /** Map any Subprocess/Parse failure into the seam's user-facing error channel. */
 const toUserError = (op: string) => (e: { message?: string }) =>
@@ -78,7 +82,9 @@ export const LocalComputeLive = Layer.effect(
     const history = yield* RunHistory
 
     const listAll = listAfkContainers(sub).pipe(
-      Effect.map((cs) => cs.map(containerToRun).filter((r): r is Run => r !== null)),
+      Effect.map((cs) =>
+        cs.map(containerToRun).filter((r): r is Run => r !== null),
+      ),
       Effect.mapError(toUserError("docker ps")),
     )
 
@@ -103,7 +109,8 @@ export const LocalComputeLive = Layer.effect(
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
-        const { config, envEntries, projectRoot, sourceRepoName } = yield* cfg.load
+        const { config, envEntries, projectRoot, sourceRepoName } =
+          yield* cfg.load
 
         const latestGolden = yield* golden.findLatest
         if (!latestGolden) {
@@ -172,21 +179,31 @@ export const LocalComputeLive = Layer.effect(
               mode: 0o600,
             }),
           catch: (cause) =>
-            new UserError({ message: `local: could not write run.env: ${String(cause)}` }),
+            new UserError({
+              message: `local: could not write run.env: ${String(cause)}`,
+            }),
         })
 
         if (local.composeContent !== undefined) {
           yield* Effect.try({
-            try: () => writeFileSync(resolve(dir, "compose.yml"), local.composeContent!),
+            try: () =>
+              writeFileSync(resolve(dir, "compose.yml"), local.composeContent!),
             catch: (cause) =>
-              new UserError({ message: `local: could not write compose.yml: ${String(cause)}` }),
+              new UserError({
+                message: `local: could not write compose.yml: ${String(cause)}`,
+              }),
           })
         }
 
         // Cross the agent image into the Run's inner daemon via save → (load in
         // bootstrap). The tar lands on the bind-mounted scratch dir.
         yield* sub
-          .run("docker", ["save", "-o", resolve(dir, "agent-image.tar"), plan.image])
+          .run("docker", [
+            "save",
+            "-o",
+            resolve(dir, "agent-image.tar"),
+            plan.image,
+          ])
           .pipe(Effect.mapError(toUserError("docker save")))
 
         const name = `afk-${plan.runId.slice(0, 8)}`
@@ -317,7 +334,14 @@ export const LocalComputeLive = Layer.effect(
           `else docker exec -it ${service} bash 2>/dev/null || docker exec -it ${service} sh; fi`
 
         yield* sub
-          .runInteractive("docker", ["exec", "-it", container, "sh", "-lc", inner])
+          .runInteractive("docker", [
+            "exec",
+            "-it",
+            container,
+            "sh",
+            "-lc",
+            inner,
+          ])
           .pipe(Effect.mapError(toUserError("docker exec")))
       })
 

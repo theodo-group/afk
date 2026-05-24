@@ -9,8 +9,7 @@ export const config = Command.make("config", {}, () =>
     const out = yield* Output
     const resolved = yield* cfg.load
     const c = resolved.config
-    const awsCached =
-      c.aws?.cachedImages ?? c.golden?.cachedImages ?? []
+    const awsCached = c.aws?.cachedImages ?? c.golden?.cachedImages ?? []
     yield* out.emit({
       data: resolved,
       human: () =>
@@ -27,8 +26,11 @@ export const config = Command.make("config", {}, () =>
             `  region            ${c.aws?.region ?? "(unset)"}`,
             `  default instance  ${c.aws?.defaultInstanceType ?? c.defaultInstanceType ?? "(unset)"}`,
             `  allowed instances ${
-              (c.aws?.allowedInstanceTypes ?? c.allowedInstanceTypes ?? []).join(", ") ||
-              "(unrestricted)"
+              (
+                c.aws?.allowedInstanceTypes ??
+                c.allowedInstanceTypes ??
+                []
+              ).join(", ") || "(unrestricted)"
             }`,
             `  cached images     ${awsCached.join(", ") || "(none)"}`,
             ``,

@@ -32,4 +32,5 @@ export const historyFile = (): string => resolve(afkHome(), "history.jsonl")
 
 export const runsDir = (): string => resolve(afkHome(), "runs")
 export const runDir = (runId: string): string => resolve(runsDir(), runId)
-export const runLogsDir = (runId: string): string => resolve(runDir(runId), "logs")
+export const runLogsDir = (runId: string): string =>
+  resolve(runDir(runId), "logs")

@@ -2,11 +2,12 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
 
-const awsError = (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-  new AwsError({
-    operation: op,
-    message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-  })
+const awsError =
+  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
+    new AwsError({
+      operation: op,
+      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
+    })
 
 export interface IamUser {
   readonly userName: string
@@ -22,9 +23,7 @@ export interface AccessKey {
 export class Iam extends Context.Tag("Iam")<
   Iam,
   {
-    readonly createUser: (
-      userName: string,
-    ) => Effect.Effect<IamUser, AwsError>
+    readonly createUser: (userName: string) => Effect.Effect<IamUser, AwsError>
     readonly deleteUser: (userName: string) => Effect.Effect<void, AwsError>
     readonly attachUserPolicy: (
       userName: string,
@@ -53,7 +52,10 @@ export class Iam extends Context.Tag("Iam")<
     ) => Effect.Effect<void, AwsError>
     readonly getRole: (
       roleName: string,
-    ) => Effect.Effect<{ readonly arn: string; readonly assumeRolePolicy: unknown }, AwsError>
+    ) => Effect.Effect<
+      { readonly arn: string; readonly assumeRolePolicy: unknown },
+      AwsError
+    >
     readonly updateAssumeRolePolicy: (
       roleName: string,
       policy: unknown,
@@ -72,19 +74,18 @@ export const IamLive = Layer.effect(
     return Iam.of({
       createUser: (userName) =>
         sub
-          .runJson<{ User: { UserName: string; Arn: string; CreateDate: string } }>(
-            "aws",
-            [
-              "iam",
-              "create-user",
-              "--user-name",
-              userName,
-              "--path",
-              "/afk/",
-              "--output",
-              "json",
-            ],
-          )
+          .runJson<{
+            User: { UserName: string; Arn: string; CreateDate: string }
+          }>("aws", [
+            "iam",
+            "create-user",
+            "--user-name",
+            userName,
+            "--path",
+            "/afk/",
+            "--output",
+            "json",
+          ])
           .pipe(
             Effect.map((r) => ({
               userName: r.User.UserName,

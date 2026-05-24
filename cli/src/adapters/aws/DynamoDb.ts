@@ -50,11 +50,12 @@ export interface ScanInput {
   readonly limit?: number
 }
 
-const awsError = (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-  new AwsError({
-    operation: op,
-    message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-  })
+const awsError =
+  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
+    new AwsError({
+      operation: op,
+      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
+    })
 
 export class DynamoDb extends Context.Tag("DynamoDb")<
   DynamoDb,
@@ -148,15 +149,14 @@ export const DynamoDbLive = Layer.effect(
             JSON.stringify(input.expressionAttributeNames),
           )
         }
-        if (input.scanIndexForward === false) args.push("--no-scan-index-forward")
+        if (input.scanIndexForward === false)
+          args.push("--no-scan-index-forward")
         if (input.limit !== undefined) args.push("--limit", String(input.limit))
         args.push("--output", "json")
-        return sub
-          .runJson<{ Items: ReadonlyArray<Item> }>("aws", args)
-          .pipe(
-            Effect.map((r) => r.Items ?? []),
-            Effect.mapError(awsError("dynamodb:Query")),
-          )
+        return sub.runJson<{ Items: ReadonlyArray<Item> }>("aws", args).pipe(
+          Effect.map((r) => r.Items ?? []),
+          Effect.mapError(awsError("dynamodb:Query")),
+        )
       },
 
       scan: (input) => {
@@ -185,12 +185,10 @@ export const DynamoDbLive = Layer.effect(
         }
         if (input.limit !== undefined) args.push("--limit", String(input.limit))
         args.push("--output", "json")
-        return sub
-          .runJson<{ Items: ReadonlyArray<Item> }>("aws", args)
-          .pipe(
-            Effect.map((r) => r.Items ?? []),
-            Effect.mapError(awsError("dynamodb:Scan")),
-          )
+        return sub.runJson<{ Items: ReadonlyArray<Item> }>("aws", args).pipe(
+          Effect.map((r) => r.Items ?? []),
+          Effect.mapError(awsError("dynamodb:Scan")),
+        )
       },
     })
   }),
@@ -213,4 +211,6 @@ export const readN = (item: Item, k: string): number | undefined => {
   return undefined
 }
 export const readB = (item: Item, k: string): boolean | undefined =>
-  item[k] && "BOOL" in item[k]! ? (item[k] as { BOOL: boolean }).BOOL : undefined
+  item[k] && "BOOL" in item[k]!
+    ? (item[k] as { BOOL: boolean }).BOOL
+    : undefined

@@ -47,9 +47,7 @@ describe("planCloudflareRun", () => {
       const { prepared } = result.right
       expect(prepared.runId).toBe("11111111-2222-3333-4444-555555555555")
       expect(prepared.owner).toBe("client-abc")
-      expect(prepared.image).toBe(
-        "registry.cloudflare.com/acct/widget:abc123",
-      )
+      expect(prepared.image).toBe("registry.cloudflare.com/acct/widget:abc123")
       expect(prepared.logChannel).toBe(
         "Workers Logs (runId=11111111-2222-3333-4444-555555555555)",
       )

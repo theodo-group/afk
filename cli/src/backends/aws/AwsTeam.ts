@@ -138,9 +138,7 @@ export const AwsTeamLive = Layer.effect(
         }
         if (match.kind === "iam-user") {
           const keys = yield* iam.listAccessKeys(match.name)
-          yield* Effect.forEach(keys, (k) =>
-            iam.deleteAccessKey(match.name, k),
-          )
+          yield* Effect.forEach(keys, (k) => iam.deleteAccessKey(match.name, k))
           yield* iam
             .detachUserPolicy(match.name, policyArn)
             .pipe(Effect.catchAll(() => Effect.void))

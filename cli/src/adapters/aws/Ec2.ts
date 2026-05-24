@@ -45,7 +45,10 @@ export interface Ec2Image {
 
 export interface DescribeInstancesInput {
   readonly region: string
-  readonly tagFilters?: ReadonlyArray<{ key: string; values: ReadonlyArray<string> }>
+  readonly tagFilters?: ReadonlyArray<{
+    key: string
+    values: ReadonlyArray<string>
+  }>
   readonly instanceIds?: ReadonlyArray<string>
   readonly states?: ReadonlyArray<string>
 }
@@ -53,7 +56,10 @@ export interface DescribeInstancesInput {
 export interface DescribeImagesInput {
   readonly region: string
   readonly owners?: ReadonlyArray<string>
-  readonly tagFilters?: ReadonlyArray<{ key: string; values: ReadonlyArray<string> }>
+  readonly tagFilters?: ReadonlyArray<{
+    key: string
+    values: ReadonlyArray<string>
+  }>
   readonly imageIds?: ReadonlyArray<string>
 }
 
@@ -72,23 +78,34 @@ export interface GetParameterInput {
   readonly name: string
 }
 
-const awsError = (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-  new AwsError({
-    operation: op,
-    message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-  })
+const awsError =
+  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
+    new AwsError({
+      operation: op,
+      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
+    })
 
-const parseTags = (raw: ReadonlyArray<{ Key?: string; Value?: string }> | undefined): Tag[] =>
+const parseTags = (
+  raw: ReadonlyArray<{ Key?: string; Value?: string }> | undefined,
+): Tag[] =>
   (raw ?? [])
-    .filter((t): t is { Key: string; Value: string } => !!t.Key && t.Value !== undefined)
+    .filter(
+      (t): t is { Key: string; Value: string } =>
+        !!t.Key && t.Value !== undefined,
+    )
     .map((t) => ({ key: t.Key, value: t.Value }))
 
 const tagsCli = (tags: ReadonlyArray<Tag>): string =>
   tags.map((t) => `Key=${t.key},Value=${t.value}`).join(" ")
 
-const filterArg = (filters: ReadonlyArray<{ name: string; values: ReadonlyArray<string> }>): string[] => {
+const filterArg = (
+  filters: ReadonlyArray<{ name: string; values: ReadonlyArray<string> }>,
+): string[] => {
   if (filters.length === 0) return []
-  return ["--filters", ...filters.map((f) => `Name=${f.name},Values=${f.values.join(",")}`)]
+  return [
+    "--filters",
+    ...filters.map((f) => `Name=${f.name},Values=${f.values.join(",")}`),
+  ]
 }
 
 export class Ec2 extends Context.Tag("Ec2")<
@@ -200,19 +217,26 @@ export const Ec2Live = Layer.effect(
           Effect.mapError(awsError("ec2:DescribeSubnets")),
         )
 
-    const findSecurityGroupIdByName = (region: string, vpcId: string, sgName: string) =>
+    const findSecurityGroupIdByName = (
+      region: string,
+      vpcId: string,
+      sgName: string,
+    ) =>
       sub
-        .runJson<{ SecurityGroups: ReadonlyArray<{ GroupId: string }> }>("aws", [
-          "ec2",
-          "describe-security-groups",
-          "--region",
-          region,
-          "--filters",
-          `Name=vpc-id,Values=${vpcId}`,
-          `Name=group-name,Values=${sgName}`,
-          "--output",
-          "json",
-        ])
+        .runJson<{ SecurityGroups: ReadonlyArray<{ GroupId: string }> }>(
+          "aws",
+          [
+            "ec2",
+            "describe-security-groups",
+            "--region",
+            region,
+            "--filters",
+            `Name=vpc-id,Values=${vpcId}`,
+            `Name=group-name,Values=${sgName}`,
+            "--output",
+            "json",
+          ],
+        )
         .pipe(
           Effect.flatMap((r) => {
             const sg = r.SecurityGroups[0]
@@ -226,7 +250,9 @@ export const Ec2Live = Layer.effect(
             return Effect.succeed(sg.GroupId)
           }),
           Effect.mapError((e) =>
-            e instanceof AwsError ? e : awsError("ec2:DescribeSecurityGroups")(e),
+            e instanceof AwsError
+              ? e
+              : awsError("ec2:DescribeSecurityGroups")(e),
           ),
         )
 
@@ -293,12 +319,18 @@ export const Ec2Live = Layer.effect(
           "--instance-market-options",
           JSON.stringify({
             MarketType: "spot",
-            SpotOptions: { SpotInstanceType: "one-time", InstanceInterruptionBehavior: "terminate" },
+            SpotOptions: {
+              SpotInstanceType: "one-time",
+              InstanceInterruptionBehavior: "terminate",
+            },
           }),
         )
       }
       return sub
-        .runJson<{ Instances: ReadonlyArray<{ InstanceId: string }> }>("aws", args)
+        .runJson<{ Instances: ReadonlyArray<{ InstanceId: string }> }>(
+          "aws",
+          args,
+        )
         .pipe(
           Effect.flatMap((r) => {
             const inst = r.Instances[0]
@@ -374,7 +406,10 @@ export const Ec2Live = Layer.effect(
         )
     }
 
-    const terminateInstances = (region: string, instanceIds: ReadonlyArray<string>) =>
+    const terminateInstances = (
+      region: string,
+      instanceIds: ReadonlyArray<string>,
+    ) =>
       instanceIds.length === 0
         ? Effect.void
         : sub
@@ -414,7 +449,12 @@ export const Ec2Live = Layer.effect(
         )
 
     const describeImages = (input: DescribeImagesInput) => {
-      const args: string[] = ["ec2", "describe-images", "--region", input.region]
+      const args: string[] = [
+        "ec2",
+        "describe-images",
+        "--region",
+        input.region,
+      ]
       if (input.owners && input.owners.length > 0) {
         args.push("--owners", ...input.owners)
       }
@@ -484,12 +524,10 @@ export const Ec2Live = Layer.effect(
       ]
       if (input.description) args.push("--description", input.description)
       if (input.noReboot) args.push("--no-reboot")
-      return sub
-        .runJson<{ ImageId: string }>("aws", args)
-        .pipe(
-          Effect.map((r) => ({ imageId: r.ImageId })),
-          Effect.mapError(awsError("ec2:CreateImage")),
-        )
+      return sub.runJson<{ ImageId: string }>("aws", args).pipe(
+        Effect.map((r) => ({ imageId: r.ImageId })),
+        Effect.mapError(awsError("ec2:CreateImage")),
+      )
     }
 
     const waitForImage = (region: string, imageId: string) =>
@@ -520,10 +558,7 @@ export const Ec2Live = Layer.effect(
           "--output",
           "json",
         ])
-        .pipe(
-          Effect.asVoid,
-          Effect.mapError(awsError("ec2:DeregisterImage")),
-        )
+        .pipe(Effect.asVoid, Effect.mapError(awsError("ec2:DeregisterImage")))
 
     const deleteSnapshot = (region: string, snapshotId: string) =>
       sub

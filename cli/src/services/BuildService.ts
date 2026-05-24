@@ -49,7 +49,12 @@ export class BuildService extends Context.Tag("BuildService")<
       readonly ref?: string
     }) => Effect.Effect<
       BuildOutput,
-      UserError | AwsError | CloudflareError | DockerError | GitError | ConfigError
+      | UserError
+      | AwsError
+      | CloudflareError
+      | DockerError
+      | GitError
+      | ConfigError
     >
   }
 >() {}
@@ -79,9 +84,10 @@ export const BuildServiceLive = Layer.effect(
             )
           }
           const branch = yield* git.currentBranch
-          const sha = yield* (ref
-            ? git.resolveRemoteRef(config.gitUrl, ref)
-            : git.resolveRemoteRef(config.gitUrl, branch)
+          const sha = yield* (
+            ref
+              ? git.resolveRemoteRef(config.gitUrl, ref)
+              : git.resolveRemoteRef(config.gitUrl, branch)
           ).pipe(
             Effect.mapError((e) => {
               if (

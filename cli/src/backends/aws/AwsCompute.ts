@@ -104,7 +104,8 @@ export const AwsComputeLive = Layer.effect(
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
         // Shell: gather the effectful inputs the core needs.
-        const { config, envEntries, projectRoot, sourceRepoName } = yield* cfg.load
+        const { config, envEntries, projectRoot, sourceRepoName } =
+          yield* cfg.load
         const identity = yield* sts.callerIdentity
         const latestGolden = yield* golden.findLatest
         if (!latestGolden) {
@@ -161,7 +162,8 @@ export const AwsComputeLive = Layer.effect(
           region: aws.region,
           imageId: aws.amiId,
           instanceType: aws.instanceType,
-          subnetId: aws.subnetIds[Math.floor(Math.random() * aws.subnetIds.length)]!,
+          subnetId:
+            aws.subnetIds[Math.floor(Math.random() * aws.subnetIds.length)]!,
           securityGroupIds: [aws.securityGroupId],
           iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
           userData: aws.userData,

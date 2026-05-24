@@ -28,5 +28,7 @@ export const readSecretFile = (gitUrl: string): SecretFile => {
 }
 
 /** Resolve a single secret value, or undefined if not stored. */
-export const readSecretValue = (gitUrl: string, name: string): string | undefined =>
-  readSecretFile(gitUrl)[name]?.value
+export const readSecretValue = (
+  gitUrl: string,
+  name: string,
+): string | undefined => readSecretFile(gitUrl)[name]?.value

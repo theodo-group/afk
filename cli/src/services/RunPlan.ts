@@ -51,7 +51,9 @@ export interface AssembleRunPlanInput {
  * keeps the `AFK_*` env contract and secret mapping testable through plain
  * assertions, identically across every Backend.
  */
-export const assembleRunPlan = (input: AssembleRunPlanInput): AssembledRunPlan => {
+export const assembleRunPlan = (
+  input: AssembleRunPlanInput,
+): AssembledRunPlan => {
   const { config, envEntries, built, ref, mainService, backend, runId } = input
 
   const timeoutHours =

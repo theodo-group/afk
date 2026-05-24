@@ -16,7 +16,10 @@ const stubEc2 = (
 describe("resolveAfkNetworkPlacement", () => {
   it("returns subnetIds and securityGroupId when subnets exist", async () => {
     const placement = await Effect.runPromise(
-      resolveAfkNetworkPlacement(stubEc2(["subnet-a", "subnet-b"]), "us-east-1"),
+      resolveAfkNetworkPlacement(
+        stubEc2(["subnet-a", "subnet-b"]),
+        "us-east-1",
+      ),
     )
     expect(placement).toEqual({
       subnetIds: ["subnet-a", "subnet-b"],

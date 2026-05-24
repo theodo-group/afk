@@ -110,9 +110,11 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
   }
 
   const mainImage = main.get("image")
-  const mainImageStr =
-    mainImage instanceof Scalar ? mainImage.value : mainImage
-  if (typeof mainImageStr !== "string" || !mainImageStr.includes(AFK_IMAGE_PLACEHOLDER)) {
+  const mainImageStr = mainImage instanceof Scalar ? mainImage.value : mainImage
+  if (
+    typeof mainImageStr !== "string" ||
+    !mainImageStr.includes(AFK_IMAGE_PLACEHOLDER)
+  ) {
     throw new UserError({
       message: `Main service '${input.mainService}' must use 'image: ${AFK_IMAGE_PLACEHOLDER}'.`,
       hint: "The CLI substitutes this with the registry URI of the wrapped agent image at submit time.",
@@ -139,7 +141,10 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
   }
   const command = main.get("command")
   const commandStr = command instanceof Scalar ? command.value : command
-  if (typeof commandStr !== "string" || !commandStr.includes("${AFK_COMMAND}")) {
+  if (
+    typeof commandStr !== "string" ||
+    !commandStr.includes("${AFK_COMMAND}")
+  ) {
     throw new UserError({
       message: `main service '${input.mainService}' does not declare 'command: \${AFK_COMMAND}'.`,
       hint: `Add: command: \${AFK_COMMAND} — otherwise the args you pass to 'afk run' are silently ignored in favour of any static command:, or the container runs with no command at all.`,
@@ -207,8 +212,10 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
  * resolved registry image; ${AFK_COMMAND} is left intact for shell-side
  * substitution in user_data.
  */
-export const substituteImage = (composeContent: string, imageUri: string): string =>
-  composeContent.split(AFK_IMAGE_PLACEHOLDER).join(imageUri)
+export const substituteImage = (
+  composeContent: string,
+  imageUri: string,
+): string => composeContent.split(AFK_IMAGE_PLACEHOLDER).join(imageUri)
 
 export interface AwsLoggingInput {
   readonly runId: string

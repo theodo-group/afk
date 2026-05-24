@@ -1,11 +1,19 @@
 import { Context, Effect } from "effect"
-import { AwsError, CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
+import {
+  AwsError,
+  CloudflareError,
+  ConfigError,
+  UserError,
+} from "../../infra/Errors.ts"
 import type { TeamMember } from "../../schema/TeamMember.ts"
 
 export interface AddMemberResult {
   readonly member: TeamMember
   /** AWS-only: a new IAM-user access key, shown once. */
-  readonly accessKey?: { readonly accessKeyId: string; readonly secretAccessKey: string }
+  readonly accessKey?: {
+    readonly accessKeyId: string
+    readonly secretAccessKey: string
+  }
   /** CF-only: a new Access service-token client credential, shown once. */
   readonly serviceToken?: {
     readonly clientId: string
@@ -27,13 +35,19 @@ export class Team extends Context.Tag("Team")<
     readonly add: (input: {
       readonly name: string
       readonly principal?: string
-    }) => Effect.Effect<AddMemberResult, AwsError | CloudflareError | UserError | ConfigError>
+    }) => Effect.Effect<
+      AddMemberResult,
+      AwsError | CloudflareError | UserError | ConfigError
+    >
     readonly ls: Effect.Effect<
       ReadonlyArray<TeamMember>,
       AwsError | CloudflareError | UserError | ConfigError
     >
     readonly rm: (
       name: string,
-    ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
+    ) => Effect.Effect<
+      void,
+      AwsError | CloudflareError | UserError | ConfigError
+    >
   }
 >() {}

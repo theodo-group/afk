@@ -36,7 +36,9 @@ describe("planAwsGolden", () => {
 
   it("falls back to legacy golden.cachedImages", () => {
     const plan = planAwsGolden({
-      config: config({ golden: { cachedImages: ["redis:7"] } as AfkConfig["golden"] }),
+      config: config({
+        golden: { cachedImages: ["redis:7"] } as AfkConfig["golden"],
+      }),
       builtAt,
     })
     expect(plan.cachedImages).toEqual(["redis:7"])
@@ -86,7 +88,9 @@ describe("planAwsGolden", () => {
 
   it("emits a pre-pull line per cached image and the done marker", () => {
     const plan = planAwsGolden({
-      config: config({ aws: { cachedImages: ["postgres:16"] } as AfkConfig["aws"] }),
+      config: config({
+        aws: { cachedImages: ["postgres:16"] } as AfkConfig["aws"],
+      }),
       builtAt,
     })
     expect(plan.script).toContain("docker pull postgres:16")

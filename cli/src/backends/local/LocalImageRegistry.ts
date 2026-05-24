@@ -22,7 +22,11 @@ export const LocalImageRegistryLive = Layer.effect(
 
       imageExists: (repoName, tag) =>
         sub
-          .run("docker", ["image", "inspect", `${LOCAL_REGISTRY}/${repoName}:${tag}`])
+          .run("docker", [
+            "image",
+            "inspect",
+            `${LOCAL_REGISTRY}/${repoName}:${tag}`,
+          ])
           .pipe(
             Effect.map(() => true),
             Effect.catchAll(() => Effect.succeed(false)),

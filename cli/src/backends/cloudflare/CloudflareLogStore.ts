@@ -35,7 +35,9 @@ export const CloudflareLogStoreLive = Layer.effect(
           if (!input.follow) {
             const body = yield* fetchOnce
             return yield* Effect.sync(() =>
-              process.stdout.write(body === "" ? "" : body.endsWith("\n") ? body : body + "\n"),
+              process.stdout.write(
+                body === "" ? "" : body.endsWith("\n") ? body : body + "\n",
+              ),
             )
           }
 

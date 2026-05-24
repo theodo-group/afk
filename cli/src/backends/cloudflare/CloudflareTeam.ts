@@ -24,7 +24,9 @@ export const CloudflareTeamLive = Layer.effect(
       }))
     })
 
-    const addCf = (name: string): Effect.Effect<
+    const addCf = (
+      name: string,
+    ): Effect.Effect<
       AddMemberResult,
       CloudflareError | UserError | ConfigError
     > =>
@@ -80,10 +82,14 @@ export const CloudflareTeamLive = Layer.effect(
             }),
           )
         }
-        yield* worker.del("DELETE /team/:name", `/team/${encodeURIComponent(name)}`, {
-          clientId: m.arn,
-          tokenId: m.arn,
-        })
+        yield* worker.del(
+          "DELETE /team/:name",
+          `/team/${encodeURIComponent(name)}`,
+          {
+            clientId: m.arn,
+            tokenId: m.arn,
+          },
+        )
       })
 
     return Team.of({

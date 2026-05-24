@@ -17,11 +17,12 @@ export interface CommandInvocation {
   readonly stderr: string
 }
 
-const awsError = (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-  new AwsError({
-    operation: op,
-    message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-  })
+const awsError =
+  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
+    new AwsError({
+      operation: op,
+      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
+    })
 
 export class Ssm extends Context.Tag("Ssm")<
   Ssm,
@@ -81,7 +82,8 @@ export class Ssm extends Context.Tag("Ssm")<
   }
 >() {}
 
-const sleep = (ms: number) => Effect.promise(() => new Promise((r) => setTimeout(r, ms)))
+const sleep = (ms: number) =>
+  Effect.promise(() => new Promise((r) => setTimeout(r, ms)))
 
 export const SsmLive = Layer.effect(
   Ssm,
@@ -149,7 +151,11 @@ export const SsmLive = Layer.effect(
               Effect.mapError(awsError("ssm:GetCommandInvocation")),
               // get-command-invocation 404s briefly after send-command; retry
               Effect.catchAll(() =>
-                Effect.succeed({ Status: "Pending", StandardOutputContent: "", StandardErrorContent: "" } as const),
+                Effect.succeed({
+                  Status: "Pending",
+                  StandardOutputContent: "",
+                  StandardErrorContent: "",
+                } as const),
               ),
             )
           if (
@@ -214,7 +220,10 @@ export const SsmLive = Layer.effect(
       listByPrefix: (region, prefix) =>
         sub
           .runJson<{
-            Parameters: ReadonlyArray<{ Name: string; LastModifiedDate?: string }>
+            Parameters: ReadonlyArray<{
+              Name: string
+              LastModifiedDate?: string
+            }>
           }>("aws", [
             "ssm",
             "describe-parameters",
@@ -254,7 +263,9 @@ export const SsmLive = Layer.effect(
             "--parameters",
             JSON.stringify({ command: [input.command] }),
           ])
-          .pipe(Effect.mapError(awsError("ssm:StartSession (interactive command)"))),
+          .pipe(
+            Effect.mapError(awsError("ssm:StartSession (interactive command)")),
+          ),
 
       startHostShell: (input) =>
         sub

@@ -1,5 +1,8 @@
 import { DateTime, Effect, Layer } from "effect"
-import { RunHistory, type HistoryRow } from "../../services/backend/RunHistory.ts"
+import {
+  RunHistory,
+  type HistoryRow,
+} from "../../services/backend/RunHistory.ts"
 import { CfWorker } from "./CfWorker.ts"
 
 /**
@@ -26,7 +29,10 @@ export const CloudflareRunHistoryLive = Layer.effect(
             const now = yield* DateTime.now
             const seconds = Math.max(
               1,
-              Math.round((DateTime.toEpochMillis(now) - DateTime.toEpochMillis(since)) / 1000),
+              Math.round(
+                (DateTime.toEpochMillis(now) - DateTime.toEpochMillis(since)) /
+                  1000,
+              ),
             )
             params.set("since", `${seconds}s`)
           }
@@ -55,7 +61,10 @@ export const CloudflareRunHistoryLive = Layer.effect(
             let backendDetails: Record<string, string> | undefined
             if (r.backend_details) {
               try {
-                const parsed = JSON.parse(r.backend_details) as Record<string, unknown>
+                const parsed = JSON.parse(r.backend_details) as Record<
+                  string,
+                  unknown
+                >
                 backendDetails = Object.fromEntries(
                   Object.entries(parsed).map(([k, v]) => [k, String(v)]),
                 )
@@ -73,7 +82,9 @@ export const CloudflareRunHistoryLive = Layer.effect(
               resourceId: r.resource_id ?? "",
               status: r.status === "RUNNING" ? "RUNNING" : "STOPPED",
               startedAt: r.started_at,
-              ...(r.stopped_at !== undefined ? { stoppedAt: r.stopped_at } : {}),
+              ...(r.stopped_at !== undefined
+                ? { stoppedAt: r.stopped_at }
+                : {}),
               ...(r.exit_code !== undefined ? { exitCode: r.exit_code } : {}),
               timeoutHours: r.timeout_hours,
               ...(backendDetails !== undefined ? { backendDetails } : {}),

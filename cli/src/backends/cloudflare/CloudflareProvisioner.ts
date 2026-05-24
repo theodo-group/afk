@@ -62,17 +62,15 @@ export const CloudflareProvisionerLive = Layer.effect(
       // wrangler reads CLOUDFLARE_API_TOKEN from the env (already loaded) and the
       // config from cwd; run everything from the worker dir.
       const wrangler = (args: ReadonlyArray<string>, stdin?: string) =>
-        sub
-          .run("wrangler", args, { cwd: workerDir, stdin })
-          .pipe(
-            Effect.mapError(
-              (e) =>
-                new CloudflareError({
-                  operation: `wrangler ${args[0]}`,
-                  message: e.stderr || e.stdout || String(e),
-                }),
-            ),
-          )
+        sub.run("wrangler", args, { cwd: workerDir, stdin }).pipe(
+          Effect.mapError(
+            (e) =>
+              new CloudflareError({
+                operation: `wrangler ${args[0]}`,
+                message: e.stderr || e.stdout || String(e),
+              }),
+          ),
+        )
 
       // Idempotently ensure one wrangler resource (D1 db / KV namespace):
       // list → reuse the existing match, else create it. Returns its id and
@@ -87,7 +85,9 @@ export const CloudflareProvisionerLive = Layer.effect(
         readonly idRegex: RegExp
         readonly parseOperation: string
         readonly parseMessage: (stdout: string) => string
-        readonly tomlPatch: (id: string) => Parameters<typeof patchWranglerToml>[1]
+        readonly tomlPatch: (
+          id: string,
+        ) => Parameters<typeof patchWranglerToml>[1]
       }) =>
         Effect.gen(function* () {
           const listed = yield* wrangler(input.listArgs)
@@ -119,17 +119,15 @@ export const CloudflareProvisionerLive = Layer.effect(
         })
 
       yield* out.print("• installing Worker dependencies (npm install)…")
-      yield* sub
-        .run("npm", ["install"], { cwd: workerDir })
-        .pipe(
-          Effect.mapError(
-            (e) =>
-              new CloudflareError({
-                operation: "npm install",
-                message: e.stderr || String(e),
-              }),
-          ),
-        )
+      yield* sub.run("npm", ["install"], { cwd: workerDir }).pipe(
+        Effect.mapError(
+          (e) =>
+            new CloudflareError({
+              operation: "npm install",
+              message: e.stderr || String(e),
+            }),
+        ),
+      )
 
       yield* out.print("• ensuring D1 database…")
       const databaseId = yield* ensureResource<{
@@ -144,7 +142,8 @@ export const CloudflareProvisionerLive = Layer.effect(
         createArgs: ["d1", "create", D1_NAME],
         idRegex: /database_id = "([^"]+)"/,
         parseOperation: "d1 create",
-        parseMessage: (stdout) => `could not parse database_id from:\n${stdout}`,
+        parseMessage: (stdout) =>
+          `could not parse database_id from:\n${stdout}`,
         tomlPatch: (databaseId) => ({ databaseId }),
       })
 
@@ -164,7 +163,8 @@ export const CloudflareProvisionerLive = Layer.effect(
         createArgs: ["kv", "namespace", "create", KV_TITLE],
         idRegex: /id = "([^"]+)"/,
         parseOperation: "kv create",
-        parseMessage: (stdout) => `could not parse namespace id from:\n${stdout}`,
+        parseMessage: (stdout) =>
+          `could not parse namespace id from:\n${stdout}`,
         tomlPatch: (kvId) => ({ kvId }),
       })
 
@@ -180,7 +180,10 @@ export const CloudflareProvisionerLive = Layer.effect(
 
       yield* out.print("• deploying launcher Worker…")
       const deployed = yield* wrangler(["deploy"])
-      const url = firstMatch(deployed.stdout, /(https:\/\/[^\s]+\.workers\.dev)/)
+      const url = firstMatch(
+        deployed.stdout,
+        /(https:\/\/[^\s]+\.workers\.dev)/,
+      )
       if (!url) {
         return yield* Effect.fail(
           new CloudflareError({

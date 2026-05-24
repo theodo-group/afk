@@ -182,8 +182,14 @@ export const planAwsRun = (
   if (assembled.composeError) {
     return Either.left(new UserError({ message: assembled.composeError }))
   }
-  const { timeoutHours, timeoutSeconds, env, secrets, composeContent, composeUsed } =
-    assembled
+  const {
+    timeoutHours,
+    timeoutSeconds,
+    env,
+    secrets,
+    composeContent,
+    composeUsed,
+  } = assembled
 
   const logGroup = `${LOG_GROUP_PREFIX}/${i.sourceRepoName}`
 

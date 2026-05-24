@@ -2,18 +2,17 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
 
-const awsError = (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-  new AwsError({
-    operation: op,
-    message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-  })
+const awsError =
+  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
+    new AwsError({
+      operation: op,
+      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
+    })
 
 export class Ecr extends Context.Tag("Ecr")<
   Ecr,
   {
-    readonly registryUri: (
-      region: string,
-    ) => Effect.Effect<string, AwsError>
+    readonly registryUri: (region: string) => Effect.Effect<string, AwsError>
     readonly ensureRepository: (
       region: string,
       repoName: string,
@@ -57,27 +56,24 @@ export const EcrLive = Layer.effect(
             "json",
           ])
           .pipe(
-            Effect.map(
-              (r) => `${r.Account}.dkr.ecr.${region}.amazonaws.com`,
-            ),
+            Effect.map((r) => `${r.Account}.dkr.ecr.${region}.amazonaws.com`),
             Effect.mapError(awsError("sts:GetCallerIdentity")),
           ),
       ensureRepository: (region, repoName, lifecycleDays) =>
         Effect.gen(function* () {
           const exists = yield* sub
-            .runJson<{ repositories: ReadonlyArray<{ repositoryName: string }> }>(
-              "aws",
-              [
-                "ecr",
-                "describe-repositories",
-                "--region",
-                region,
-                "--repository-names",
-                repoName,
-                "--output",
-                "json",
-              ],
-            )
+            .runJson<{
+              repositories: ReadonlyArray<{ repositoryName: string }>
+            }>("aws", [
+              "ecr",
+              "describe-repositories",
+              "--region",
+              region,
+              "--repository-names",
+              repoName,
+              "--output",
+              "json",
+            ])
             .pipe(
               Effect.map(() => true),
               Effect.catchAll(() => Effect.succeed(false)),
@@ -169,23 +165,25 @@ export const EcrLive = Layer.effect(
           .pipe(
             Effect.map((r) =>
               (r.imageDetails ?? [])
-                .filter((d) => (d.imageTags ?? []).some((t) => t.startsWith(tagPrefix)))
+                .filter((d) =>
+                  (d.imageTags ?? []).some((t) => t.startsWith(tagPrefix)),
+                )
                 .sort((a, b) =>
                   (b.imagePushedAt ?? "").localeCompare(a.imagePushedAt ?? ""),
                 )
-                .flatMap((d) => (d.imageTags ?? []).filter((t) => t.startsWith(tagPrefix)))
+                .flatMap((d) =>
+                  (d.imageTags ?? []).filter((t) => t.startsWith(tagPrefix)),
+                )
                 .slice(0, limit),
             ),
             // Repo may not exist yet on first build; that's fine.
             Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<string>)),
           ),
       getLoginPassword: (region) =>
-        sub
-          .run("aws", ["ecr", "get-login-password", "--region", region])
-          .pipe(
-            Effect.map((r) => r.stdout.trim()),
-            Effect.mapError(awsError("ecr:GetAuthorizationToken")),
-          ),
+        sub.run("aws", ["ecr", "get-login-password", "--region", region]).pipe(
+          Effect.map((r) => r.stdout.trim()),
+          Effect.mapError(awsError("ecr:GetAuthorizationToken")),
+        ),
       deleteRepository: (region, repoName) =>
         sub
           .run("aws", [
