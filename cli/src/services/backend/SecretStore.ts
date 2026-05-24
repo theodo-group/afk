@@ -27,11 +27,5 @@ export class SecretStore extends Context.Tag("SecretStore")<
       ReadonlyArray<Secret>,
       AwsError | CloudflareError | ConfigError | UserError
     >
-
-    /**
-     * Build a `.afk.env`-style reference string for a given secret name.
-     * Canonical form is `secret:<name>` across all Backends.
-     */
-    readonly referenceFor: (name: string) => string
   }
 >() {}
