@@ -1,5 +1,6 @@
 import { Effect, Layer, Schedule, Duration } from "effect"
 import { Ec2 } from "../../adapters/aws/Ec2.ts"
+import { resolveAfkNetworkPlacement } from "./AwsNetworkPlacement.ts"
 import { Ssm } from "../../adapters/aws/Ssm.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import {
@@ -7,11 +8,9 @@ import {
   type GoldenImage,
 } from "../../services/backend/GoldenImage.ts"
 import { goldenVersionHash } from "../../services/GoldenImageVersion.ts"
-import { AwsError, UserError } from "../../infra/Errors.ts"
+import { AwsError } from "../../infra/Errors.ts"
 import {
-  AFK_SECURITY_GROUP,
   AFK_VM_INSTANCE_PROFILE,
-  AFK_VPC_NAME,
   DEFAULT_REGION,
   TAG_GOLDEN,
   TAG_GOLDEN_BUILT_AT,
@@ -110,17 +109,10 @@ export const AwsGoldenImageLive = Layer.effect(
       // Prefer `aws.cachedImages` (canonical); fall back to legacy `golden.cachedImages`.
       const cachedImages = config.aws?.cachedImages ?? config.golden?.cachedImages ?? []
 
-      const vpcId = yield* ec2.findVpcIdByName(region, AFK_VPC_NAME)
-      const subnetIds = yield* ec2.findSubnetIdsByVpcId(region, vpcId)
-      if (subnetIds.length === 0) {
-        return yield* Effect.fail(
-          new UserError({
-            message: `No subnets found in VPC '${AFK_VPC_NAME}'.`,
-            hint: "Apply the AFK Terraform first.",
-          }),
-        )
-      }
-      const sgId = yield* ec2.findSecurityGroupIdByName(region, vpcId, AFK_SECURITY_GROUP)
+      const { subnetIds, securityGroupId } = yield* resolveAfkNetworkPlacement(
+        ec2,
+        region,
+      )
       const baseAmi = yield* ec2.findLatestAmazonLinuxAmi(region)
       const version = goldenVersionHash(cachedImages)
       const builtAt = new Date().toISOString()
@@ -140,7 +132,7 @@ export const AwsGoldenImageLive = Layer.effect(
         imageId: baseAmi,
         instanceType: "t3.medium",
         subnetId: subnetIds[0]!,
-        securityGroupIds: [sgId],
+        securityGroupIds: [securityGroupId],
         iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
         userData: builderUserData,
         spot: false,

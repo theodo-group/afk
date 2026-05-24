@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { Ec2, type Tag as Ec2Tag } from "../../adapters/aws/Ec2.ts"
+import { resolveAfkNetworkPlacement } from "./AwsNetworkPlacement.ts"
 import { Sts } from "../../adapters/aws/Sts.ts"
 import { Ssm } from "../../adapters/aws/Ssm.ts"
 import { Logs } from "../../adapters/aws/Logs.ts"
@@ -22,9 +23,7 @@ import {
   UserError,
 } from "../../infra/Errors.ts"
 import {
-  AFK_SECURITY_GROUP,
   AFK_VM_INSTANCE_PROFILE,
-  AFK_VPC_NAME,
   COMPOSE_FILE,
   DEFAULT_INSTANCE_TYPE,
   DEFAULT_MAIN_SERVICE,
@@ -253,20 +252,9 @@ export const AwsComputeLive = Layer.effect(
         const logGroup = `${LOG_GROUP_PREFIX}/${sourceRepoName}`
         yield* logs.ensureLogGroup(region, logGroup, LOG_RETENTION_DAYS)
 
-        const vpcId = yield* ec2.findVpcIdByName(region, AFK_VPC_NAME)
-        const subnetIds = yield* ec2.findSubnetIdsByVpcId(region, vpcId)
-        if (subnetIds.length === 0) {
-          return yield* Effect.fail(
-            new UserError({
-              message: `No subnets found in VPC '${AFK_VPC_NAME}'.`,
-              hint: "Apply the AFK Terraform first.",
-            }),
-          )
-        }
-        const sgId = yield* ec2.findSecurityGroupIdByName(
+        const { subnetIds, securityGroupId } = yield* resolveAfkNetworkPlacement(
+          ec2,
           region,
-          vpcId,
-          AFK_SECURITY_GROUP,
         )
 
         const userData = buildUserData({
@@ -312,7 +300,7 @@ export const AwsComputeLive = Layer.effect(
           instanceType,
           spot,
           subnetIds,
-          securityGroupId: sgId,
+          securityGroupId,
           tags,
           userData,
           imageWasSkipped: built.skipped,
