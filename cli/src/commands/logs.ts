@@ -3,12 +3,16 @@ import { Effect } from "effect"
 import { RunService } from "../services/RunService.ts"
 import { LogStore } from "../services/backend/LogStore.ts"
 import { ConfigService } from "../services/ConfigService.ts"
+import { DEFAULT_MAIN_SERVICE } from "../constants.ts"
 
 const runId = Args.text({ name: "run-id" })
 const follow = Options.boolean("follow", { aliases: ["f"] })
 const service = Options.text("service").pipe(
   Options.optional,
-  Options.withDescription("filter to one compose service's logs"),
+  Options.withDescription("show one named service instead of the main service"),
+)
+const all = Options.boolean("all").pipe(
+  Options.withDescription("show every service, not just the main service"),
 )
 const since = Options.text("since").pipe(
   Options.withDefault("30d"),
@@ -17,8 +21,8 @@ const since = Options.text("since").pipe(
 
 export const logs = Command.make(
   "logs",
-  { runId, follow, service, since },
-  ({ runId, follow, service, since }) =>
+  { runId, follow, service, all, since },
+  ({ runId, follow, service, all, since }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       // LogStore is the active backend's tailer, not a fixed provider adapter.
@@ -27,12 +31,22 @@ export const logs = Command.make(
 
       yield* runs.findByRunId(runId)
 
-      const { sourceRepoName } = yield* cfg.load
+      const { config, sourceRepoName } = yield* cfg.load
+
+      // Scope is resolved here, not in the backends: default to the main
+      // service, --service narrows to one, --all widens to every service (no
+      // filter). LogStore only knows "this service, or none = all".
+      const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
+      const serviceFilter = all
+        ? undefined
+        : service._tag === "Some"
+          ? service.value
+          : mainService
 
       yield* logStore.tail({
         runId,
         repoName: sourceRepoName,
-        ...(service._tag === "Some" ? { serviceFilter: service.value } : {}),
+        ...(serviceFilter !== undefined ? { serviceFilter } : {}),
         follow,
         since,
       })
