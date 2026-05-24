@@ -17,10 +17,7 @@ export class Output extends Context.Tag("Output")<
       rows: ReadonlyArray<T>,
       columns: ReadonlyArray<Column<T>>,
     ) => Effect.Effect<void>
-    /**
-     * Print human-formatted output (table or text) only when in `table` mode;
-     * print the structured payload as JSON when in `json` mode.
-     */
+    /** json mode ignores the human formatter entirely. */
     readonly emit: <T>(opts: {
       readonly data: T
       readonly human: (data: T) => Effect.Effect<void>

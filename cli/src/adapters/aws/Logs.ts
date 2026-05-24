@@ -132,7 +132,7 @@ export const LogsLive = Layer.effect(
           ),
       tail: (input) =>
         sub
-          .runInteractive("aws", [
+          .stream("aws", [
             "logs",
             "tail",
             input.group,

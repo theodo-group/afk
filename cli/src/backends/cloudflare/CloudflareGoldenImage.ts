@@ -1,84 +1,28 @@
-import { Context, Effect, Layer } from "effect"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { Effect, Layer } from "effect"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { Docker } from "../adapters/Docker.ts"
-import { Subprocess } from "../infra/Subprocess.ts"
-import { ConfigService } from "./ConfigService.ts"
-import { ImageRegistry } from "./backend/ImageRegistry.ts"
+import { Docker } from "../../adapters/Docker.ts"
+import { Subprocess } from "../../infra/Subprocess.ts"
+import { ConfigService } from "../../services/ConfigService.ts"
+import { ImageRegistry } from "../../services/backend/ImageRegistry.ts"
 import {
-  AwsError,
-  CloudflareError,
-  ConfigError,
-  DockerError,
-  UserError,
-} from "../infra/Errors.ts"
+  GoldenImageStore,
+  type GoldenImage,
+} from "../../services/backend/GoldenImage.ts"
+import { goldenVersionHash } from "../../services/GoldenImageVersion.ts"
+import { patchWranglerToml } from "../../infra/CfToml.ts"
+import { CloudflareError, UserError } from "../../infra/Errors.ts"
 
 const CF_REGISTRY_HOST = "registry.cloudflare.com"
 const GOLDEN_REPO = "afk-golden"
 
-export interface CloudflareGoldenImage {
-  readonly tag: string
-  readonly imageUri: string
-  readonly version: string
-  readonly builtAt: string
-  readonly cachedImages: ReadonlyArray<string>
-}
-
-export interface CloudflareGoldenBuildOutput {
-  readonly tag: string
-  readonly imageUri: string
-  readonly version: string
-  readonly builtAt: string
-  readonly cachedImages: ReadonlyArray<string>
-}
-
-/**
- * Cloudflare equivalent of the AWS Golden AMI builder. Produces a container
- * image based on `docker:28-dind-rootless` with the configured
- * `cloudflare.cachedImages` skopeo-baked into `/var/afk/cache/*.tar`, plus a
- * boot-time entrypoint that loads them into the rootless Docker daemon's data
- * dir before exec-ing the container's own command.
- *
- * Tagged as `registry.cloudflare.com/<accountId>/afk-golden:<versionHash>` and
- * pushed to Cloudflare's managed Container registry.
- */
-export class CloudflareGoldenBuilder extends Context.Tag(
-  "CloudflareGoldenBuilder",
-)<
-  CloudflareGoldenBuilder,
-  {
-    readonly build: Effect.Effect<
-      CloudflareGoldenBuildOutput,
-      CloudflareError | UserError | ConfigError | DockerError | AwsError
-    >
-    readonly list: Effect.Effect<
-      ReadonlyArray<CloudflareGoldenImage>,
-      CloudflareError | UserError | ConfigError
-    >
-    readonly remove: (
-      tag: string,
-    ) => Effect.Effect<void, CloudflareError | UserError | ConfigError>
-    readonly findLatest: Effect.Effect<
-      CloudflareGoldenImage | null,
-      CloudflareError | UserError | ConfigError
-    >
-  }
->() {}
-
-/** Stable short version hash from a sorted list of cached image refs. */
-const versionHash = (cachedImages: ReadonlyArray<string>): string => {
-  const sorted = [...cachedImages].sort()
-  const joined = sorted.join(",")
-  let h = 0
-  for (let i = 0; i < joined.length; i++) {
-    h = ((h << 5) - h + joined.charCodeAt(i)) | 0
-  }
-  return `v1-${sorted.length}-${(h >>> 0).toString(16).padStart(8, "0")}`
-}
-
 /** Sanitize an image ref into a filename-safe token for the OCI archive name. */
 const safeName = (imageRef: string): string =>
   imageRef.replace(/[^a-zA-Z0-9._-]+/g, "_")
+
+/** Extract the registry tag from a full golden image id (or accept a bare tag). */
+const tagOf = (id: string): string =>
+  id.includes(":") ? id.slice(id.lastIndexOf(":") + 1) : id
 
 const ENTRYPOINT_SCRIPT = `#!/bin/sh
 # afk golden entrypoint — loads skopeo-baked OCI archives into rootless dockerd
@@ -221,8 +165,19 @@ const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
   return lines.join("\n")
 }
 
-export const CloudflareGoldenBuilderLive = Layer.effect(
-  CloudflareGoldenBuilder,
+/**
+ * Cloudflare implementation of the Golden Image store. The artifact is a
+ * `docker:28-dind-rootless` container image with the configured
+ * `cloudflare.cachedImages` skopeo-baked into `/var/afk/cache/*.tar`, pushed to
+ * the CF managed registry as `registry.cloudflare.com/<accountId>/afk-golden:<version>`.
+ *
+ * `build` patches the freshly-built image URI into `worker/afk/wrangler.toml`'s
+ * `[[containers]]` block so `afk provision` / `wrangler deploy` boots from it —
+ * the patch is part of "build a golden a Run can boot from", so it lives here
+ * rather than leaking back into the `afk golden build` command.
+ */
+export const CloudflareGoldenImageLive = Layer.effect(
+  GoldenImageStore,
   Effect.gen(function* () {
     const docker = yield* Docker
     const sub = yield* Subprocess
@@ -247,15 +202,10 @@ export const CloudflareGoldenBuilderLive = Layer.effect(
       `${CF_REGISTRY_HOST}/${accountId}/${GOLDEN_REPO}:${tag}`
 
     // List the golden tags via `wrangler containers images list --json`, which
-    // performs the CF managed-registry auth handshake itself. Output shape:
-    //   [{ "name": "afk-golden", "tags": ["v1-0-…", …] }, …]
-    // The registry exposes only repo/tag here — builtAt / cachedImages aren't
-    // surfaced, so we fill those from the tag (version === tag) and leave the
-    // metadata empty. Newest-first is approximated by descending tag sort.
-    const listImages: Effect.Effect<
-      ReadonlyArray<CloudflareGoldenImage>,
-      CloudflareError | UserError | ConfigError
-    > = Effect.gen(function* () {
+    // performs the CF managed-registry auth handshake itself. The registry
+    // exposes only repo/tag here — builtAt / cachedImages aren't surfaced, so
+    // version === tag and metadata is empty. Newest-first ≈ descending tag sort.
+    const list = Effect.gen(function* () {
       const accountId = yield* requireAccountId
       const result = yield* sub
         .run("wrangler", ["containers", "images", "list", "--json"])
@@ -268,9 +218,8 @@ export const CloudflareGoldenBuilderLive = Layer.effect(
               }),
           ),
         )
-      // wrangler prints human banners (telemetry notice, "agent skills
-      // available", …) to stdout before the JSON payload, so slice out the
-      // top-level array rather than parsing raw stdout.
+      // wrangler prints human banners (telemetry notice, …) to stdout before the
+      // JSON payload, so slice out the top-level array rather than parsing raw.
       const repos = yield* Effect.try({
         try: () => {
           const start = result.stdout.indexOf("[")
@@ -291,87 +240,90 @@ export const CloudflareGoldenBuilderLive = Layer.effect(
       })
       const repo = repos.find((r) => r.name === GOLDEN_REPO)
       const tags = [...(repo?.tags ?? [])].sort((a, b) => b.localeCompare(a))
-      return tags.map((tag) => ({
-        tag,
-        version: tag,
-        imageUri: goldenUri(accountId, tag),
-        builtAt: "",
-        cachedImages: [],
-      }))
+      return tags.map(
+        (tag): GoldenImage => ({
+          id: goldenUri(accountId, tag),
+          displayName: tag,
+          version: tag,
+          builtAt: "",
+          cachedImages: [],
+          ready: true,
+        }),
+      )
     })
 
-    return CloudflareGoldenBuilder.of({
-      build: Effect.gen(function* () {
-        const { config, projectRoot } = yield* cfg.load
-        const cachedImages = config.cloudflare?.cachedImages ?? []
-        const accountId = yield* requireAccountId
+    const findLatest = list.pipe(Effect.map((images) => images[0] ?? null))
 
-        const version = versionHash(cachedImages)
-        const builtAt = new Date().toISOString()
-        const imageUri = goldenUri(accountId, version)
-
-        // Materialize build context under .afk/cf-golden-build/ (gitignored
-        // via the `.afk/` entry that `afk init` adds for us).
-        const buildDir = resolve(projectRoot, ".afk", "cf-golden-build")
-        mkdirSync(buildDir, { recursive: true })
-        writeFileSync(
-          resolve(buildDir, "Dockerfile"),
-          dockerfileFor(cachedImages),
-        )
-        writeFileSync(resolve(buildDir, "bootstrap.sh"), ENTRYPOINT_SCRIPT, {
-          mode: 0o755,
-        })
-
-        // Ensure CF registry auth (docker login against
-        // registry.cloudflare.com/<accountId>). Repo name is the path-prefix
-        // after the host — `<accountId>/<repo>`.
-        yield* registry.ensureRepoAndAuth(`${accountId}/${GOLDEN_REPO}`)
-
-        yield* docker.build({
-          contextDir: buildDir,
-          dockerfile: resolve(buildDir, "Dockerfile"),
-          tag: imageUri,
-          platform: "linux/amd64",
-          inlineCache: true,
-        })
-
-        yield* registry.push(imageUri)
-
-        return {
-          tag: version,
-          imageUri,
-          version,
-          builtAt,
-          cachedImages,
-        }
-      }),
-
-      list: listImages,
-
-      // `wrangler containers images delete <repo>:<tag>` removes one tag from
-      // the CF managed registry (it performs the registry auth itself).
-      remove: (tag) =>
-        sub
-          .runInteractive("wrangler", [
-            "containers",
-            "images",
-            "delete",
-            `${GOLDEN_REPO}:${tag}`,
-          ])
-          .pipe(
-            Effect.mapError(
-              (e) =>
-                new CloudflareError({
-                  operation: "registry:deleteTag",
-                  message: `wrangler containers images delete failed: ${e.stderr || String(e)}`,
-                }),
-            ),
+    // `wrangler containers images delete <repo>:<tag>` removes one tag from the
+    // CF managed registry (it performs the registry auth itself).
+    const remove = (id: string) =>
+      sub
+        .runInteractive("wrangler", [
+          "containers",
+          "images",
+          "delete",
+          `${GOLDEN_REPO}:${tagOf(id)}`,
+        ])
+        .pipe(
+          Effect.mapError(
+            (e) =>
+              new CloudflareError({
+                operation: "registry:deleteTag",
+                message: `wrangler containers images delete failed: ${e.stderr || String(e)}`,
+              }),
           ),
+        )
 
-      // Newest golden = head of the descending-sorted tag list; null when none.
-      findLatest: listImages.pipe(
-        Effect.map((images) => images[0] ?? null),
-      ),
+    const build = Effect.gen(function* () {
+      const { config, projectRoot } = yield* cfg.load
+      const cachedImages = config.cloudflare?.cachedImages ?? []
+      const accountId = yield* requireAccountId
+
+      const version = goldenVersionHash(cachedImages)
+      const builtAt = new Date().toISOString()
+      const imageUri = goldenUri(accountId, version)
+
+      // Materialize build context under .afk/cf-golden-build/ (gitignored via
+      // the `.afk/` entry that `afk init` adds for us).
+      const buildDir = resolve(projectRoot, ".afk", "cf-golden-build")
+      mkdirSync(buildDir, { recursive: true })
+      writeFileSync(resolve(buildDir, "Dockerfile"), dockerfileFor(cachedImages))
+      writeFileSync(resolve(buildDir, "bootstrap.sh"), ENTRYPOINT_SCRIPT, {
+        mode: 0o755,
+      })
+
+      // Ensure CF registry auth (docker login against registry.cloudflare.com/
+      // <accountId>). Repo name is the path-prefix after the host.
+      yield* registry.ensureRepoAndAuth(`${accountId}/${GOLDEN_REPO}`)
+
+      yield* docker.build({
+        contextDir: buildDir,
+        dockerfile: resolve(buildDir, "Dockerfile"),
+        tag: imageUri,
+        platform: "linux/amd64",
+        inlineCache: true,
+      })
+
+      yield* registry.push(imageUri)
+
+      // Patch the freshly-built image into worker/afk/wrangler.toml's
+      // [[containers]] block so `afk provision` / `wrangler deploy` boots from it.
+      const tomlPath = resolve(projectRoot, "worker", "afk", "wrangler.toml")
+      const patched = existsSync(tomlPath)
+      if (patched) patchWranglerToml(tomlPath, { imageUri })
+
+      return {
+        id: imageUri,
+        displayName: version,
+        version,
+        builtAt,
+        cachedImages,
+        note: patched
+          ? `patched image into ${tomlPath}`
+          : `no worker/afk/wrangler.toml yet (run \`afk init\`)`,
+      }
     })
+
+    return GoldenImageStore.of({ build, list, findLatest, remove })
   }),
 )

@@ -122,7 +122,6 @@ export const provision = Command.make("provision", {}, () =>
           ),
         )
 
-    // 1. Worker deps.
     yield* out.print("• installing Worker dependencies (npm install)…")
     yield* sub
       .run("npm", ["install"], { cwd: workerDir })
@@ -136,7 +135,6 @@ export const provision = Command.make("provision", {}, () =>
         ),
       )
 
-    // 2. D1 database (reuse if it already exists).
     yield* out.print("• ensuring D1 database…")
     const d1List = yield* wrangler(["d1", "list", "--json"])
     const existingD1 = (sliceJsonArray(d1List.stdout) as Array<{
@@ -163,7 +161,6 @@ export const provision = Command.make("provision", {}, () =>
     }
     patchWranglerToml(tomlPath, { databaseId })
 
-    // 3. KV namespace (reuse if it already exists).
     yield* out.print("• ensuring KV namespace…")
     const kvList = yield* wrangler(["kv", "namespace", "list"])
     const existingKv = (sliceJsonArray(kvList.stdout) as Array<{
@@ -190,11 +187,10 @@ export const provision = Command.make("provision", {}, () =>
     }
     patchWranglerToml(tomlPath, { kvId })
 
-    // 4. Migration (CREATE IF NOT EXISTS — safe to re-run).
+    // Migration is CREATE IF NOT EXISTS — safe to re-run.
     yield* out.print("• applying D1 migration…")
     yield* wrangler(["d1", "execute", D1_NAME, `--file=${MIGRATION}`, "--remote"])
 
-    // 5. Deploy the launcher Worker.
     yield* out.print("• deploying launcher Worker…")
     const deployed = yield* wrangler(["deploy"])
     const url = firstMatch(deployed.stdout, /(https:\/\/[^\s]+\.workers\.dev)/)
@@ -209,7 +205,7 @@ export const provision = Command.make("provision", {}, () =>
     patchConfigWorkerUrl(resolve(projectRoot, CONFIG_FILE), url)
     yield* out.print(`  deployed ${url}`)
 
-    // 6. Store the admin CF_API_TOKEN secret on the Worker (for /team, /secrets).
+    // The Worker needs CF_API_TOKEN to serve /team and /secrets.
     yield* out.print("• setting CF_API_TOKEN Worker secret…")
     yield* wrangler(["secret", "put", "CF_API_TOKEN"], apiToken)
 

@@ -1,12 +1,8 @@
 import { Args, Command, Options } from "@effect/cli"
 import { Effect } from "effect"
 import { RunService } from "../services/RunService.ts"
-import { Ec2 } from "../adapters/aws/Ec2.ts"
 import { ConfigService } from "../services/ConfigService.ts"
-import { LogStore } from "../services/backend/LogStore.ts"
-import { Compute } from "../services/backend/Compute.ts"
 import { Output } from "../infra/Output.ts"
-import { DEFAULT_REGION, LOG_GROUP_PREFIX } from "../constants.ts"
 
 const ref = Options.text("ref").pipe(Options.optional)
 const instanceType = Options.text("instance-type").pipe(Options.optional)
@@ -29,172 +25,6 @@ const dryRun = Options.boolean("dry-run").pipe(
 )
 
 const command = Args.text({ name: "command" }).pipe(Args.repeated)
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-/**
- * AWS-only fallback streaming behavior for `afk run` (no --detach). Other
- * Backends will own their own streaming impl; this function is referenced
- * only when `RunService.backendName === "aws"`.
- *
- * After RunInstances returns, polls for the VM to reach `running`, then
- * spawns `aws logs tail --follow` and polls for terminal state to know when
- * to stop the tail. Honors Ctrl-C as a clean detach.
- */
-const streamAwsUntilTerminated = (input: {
-  readonly region: string
-  readonly instanceId: string
-  readonly runId: string
-  readonly repoName: string
-}): Effect.Effect<void, never, Ec2> =>
-  Effect.gen(function* () {
-    const ec2 = yield* Ec2
-
-    yield* Effect.sync(() => process.stderr.write("waiting for VM to boot…"))
-    while (true) {
-      const insts = yield* ec2
-        .describeInstances({
-          region: input.region,
-          instanceIds: [input.instanceId],
-        })
-        .pipe(Effect.catchAll(() => Effect.succeed([])))
-      const state = insts[0]?.state
-      if (state === "running") break
-      if (state && state !== "pending") {
-        process.stderr.write(` (state: ${state})\n`)
-        return
-      }
-      yield* Effect.promise(() => sleep(3000))
-      process.stderr.write(".")
-    }
-    process.stderr.write(" ready, streaming logs (Ctrl-C to detach)\n")
-
-    const group = `${LOG_GROUP_PREFIX}/${input.repoName}`
-    const streamPrefix = `${input.runId}/`
-
-    const proc = Bun.spawn(
-      [
-        "aws",
-        "logs",
-        "tail",
-        group,
-        "--region",
-        input.region,
-        "--follow",
-        "--since",
-        "10m",
-        "--log-stream-name-prefix",
-        streamPrefix,
-        "--format",
-        "short",
-      ],
-      { stdout: "inherit", stderr: "inherit", stdin: "ignore" },
-    )
-
-    let detached = false
-    const onSig = () => {
-      detached = true
-      try {
-        proc.kill()
-      } catch {
-        /* ignore */
-      }
-    }
-    process.once("SIGINT", onSig)
-    process.once("SIGTERM", onSig)
-
-    const poll = (async () => {
-      while (!detached) {
-        await sleep(10_000)
-        try {
-          const insts = await Effect.runPromise(
-            ec2.describeInstances({
-              region: input.region,
-              instanceIds: [input.instanceId],
-            }),
-          )
-          const state = insts[0]?.state
-          if (
-            state === "shutting-down" ||
-            state === "stopping" ||
-            state === "stopped" ||
-            state === "terminated" ||
-            state === undefined
-          ) {
-            await sleep(3_000)
-            try {
-              proc.kill()
-            } catch {
-              /* ignore */
-            }
-            return
-          }
-        } catch {
-          /* transient errors: keep polling */
-        }
-      }
-    })()
-
-    yield* Effect.promise(async () => {
-      await Promise.race([proc.exited, poll])
-      try {
-        proc.kill()
-      } catch {
-        /* ignore */
-      }
-      process.removeListener("SIGINT", onSig)
-      process.removeListener("SIGTERM", onSig)
-    })
-  })
-
-/**
- * Cloudflare equivalent of streamAwsUntilTerminated: tail Workers Logs via
- * the LogStore tag and concurrently poll Compute.findByRunId to discover when
- * the Run reaches a terminal state.
- */
-const streamCloudflareUntilTerminated = (input: {
-  readonly runId: string
-  readonly repoName: string
-}): Effect.Effect<void, never, LogStore | Compute> =>
-  Effect.gen(function* () {
-    const logs = yield* LogStore
-    const compute = yield* Compute
-
-    // Kick off the log tail. We don't await it — we race it against the
-    // terminal-state poll below and kill it via SIGINT when the Run ends.
-    const tailFiber = yield* Effect.forkDaemon(
-      logs
-        .tail({ runId: input.runId, repoName: input.repoName, follow: true })
-        .pipe(Effect.catchAll(() => Effect.void)),
-    )
-
-    let stop = false
-    const onSig = () => {
-      stop = true
-    }
-    process.once("SIGINT", onSig)
-    process.once("SIGTERM", onSig)
-
-    while (!stop) {
-      yield* Effect.promise(() => sleep(8000))
-      const run = yield* compute
-        .findByRunId(input.runId)
-        .pipe(Effect.catchAll(() => Effect.succeed(null)))
-      if (
-        run &&
-        (run.status === "STOPPED" || run.status === "STOPPING")
-      ) {
-        break
-      }
-    }
-
-    process.removeListener("SIGINT", onSig)
-    process.removeListener("SIGTERM", onSig)
-    // Best-effort cleanup of the daemon fiber. The process is about to exit
-    // (or move on to printing the final summary) so an in-flight tail is fine
-    // to abandon.
-    void tailFiber
-  })
 
 const formatBackendDetails = (d: Record<string, string>): string => {
   const keys = Object.keys(d).sort()
@@ -276,21 +106,8 @@ export const run = Command.make(
       })
 
       if (!detach) {
-        const { config, sourceRepoName } = yield* cfg.load
-        if (runs.backendName === "aws") {
-          const region = config.aws?.region ?? DEFAULT_REGION
-          yield* streamAwsUntilTerminated({
-            region,
-            instanceId: started.resourceId,
-            runId: started.runId,
-            repoName: sourceRepoName,
-          })
-        } else if (runs.backendName === "cloudflare") {
-          yield* streamCloudflareUntilTerminated({
-            runId: started.runId,
-            repoName: sourceRepoName,
-          })
-        }
+        const { sourceRepoName } = yield* cfg.load
+        yield* runs.streamUntilTerminated(started.runId, sourceRepoName)
       }
     }),
 )

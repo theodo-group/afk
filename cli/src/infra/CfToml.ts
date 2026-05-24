@@ -50,7 +50,6 @@ export const patchWranglerToml = (
   let toml = readFileSync(path, "utf8")
 
   if (patch.accountId !== undefined) {
-    // Top-level account_id and the [vars] CF_ACCOUNT_ID both carry the account.
     toml = toml.replace(/account_id = "[^"]*"/, `account_id = "${patch.accountId}"`)
     toml = toml.replace(
       /CF_ACCOUNT_ID = "[^"]*"/,
@@ -64,7 +63,6 @@ export const patchWranglerToml = (
     )
   }
   if (patch.kvId !== undefined) {
-    // The KV id lives directly under `binding = "DEVELOPERS_KV"`.
     toml = toml.replace(
       /(binding = "DEVELOPERS_KV"\s*\n\s*id = ")[^"]*(")/,
       `$1${patch.kvId}$2`,

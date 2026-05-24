@@ -106,9 +106,11 @@ export class Compute extends Context.Tag("Compute")<
 
     /**
      * Resolve everything needed to launch a Run without launching anything.
-     * Exposed separately from `start` so `afk run --dry-run` can show the plan
+     * Exposed separately from `launch` so `afk run --dry-run` can show the plan
      * and exit. The returned `PreparedRun` is opaque (backendPlan is Backend-
-     * specific) but the top-level fields are uniform.
+     * specific) but the top-level fields are uniform. `prepare` + `launch` is
+     * orchestrated by RunService (where cross-cutting concerns belong), so the
+     * Backend exposes only the two steps, never a fused `start`.
      */
     readonly prepare: (
       input: StartInput,
@@ -121,14 +123,6 @@ export class Compute extends Context.Tag("Compute")<
     readonly launch: (
       plan: PreparedRun,
     ) => Effect.Effect<RunStarted, AwsError | CloudflareError | UserError | ConfigError>
-
-    /** Convenience: prepare + launch. */
-    readonly start: (
-      input: StartInput,
-    ) => Effect.Effect<
-      RunStarted,
-      AwsError | CloudflareError | UserError | DockerError | GitError | ConfigError
-    >
 
     /** List Runs owned by a specific principal. */
     readonly listMine: (

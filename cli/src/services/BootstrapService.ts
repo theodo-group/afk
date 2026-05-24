@@ -408,7 +408,6 @@ export const BootstrapServiceLive = Layer.effect(
         const terraformDir = resolve(projectDir, "terraform", "afk")
         const ecrRepo = `${ECR_REPO_PREFIX}/${sourceRepoName}`
 
-        // ---- Discover what exists (best-effort; missing pieces are skipped) ----
         const goldenImages = yield* ec2
           .describeImages({
             region,
@@ -473,7 +472,8 @@ export const BootstrapServiceLive = Layer.effect(
           }
         }
 
-        // ---- Execute, ordered so the state bucket goes last ----
+        // Delete the state bucket last — it holds the tf state + lock, so it
+        // must outlive the terraform destroy above.
         const done: string[] = []
 
         for (const id of goldenIds) {
@@ -594,7 +594,6 @@ export const BootstrapServiceLive = Layer.effect(
           `wrangler kv namespace delete <${kvTitle} id>`,
         ]
 
-        // Dry-run: show the plan, touch nothing.
         if (!input.execute) {
           return {
             provider: "cloudflare" as const,
@@ -610,7 +609,6 @@ export const BootstrapServiceLive = Layer.effect(
 
         const done: string[] = []
 
-        // 1. Golden image tags.
         const imgs = sliceArray(
           (yield* wrangler(["containers", "images", "list", "--json"])).stdout,
         ) as Array<{ name?: string; tags?: string[] }>
@@ -620,12 +618,12 @@ export const BootstrapServiceLive = Layer.effect(
           done.push(`deleted golden ${goldenRepo}:${tag}`)
         }
 
-        // 2. Launcher Worker (also removes its DOs).
+        // wrangler delete also tears down the Worker's Durable Objects.
         yield* wrangler(["delete", "--name", workerName])
         done.push(`deleted Worker ${workerName}`)
 
-        // 3. Outer Container application (NOT removed by the Worker delete —
-        // this is what leaves live instances billing otherwise).
+        // Outer Container application — NOT removed by the Worker delete; this
+        // is what leaves live instances billing otherwise.
         const containers = sliceArray(
           (yield* wrangler(["containers", "list", "--json"])).stdout,
         ) as Array<{ id?: string; name?: string }>
@@ -635,11 +633,9 @@ export const BootstrapServiceLive = Layer.effect(
           done.push(`deleted container app ${containerName}`)
         }
 
-        // 4. D1 database.
         yield* wrangler(["d1", "delete", d1Name])
         done.push(`deleted D1 ${d1Name}`)
 
-        // 5. KV namespace (resolve id by title).
         const kvs = sliceArray(
           (yield* wrangler(["kv", "namespace", "list"])).stdout,
         ) as Array<{ id?: string; title?: string }>

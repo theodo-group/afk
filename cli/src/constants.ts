@@ -27,7 +27,6 @@ export const TAG_TIMEOUT_HOURS = "afk:timeout-hours"
 export const TAG_STARTED_AT = "afk:started-at"
 export const TAG_REPO = "afk:repo"
 
-// Golden Image tags.
 export const TAG_GOLDEN = "afk:golden"
 export const TAG_GOLDEN_VERSION = "afk:golden-version"
 export const TAG_GOLDEN_BUILT_AT = "afk:built-at"

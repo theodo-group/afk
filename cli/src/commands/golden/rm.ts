@@ -1,32 +1,17 @@
 import { Args, Command } from "@effect/cli"
 import { Effect } from "effect"
-import { ImageService } from "../../services/ImageService.ts"
-import { CloudflareGoldenBuilder } from "../../services/CloudflareGoldenBuilder.ts"
-import { ConfigService } from "../../services/ConfigService.ts"
+import { GoldenImageStore } from "../../services/backend/GoldenImage.ts"
 import { Output } from "../../infra/Output.ts"
-import { DEFAULT_REGION } from "../../constants.ts"
 
-// Naming-wise on CF this is a tag, on AWS it's an AMI id. The arg is a free
-// string so either fits — the dispatch below routes to the right impl.
-const target = Args.text({ name: "ami-id-or-tag" })
+// An AMI id on AWS, a registry tag (or full image URI) on Cloudflare — the
+// active Backend's GoldenImageStore knows how to remove its own handle.
+const target = Args.text({ name: "id" })
 
-export const goldenRm = Command.make("rm", { imageId: target }, ({ imageId }) =>
+export const goldenRm = Command.make("rm", { id: target }, ({ id }) =>
   Effect.gen(function* () {
-    const cfg = yield* ConfigService
+    const golden = yield* GoldenImageStore
     const out = yield* Output
-    const { config } = yield* cfg.load
-    const backend = config.backend ?? "aws"
-
-    if (backend === "cloudflare") {
-      const builder = yield* CloudflareGoldenBuilder
-      yield* builder.remove(imageId)
-      yield* out.print(`Removed ${imageId}.`)
-      return
-    }
-
-    const images = yield* ImageService
-    const region = config.aws?.region ?? DEFAULT_REGION
-    yield* images.remove(region, imageId)
-    yield* out.print(`Deregistered ${imageId}.`)
+    yield* golden.remove(id)
+    yield* out.print(`Removed ${id}.`)
   }),
 )

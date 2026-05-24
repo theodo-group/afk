@@ -1,8 +1,9 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Fiber, Layer } from "effect"
 import { Compute, type AttachOptions, type PreparedRun, type RunStarted } from "./backend/Compute.ts"
+import { LogStore } from "./backend/LogStore.ts"
 import { BuildService } from "./BuildService.ts"
 import { ConfigService } from "./ConfigService.ts"
-import type { Run } from "../schema/Run.ts"
+import type { Run, RunStatus } from "../schema/Run.ts"
 import {
   AwsError,
   CloudflareError,
@@ -71,6 +72,18 @@ export class RunService extends Context.Tag("RunService")<
       runId: string,
       opts: AttachOptions,
     ) => Effect.Effect<void, AwsError | CloudflareError | UserError | ConfigError>
+    /**
+     * Follow a Run's logs to the terminal until it stops, then return. Backend-
+     * neutral: it waits for the Run to reach RUNNING, tails via the `LogStore`
+     * seam, and stops the tail once `findByRunId` reports a terminal state.
+     * Best-effort — transient errors are tolerated and it never fails; Ctrl-C
+     * interrupts it as a clean detach. This is what `afk run` (without
+     * `--detach`) calls instead of branching on the Backend.
+     */
+    readonly streamUntilTerminated: (
+      runId: string,
+      repoName: string,
+    ) => Effect.Effect<void>
     /** Identifier of the active Backend (`"aws"`, `"cloudflare"`, …). */
     readonly backendName: "aws" | "cloudflare"
   }
@@ -82,6 +95,59 @@ export const RunServiceLive = Layer.effect(
     const compute = yield* Compute
     const build = yield* BuildService
     const cfg = yield* ConfigService
+    const logs = yield* LogStore
+
+    const isTerminal = (s: RunStatus): boolean =>
+      s === "STOPPING" || s === "STOPPED"
+
+    // Probe the Run's status, collapsing the two failure modes that matter to a
+    // streamer: a not-found Run (UserError) means it's GONE; any other error is
+    // TRANSIENT and worth retrying.
+    const probeStatus = (
+      runId: string,
+    ): Effect.Effect<RunStatus | "GONE" | "TRANSIENT"> =>
+      compute.findByRunId(runId).pipe(
+        Effect.map((r): RunStatus | "GONE" | "TRANSIENT" => r.status),
+        Effect.catchTag("UserError", () => Effect.succeed("GONE" as const)),
+        Effect.catchAll(() => Effect.succeed("TRANSIENT" as const)),
+      )
+
+    const streamUntilTerminated = (runId: string, repoName: string) =>
+      Effect.gen(function* () {
+        yield* Effect.sync(() => process.stderr.write("waiting for the Run to boot…"))
+        let status = yield* probeStatus(runId)
+        while (status === "TRANSIENT" || status === "PROVISIONING") {
+          yield* Effect.sync(() => process.stderr.write("."))
+          yield* Effect.sleep("3 seconds")
+          status = yield* probeStatus(runId)
+        }
+        if (status === "GONE" || isTerminal(status)) {
+          yield* Effect.sync(() =>
+            process.stderr.write(
+              ` (${status === "GONE" ? "ended" : status.toLowerCase()})\n`,
+            ),
+          )
+          return
+        }
+        yield* Effect.sync(() =>
+          process.stderr.write(" ready, streaming logs (Ctrl-C to detach)\n"),
+        )
+
+        // Tail in a forked fiber so we can stop it the moment the Run goes
+        // terminal. The LogStore tail kills its own subprocess on interruption.
+        const tail = yield* Effect.fork(
+          logs
+            .tail({ runId, repoName, follow: true })
+            .pipe(Effect.catchAll(() => Effect.void)),
+        )
+
+        let s: RunStatus | "GONE" | "TRANSIENT" = status
+        while (!(s === "GONE" || (s !== "TRANSIENT" && isTerminal(s)))) {
+          yield* Effect.sleep("6 seconds")
+          s = yield* probeStatus(runId)
+        }
+        yield* Fiber.interrupt(tail)
+      })
 
     const prepare = (input: RunRequest) =>
       Effect.gen(function* () {
@@ -111,6 +177,7 @@ export const RunServiceLive = Layer.effect(
       findByRunId: compute.findByRunId,
       kill: compute.kill,
       attach: compute.attach,
+      streamUntilTerminated,
     })
   }),
 )

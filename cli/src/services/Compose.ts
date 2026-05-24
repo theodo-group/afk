@@ -90,7 +90,6 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
     })
   }
 
-  // Collect service names in declaration order.
   const serviceNames: string[] = []
   for (const pair of services.items) {
     const key = pair.key as Scalar
@@ -105,7 +104,6 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
     })
   }
 
-  // image: ${AFK_IMAGE}
   const mainImage = main.get("image")
   const mainImageStr =
     mainImage instanceof Scalar ? mainImage.value : mainImage
@@ -116,7 +114,6 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
     })
   }
 
-  // restart policy ban.
   const restart = main.get("restart")
   const restartStr = restart instanceof Scalar ? restart.value : restart
   if (

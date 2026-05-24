@@ -170,7 +170,7 @@ export const TeamServiceLive = Layer.effect(
     ): Effect.Effect<void, CloudflareError | UserError | ConfigError> =>
       Effect.gen(function* () {
         const base = yield* cfWorkerUrl
-        // We need the clientId to address the DELETE. Look it up first.
+        // DELETE is keyed by clientId, not name — resolve it via ls first.
         const members = yield* lsCf
         const m = members.find((x) => x.name === name || x.arn === name)
         if (!m) {
@@ -296,7 +296,7 @@ export const TeamServiceLive = Layer.effect(
         }
       })
 
-    // Dispatch on the active Backend. AWS: IAM users / role trust policies.
+    // AWS: IAM users / role trust policies.
     // Cloudflare: launcher Worker /team endpoints (CF Access service tokens).
     const isCloudflare = compute.backendName === "cloudflare"
 

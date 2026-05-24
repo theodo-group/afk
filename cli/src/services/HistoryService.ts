@@ -5,9 +5,8 @@ import { AwsError, CloudflareError, ConfigError, UserError } from "../infra/Erro
 export type RunHistoryStatus = "running" | "stopped" | "failed" | "killed"
 
 /**
- * Public history row shape consumed by `afk history`. Backwards-compatible with
- * the pre-refactor HistoryService row. Internally this is mapped from the
- * abstract `RunHistory.HistoryRow` produced by the active Backend.
+ * Backwards-compatible with the pre-refactor row shape; mapped from the
+ * Backend-neutral `RunHistory.HistoryRow`.
  */
 export interface RunHistoryRow {
   readonly runId: string
