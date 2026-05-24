@@ -1,5 +1,5 @@
 import { Args, Command, Options, Prompt } from "@effect/cli"
-import { Effect, Option } from "effect"
+import { DateTime, Duration, Effect, Option } from "effect"
 import type { Terminal } from "@effect/platform"
 import { RunService } from "../services/RunService.ts"
 import { LogStore } from "../services/backend/LogStore.ts"
@@ -34,9 +34,9 @@ const pickRunId = (
   hist: typeof HistoryService.Service,
 ): Effect.Effect<Option.Option<string>, UserError, Terminal.Terminal> =>
   Effect.gen(function* () {
-    const sinceIsoUtc = new Date(Date.now() - 30 * 86_400_000).toISOString()
+    const since = DateTime.subtractDuration(yield* DateTime.now, Duration.days(30))
     const rows = yield* hist
-      .query({ sinceIsoUtc, limit: 25 })
+      .query({ since, limit: 25 })
       .pipe(Effect.catchAll((e) => Effect.fail(new UserError({ message: String(e) }))))
     if (rows.length === 0) {
       return yield* Effect.fail(

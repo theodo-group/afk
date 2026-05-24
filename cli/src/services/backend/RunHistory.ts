@@ -1,4 +1,4 @@
-import { Context, Effect } from "effect"
+import { Context, type DateTime, Effect } from "effect"
 import { AwsError, CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
 
 /**
@@ -23,8 +23,8 @@ export interface HistoryRow {
 }
 
 export interface QueryInput {
-  /** Duration string ("7d", "30d", etc.). Default 7d. */
-  readonly since?: string
+  /** Lower bound on a Run's start: only Runs started at or after this instant. */
+  readonly since?: DateTime.Utc
   readonly owner?: string
   readonly branch?: string
   readonly limit?: number

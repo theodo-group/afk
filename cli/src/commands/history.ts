@@ -1,10 +1,10 @@
 import { Command, Options } from "@effect/cli"
-import { Effect } from "effect"
+import { DateTime, Effect } from "effect"
 import { HistoryService } from "../services/HistoryService.ts"
+import { parseSince } from "../services/SinceWindow.ts"
 import { Sts } from "../adapters/aws/Sts.ts"
 import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
-import { UserError } from "../infra/Errors.ts"
 import { DEFAULT_REGION } from "../constants.ts"
 import { estimateCost, formatUsd } from "../services/Pricing.ts"
 
@@ -24,27 +24,6 @@ const limit = Options.integer("limit").pipe(
   Options.optional,
   Options.withDescription("cap on rows returned"),
 )
-
-const parseSince = (s: string): string => {
-  const m = /^(\d+)([smhd])$/.exec(s.trim())
-  if (!m) {
-    throw new UserError({
-      message: `Invalid --since: '${s}'.`,
-      hint: "Use a duration like 24h, 7d, 30d.",
-    })
-  }
-  const n = Number(m[1]!)
-  const unit = m[2]!
-  const ms =
-    unit === "s"
-      ? n * 1000
-      : unit === "m"
-        ? n * 60_000
-        : unit === "h"
-          ? n * 3_600_000
-          : n * 86_400_000
-  return new Date(Date.now() - ms).toISOString()
-}
 
 const formatDuration = (startIso: string, stopIso?: string): string => {
   const start = Date.parse(startIso)
@@ -70,18 +49,13 @@ export const history = Command.make(
       const { config } = yield* cfg.load
       const region = config.aws?.region ?? DEFAULT_REGION
 
-      const sinceIso = yield* Effect.try({
-        try: () => parseSince(since),
-        catch: (e) =>
-          e instanceof UserError
-            ? e
-            : new UserError({ message: `--since: ${String(e)}` }),
-      })
+      const duration = yield* parseSince(since)
+      const sinceInstant = DateTime.subtractDuration(yield* DateTime.now, duration)
       const owner = all ? undefined : (yield* sts.callerIdentity).UserId
 
       const rows = yield* hist.query({
         owner,
-        sinceIsoUtc: sinceIso,
+        since: sinceInstant,
         ...(limit._tag === "Some" ? { limit: limit.value } : {}),
       })
 

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, type DateTime, Effect, Layer } from "effect"
 import { RunHistory } from "./backend/RunHistory.ts"
 import { AwsError, CloudflareError, ConfigError, UserError } from "../infra/Errors.ts"
 
@@ -29,17 +29,8 @@ export interface RunHistoryRow {
 export interface QueryInput {
   readonly owner?: string
   readonly repo?: string
-  readonly sinceIsoUtc?: string
+  readonly since?: DateTime.Utc
   readonly limit?: number
-}
-
-const sinceFromIso = (iso: string | undefined): string | undefined => {
-  if (!iso) return undefined
-  const t = Date.parse(iso)
-  if (!Number.isFinite(t)) return undefined
-  const seconds = Math.floor((Date.now() - t) / 1000)
-  if (seconds <= 0) return "1s"
-  return `${seconds}s`
 }
 
 export class HistoryService extends Context.Tag("HistoryService")<
@@ -57,14 +48,12 @@ export const HistoryServiceLive = Layer.effect(
     const history = yield* RunHistory
 
     return HistoryService.of({
-      query: ({ owner, repo, sinceIsoUtc, limit }) =>
+      query: ({ owner, repo, since, limit }) =>
         Effect.gen(function* () {
           const rows = yield* history.query({
             ...(owner !== undefined ? { owner } : {}),
             ...(limit !== undefined ? { limit } : {}),
-            ...(sinceIsoUtc !== undefined
-              ? { since: sinceFromIso(sinceIsoUtc) }
-              : {}),
+            ...(since !== undefined ? { since } : {}),
           })
           return rows
             .filter((r) => !repo || r.repo === repo)

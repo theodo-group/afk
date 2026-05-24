@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import {
   DynamoDb,
   N,
@@ -14,17 +14,6 @@ import { RunHistory, type HistoryRow } from "../../services/backend/RunHistory.t
 import { DEFAULT_REGION } from "../../constants.ts"
 
 const TABLE_NAME = "afk-runs"
-
-const parseSince = (input: string | undefined): string | undefined => {
-  if (!input) return undefined
-  const m = /^(\d+)\s*([smhd])$/i.exec(input.trim())
-  if (!m) return undefined
-  const n = Number(m[1])
-  const unit = m[2]!.toLowerCase()
-  const seconds =
-    unit === "s" ? n : unit === "m" ? n * 60 : unit === "h" ? n * 3600 : n * 86400
-  return new Date(Date.now() - seconds * 1000).toISOString()
-}
 
 const rowFromItem = (item: Item): HistoryRow | null => {
   const runId = readS(item, "run_id")
@@ -116,7 +105,7 @@ export const AwsRunHistoryLive = Layer.effect(
       query: ({ since, owner, branch, limit }) =>
         Effect.gen(function* () {
           const r = yield* region
-          const sinceIsoUtc = parseSince(since)
+          const sinceIsoUtc = since ? DateTime.formatIso(since) : undefined
 
           if (owner) {
             const values: Record<string, ReturnType<typeof S>> = { ":o": S(owner) }
