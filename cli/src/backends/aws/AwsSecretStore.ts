@@ -47,7 +47,7 @@ export const AwsSecretStoreLive = Layer.effect(
         const params = yield* ssm.listByPrefix(r, SSM_SECRET_PREFIX)
         return params.map<Secret>((p) => ({
           name: shortName(p.name),
-          ssmName: p.name,
+          reference: p.name,
           lastModified: p.lastModifiedDate,
         }))
       }),

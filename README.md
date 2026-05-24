@@ -250,7 +250,7 @@ See [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the launc
 
 **Two auth boundaries.** The CLI authenticates to the launcher Worker on every call; the Worker authenticates to Cloudflare APIs on the CLI's behalf for admin operations.
 
-- **CLI → Worker** uses `Cf-Access-Client-Id` + `Cf-Access-Client-Secret` headers (CF Access service tokens). The Worker also accepts `Authorization: Bearer <AFK_SHARED_TOKEN>` for single-dev mode, but the CLI does not currently emit a Bearer header — that path is server-side-only as of v2 and is tracked in IMPROVEMENTS.md. Production deploys must use Access service tokens.
+- **CLI → Worker** uses `Cf-Access-Client-Id` + `Cf-Access-Client-Secret` headers (CF Access service tokens). For single-dev mode the CLI also emits `Authorization: Bearer <AFK_SHARED_TOKEN>` when `AFK_SHARED_TOKEN` is set and no Access service token is configured (precedence: Access token → shared bearer → none). Production deploys should use Access service tokens.
 - **Worker → CF API** uses the `CF_API_TOKEN` Worker secret you set in step 5. This is the admin-scoped token; it never leaves the Worker.
 
 **What `afk team add` does.** On the CF Backend it calls the Worker's `/team` route, which uses `CF_API_TOKEN` to create a real CF Access service token and stores the `client_id → display_name` mapping in the DEVELOPERS_KV namespace. The `client_secret` is shown **once**; export it as `AFK_CF_CLIENT_SECRET` and `AFK_CF_CLIENT_ID` for every subsequent CLI call. Losing the secret means re-running `afk team add` under a new name.
@@ -259,19 +259,18 @@ See [`worker/cloudflare/README.md`](./worker/cloudflare/README.md) for the launc
 
 **Compose rules the CLI auto-injects on CF.** Every service in your `afk.compose.yml` gets `network_mode: host` plus `extra_hosts:` entries cross-mapping every sibling service name to `127.0.0.1`. You don't write these — the CLI mutates the in-memory compose before sending it to the Worker. Inter-service DNS keeps working (`postgres:5432` resolves to `127.0.0.1:5432`) but two sidecars cannot bind the same port. Port collisions are a hard error at submit time.
 
-**Logs.** Workers Logs only — **3 days retention on Workers Free, 7 days on Workers Paid**. There is no AFK-managed R2 mirror; if you need >7d retention, configure Logpush on your account separately. `afk logs <run-id> --follow` shells out to `wrangler tail` filtered by `runId`.
+**Logs.** Workers Logs only — **3 days retention on Workers Free, 7 days on Workers Paid**. There is no AFK-managed R2 mirror; if you need >7d retention, configure Logpush on your account separately. `afk logs <run-id>` (with or without `--follow`) reads the per-Run logs the container ships to the launcher Worker on exit (`GET /runs/:id/logs`); `--follow` polls that endpoint until they appear.
 
 **Known TODOs (track in `IMPROVEMENTS.md`).**
 
 | Area | Status | Impact on first-time use |
 |---|---|---|
 | CF Container registry listing (`afk golden ls` / golden "find latest") | ✅ shipped — via `wrangler containers images list` | Golden presence checks (`afk doctor`, the `afk run` preflight) now resolve the pushed tag. The per-Run *wrapper* image cache check is still stubbed (always rebuilds) — see IMPROVEMENTS #9. |
-| GraphQL Analytics for historical Workers Logs | ⏳ shelled out to `wrangler tail` | Historical reads (`afk logs <id>` without `--follow`) miss events older than the tail window. |
 | WSS attach end-to-end | ⏳ code written, not exercised live | `afk attach` likely needs SIGWINCH / header tweaks once tested against a real Container. |
-| Single-dev shared-bearer (`AFK_SHARED_TOKEN`) | ⏳ Worker accepts, CLI never sends | Use Access service tokens; the bearer-only path is half-wired. |
+| Single-dev shared-bearer (`AFK_SHARED_TOKEN`) | ✅ shipped — CLI sends the bearer when no Access token is set | Either auth mode works for the smoke test. |
 | Real-account integration test | ⏳ none of PR 2–5 deployed | Expect 1–2 round trips of small fixes during your first deploy. |
 
-The AWS Backend has none of the four caveats above.
+The AWS Backend has none of the caveats above.
 
 ---
 
@@ -419,7 +418,7 @@ afk attach <run-id> [--service <name>] [--host]
 afk logs <run-id> [--follow] [--service <name>] [--since <duration>]
                                                # tail logs from the active Backend's log store
                                                #   AWS: CloudWatch Logs (`aws logs tail` under the hood)
-                                               #   CF:  Workers Logs (via `wrangler tail` for now)
+                                               #   CF:  the launcher Worker's stored per-Run logs (GET /runs/:id/logs)
 afk kill <run-id>                              # ec2:TerminateInstances on the Run
 
 afk secrets put <name> [value]                 # write to the active Backend's secret store (prompts if value omitted)
@@ -585,7 +584,10 @@ On Cloudflare: values are stored as **Workers Secrets** on the launcher Worker, 
 
 SSM only. No SSH protocol, no bastion, no inbound ports.
 
-On Cloudflare: SSM has no equivalent. The launcher Worker exposes a WSS endpoint at `/runs/:id/attach`; the CLI opens a WebSocket against it, the Worker proxies the frames into a `docker compose exec -it <service>` inside the Run's outer Container (which is running rootless `dind`). `--service <name>` and `--host` work the same way as on AWS, modulo host-shell meaning "shell into the outer Container, not into a sidecar." Access is gated by the caller's CF Access service token matching the Run's Owner.
+On Cloudflare: SSM has no equivalent, and the SDK's `container.exec()` is pipe-based (no PTY, no resize), so it cannot host a real terminal. Attach therefore shells out to Cloudflare's own `wrangler containers ssh <instance-id>`, which allocates a proper PTY. The flow is split: the CLI first calls the launcher Worker's `GET /runs/:id/ssh-target` (Owner-scoped — the Worker uses its `CF_API_TOKEN` to resolve the Run's runtime Container instance id), then runs `wrangler containers ssh` locally against that id. `--host` lands you on the outer Container's host shell; default/`--service <name>` appends `-- docker compose exec <service>` (falling back to `docker exec`) to drop into a service container. Two consequences of using SSH:
+
+- **Account auth at attach time.** `wrangler containers ssh` talks to the Cloudflare control plane directly, so it needs `CLOUDFLARE_API_TOKEN` exported locally (the per-developer CF Access service token is not sufficient). This is the only CF command that bypasses the launcher Worker. Owner scoping is still enforced on the instance-id lookup, but the SSH connection itself is account-scoped.
+- **One-time key setup.** SSH requires an `ssh-ed25519` public key under `[[containers.authorized_keys]]` in `worker/afk/wrangler.toml`, applied at `wrangler deploy`. Adding or rotating a key means a redeploy. `afk doctor` reports whether a key is configured.
 
 ---
 

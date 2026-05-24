@@ -1,4 +1,6 @@
 import { Effect, Layer } from "effect"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import {
@@ -78,6 +80,21 @@ export const CloudflareBackendDoctorLive = Layer.effect(
             : `unreachable${"error" in health ? ` (${health.error})` : ` (HTTP ${health.status})`}`,
         })
       }
+
+      // SSH readiness for `afk attach`. Optional (ok stays true) so doctor
+      // doesn't fail for users who never attach — the detail tells them how to
+      // enable it. Attach uses `wrangler containers ssh`, which requires an
+      // ssh-ed25519 key baked into the deployed Worker's wrangler.toml.
+      const wt = join(loaded.right.projectRoot, "worker", "afk", "wrangler.toml")
+      const hasKey =
+        existsSync(wt) && /\[\[containers\.authorized_keys\]\]/.test(readFileSync(wt, "utf8"))
+      results.push({
+        name: "container SSH (attach)",
+        ok: true,
+        detail: hasKey
+          ? "authorized_keys configured in worker/afk/wrangler.toml"
+          : "optional — add [[containers.authorized_keys]] (ssh-ed25519) + redeploy to enable `afk attach`",
+      })
 
       return results
     })

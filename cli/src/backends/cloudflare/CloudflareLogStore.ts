@@ -2,30 +2,27 @@ import { Effect, Layer } from "effect"
 import { LogStore } from "../../services/backend/LogStore.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { CloudflareError, UserError } from "../../infra/Errors.ts"
+import { cfAuthHeaders } from "./cfAuth.ts"
 
 /**
- * Cloudflare implementation of LogStore. Reads the logs the Run's container
- * shipped back to the launcher Worker on completion (`GET /runs/:id/logs`),
- * the CF analog of CloudWatch on AWS.
+ * Cloudflare implementation of LogStore.
  *
- * Logs are captured when the workload exits (the golden bootstrap POSTs them to
- * the Worker's `/runs/:id/complete`), so they're available once the Run is
- * STOPPED. `--follow` against a still-running container can't stream yet — that
- * would need an incremental log push; for now follow just polls the stored log.
+ * Both read paths share one source: the launcher Worker's
+ * `GET /runs/:id/logs`. The CF Backend has no live log-driver — the container
+ * captures `docker compose logs` per service and POSTs them to
+ * `/runs/:id/complete` when the workload exits, where the Worker stores them
+ * (keyed `<service>`) and serves them back here. So:
+ *  - historical (non-follow): one fetch, print, done.
+ *  - `--follow`: poll the same endpoint and print incrementally as the stored
+ *    log grows (it appears in full once the Run completes).
+ *
+ * `--since` is not honoured: the stored log is the Run's whole bounded output
+ * with no per-line timestamps to window against.
  */
 export const CloudflareLogStoreLive = Layer.effect(
   LogStore,
   Effect.gen(function* () {
     const cfg = yield* ConfigService
-
-    const authHeaders = (): Record<string, string> => {
-      const id = process.env.AFK_CF_CLIENT_ID
-      const secret = process.env.AFK_CF_CLIENT_SECRET
-      const out: Record<string, string> = {}
-      if (id) out["CF-Access-Client-Id"] = id
-      if (secret) out["CF-Access-Client-Secret"] = secret
-      return out
-    }
 
     return LogStore.of({
       tail: (input) =>
@@ -47,7 +44,7 @@ export const CloudflareLogStoreLive = Layer.effect(
           const fetchOnce = () =>
             Effect.tryPromise({
               try: async () => {
-                const res = await fetch(url, { headers: authHeaders() })
+                const res = await fetch(url, { headers: cfAuthHeaders() })
                 if (!res.ok) {
                   throw new CloudflareError({
                     operation: "GET /runs/:id/logs",
@@ -65,12 +62,13 @@ export const CloudflareLogStoreLive = Layer.effect(
 
           if (!input.follow) {
             const body = yield* fetchOnce()
-            yield* Effect.sync(() => process.stdout.write(body.endsWith("\n") || body === "" ? body : body + "\n"))
-            return
+            return yield* Effect.sync(() =>
+              process.stdout.write(body === "" ? "" : body.endsWith("\n") ? body : body + "\n"),
+            )
           }
 
           // Follow: poll until logs appear (the container ships them on exit),
-          // then print once. Ctrl-C to stop.
+          // then print incrementally. Ctrl-C to stop.
           let printed = 0
           for (;;) {
             const body = yield* fetchOnce()

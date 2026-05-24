@@ -7,7 +7,7 @@
  *   GET    /runs                       list mine (or --all)   → 200 { runs: [...] }
  *   GET    /runs/:id                   findByRunId      → 200 RunSummary
  *   DELETE /runs/:id                   kill             → 200 { ok: true }
- *   WS     /runs/:id/attach            interactive shell
+ *   GET    /runs/:id/ssh-target        resolve CF instance id for `wrangler containers ssh`
  *   GET    /history                    persistent rows from D1
  *   POST   /secrets/:name              proxy to Workers Secrets (admin)
  *   DELETE /secrets/:name              proxy to Workers Secrets (admin)
@@ -141,18 +141,27 @@ app.delete("/runs/:id", async (c) => {
   return c.json({ ok: true })
 })
 
-app.get("/runs/:id/attach", async (c) => {
-  if (c.req.header("Upgrade") !== "websocket") {
-    return c.json({ error: "upgrade required" }, 426)
+// Resolve the Container instance id for `wrangler containers ssh`. The actual
+// interactive shell runs CLI-side via wrangler (it allocates a real PTY, which
+// the SDK's pipe-based container.exec() cannot). Owner-scoped, like kill.
+app.get("/runs/:id/ssh-target", async (c) => {
+  const caller = c.get("caller" as never) as { id: string }
+  const runId = c.req.param("id")
+  const registryId = c.env.REGISTRY_DO.idFromName("singleton")
+  const registry = c.env.REGISTRY_DO.get(registryId)
+  const r = await registry.fetch(new Request("https://registry/list"))
+  const { runs } = (await r.json()) as { runs: Array<{ runId: string; owner: string }> }
+  const row = runs.find((x) => x.runId === runId)
+  if (!row) return c.json({ error: "not found" }, 404)
+  if (!isOwner(caller as never, row.owner)) {
+    return c.json({ error: "forbidden" }, 403)
   }
-  const id = c.env.RUN_DO.idFromName(c.req.param("id"))
-  const stub = c.env.RUN_DO.get(id)
-  const url = new URL(c.req.url)
-  return stub.fetch(
-    new Request(`https://run/attach${url.search}`, {
-      headers: c.req.raw.headers,
-    }),
-  )
+  const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(runId))
+  const res = await stub.fetch(new Request("https://run/ssh-target"))
+  return new Response(await res.text(), {
+    status: res.status,
+    headers: { "content-type": "application/json" },
+  })
 })
 
 // --- History ---

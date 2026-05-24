@@ -17,41 +17,37 @@ Bugs found during live testing are folded in where relevant.
 
 ---
 
-## 9. CF Container registry listing — wrapper path ⏳
+## 11. CF attach via `wrangler containers ssh` — live verification ⏳
 
-**Gap.** `CloudflareImageRegistry.imageExists` and `listLatestTagsByPrefix` (the per-Run *wrapper* image cache lookups) remain stubbed — so `afk build`/`afk run` always rebuild+push the wrapper rather than skipping on a cache hit. The golden path was resolved during the 2026-05-23 live test by shelling out to `wrangler containers images list`; the same approach applies here, just not wired into the wrapper path yet.
+**Decision (2026-05).** The original WSS path proxied stdio through the launcher
+Worker into `container.exec()`. That was abandoned: the SDK's `exec()` is
+pipe-based (`ContainerExecOptions` has no `tty`, `ExecProcess` has no resize —
+see `workers-types/experimental`), so it cannot host a real terminal. Attach now
+shells out to Cloudflare's `wrangler containers ssh <instance-id>`, which
+allocates a proper PTY. The launcher Worker only resolves runId → instance id
+(Owner-scoped, `GET /runs/:id/ssh-target`); the SSH connection itself runs
+CLI-side and needs local `CLOUDFLARE_API_TOKEN` + an `ssh-ed25519` key in the
+deployed `worker/afk/wrangler.toml`.
 
-**Touches:** the `imageExists`/`listLatestTagsByPrefix` call sites in the wrapper build path.
+**Live-verify gates (cannot be settled from docs — the public API reference
+404s on the containers section, and nothing is deployed yet):**
+  - `RunDO.resolveInstanceId()` — the CF REST paths (`/containers/applications`,
+    `…/instances`) and *which* instance field carries the Container DO id used
+    for correlation. Three lines are marked `// LIVE-VERIFY` in `runDO.ts`.
+  - Whether `wrangler containers ssh <id> -- <cmd>` allocates a TTY for the
+    trailing command (needed for the `--service`/default service-container path;
+    `--host` gets the plain interactive shell regardless). Marked `// LIVE-VERIFY`
+    in `CloudflareCompute.ts:attach`.
 
----
+**Approach.** Deploy to a real CF account, add an ed25519 key + redeploy, run a
+real `afk run` with sidecars, then exercise `afk attach <run-id>`,
+`afk attach --service postgres <run-id>`, `afk attach --host <run-id>`. Resize
+the terminal mid-session. Confirm the Owner check rejects another developer's
+Run.
 
-## 10. CF Workers Logs GraphQL Analytics query ⏳
-
-**Gap.** `CloudflareLogStore.read{,Stream}` currently shells out to `wrangler tail` for both follow and non-follow modes. `wrangler tail` is right for live tailing but is the wrong tool for historical reads over a window (`--since 30d` style queries) — it streams from "now" and exits when there are no more events.
-
-**Approach.** Use the Cloudflare GraphQL Analytics endpoint for non-follow reads (`https://api.cloudflare.com/client/v4/graphql`, dataset `workersInvocationsAdaptive` or `cloudflareLogs` — needs verification). Keep `wrangler tail` for `--follow`.
-
-**Touches:** `cli/src/backends/cloudflare/CloudflareLogStore.ts`.
-
----
-
-## 11. CF WSS attach end-to-end verification ⏳
-
-**Gap.** The WSS attach path (CLI → launcher Worker `/runs/:id/attach` → DO → `docker compose exec` inside the outer Container) is written but never tested against a real Container. Specifically unverified: SIGWINCH forwarding for terminal resize, `Cf-Access-Client-Id` header propagation on the WS upgrade, Bun's WS client's `headers` option behavior at upgrade time.
-
-**Approach.** Deploy to a real CF account, run a real `afk run` with sidecars, exercise `afk attach <run-id>` and `afk attach --service postgres <run-id>` and `afk attach --host <run-id>`. Resize the terminal mid-session. Validate audit log entries.
-
-**Touches:** `cli/src/backends/cloudflare/CloudflareCompute.ts:attach`, `worker/cloudflare/src/runDO.ts:attachHandler`.
-
----
-
-## 12b. CF single-dev shared bearer (`AFK_SHARED_TOKEN`) ⏳
-
-**Gap.** The launcher Worker's `authenticate()` accepts `Authorization: Bearer <AFK_SHARED_TOKEN>` as a single-developer escape hatch (`worker/cloudflare/src/auth.ts`). The CLI's `CloudflareCompute` / `CloudflareSecretStore` / `CloudflareRunHistory` only emit `Cf-Access-Client-Id` + `Cf-Access-Client-Secret` headers — the bearer path is never reachable from the CLI today.
-
-**Approach.** When `AFK_SHARED_TOKEN` is set in the dev's env and `AFK_CF_CLIENT_ID` is absent, every Cloudflare HTTP call should send `Authorization: Bearer <value>` instead. ~5 lines per file (add a small `cfAuthHeaders()` helper in `cli/src/backends/cloudflare/`). README's "Cloudflare auth model" already cites this gap.
-
-**Touches:** `cli/src/backends/cloudflare/*.ts` (headers helper + call-site updates).
+**Touches:** `cli/src/backends/cloudflare/CloudflareCompute.ts:attach`,
+`worker/cloudflare/src/runDO.ts` (`handleSshTarget` / `resolveInstanceId`),
+`worker/cloudflare/src/launcher.ts` (`/runs/:id/ssh-target`).
 
 ---
 
@@ -69,10 +65,6 @@ Bugs found during live testing are folded in where relevant.
 
 First end-to-end CF deploy against a real account (the verification work #12 anticipated). Remaining setup-gap findings listed for follow-up.
 
-**15.6 README's required-token-scopes list is incomplete ⏳.** The quickstart lists `Workers Scripts / KV / D1 / Containers / Access` (all Edit). Live testing showed the registry push also needs **Cloudflare Images: Edit** (and **Workers Containers: Edit**), and `afk team add` needs **Access: Service Tokens: Edit**. Update the README prerequisites and the `ensureRepoAndAuth` error string (it still says "Containers Edit" only). (`afk init`'s missing-token error now lists `Cloudflare Images:Edit`; the README prerequisites list still needs the same addition.)
-
-**15.7 `afk team add` requires Zero Trust Access to be enabled first ⏳.** Even with correct token scopes + `CF_ACCOUNT_ID`, `POST /access/service_tokens` returns `access.api.error.not_enabled` until the account has enabled Cloudflare Access (a one-time Zero Trust dashboard action — pick a team domain). The quickstart's step 6 assumes an Access app but never says "first enable Access." Document it, and surface the `not_enabled` error from `afk team add` with a dashboard hint instead of a raw API blob.
-
 **15.8 `afk doctor` should precheck the Workers Paid / Containers entitlement ⏳.** CF Containers requires the Workers Paid plan; on a Free-plan account every container op fails with a bare `Unauthorized` (the real *"requires the Workers Paid plan"* message is buried in wrangler's log file). `afk doctor` (and `golden build`) should detect this early via `wrangler containers list` and surface the upgrade URL.
 
 **15.16 CF execution — remaining follow-ups ⏳.** The CF execution path is now resolved end-to-end (`afk run` executes and is fully observable; logs + status arrive via the golden bootstrap's `POST /runs/:id/complete` callback). Remaining minor items:
@@ -80,8 +72,6 @@ First end-to-end CF deploy against a real account (the verification work #12 ant
 - `POST /runs/:id/complete` should carry a per-run token rather than relying on runId unguessability.
 
 **15.17 `afk logs` options must precede the positional run-id ⏳ (cosmetic).** `afk logs <id> --follow` errors with "Received unknown argument '--follow'"; `afk logs --follow <id>` works. An @effect/cli ordering quirk — surface a clearer error or allow interleaving.
-
-**15.12 `afk secrets ls` shows an AWS "SSM PATH" column on CF ⏳ (cosmetic).** The table header is hardcoded for the AWS/SSM backend; on Cloudflare it prints `AFK_SECRET_<name>` under "SSM PATH". Harmless but misleading — the column should be backend-neutral (or omitted on CF).
 
 ---
 

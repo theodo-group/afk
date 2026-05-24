@@ -60,8 +60,8 @@ export class RunDO extends DurableObject<Env> {
         return this.handleComplete(req)
       case "GET /logs":
         return this.handleLogs(url)
-      case "GET /attach":
-        return this.handleAttach(req, url)
+      case "GET /ssh-target":
+        return this.handleSshTarget()
       case "GET /logs-stream":
         return this.handleLogsStream(req)
       default:
@@ -244,64 +244,91 @@ export class RunDO extends DurableObject<Env> {
     return new Response(body, { headers: { "content-type": "text/plain" } })
   }
 
-  private async handleAttach(req: Request, url: URL): Promise<Response> {
-    if (req.headers.get("Upgrade") !== "websocket") {
-      return new Response("Expected websocket upgrade", { status: 426 })
-    }
-    const service = url.searchParams.get("service") ?? "agent"
-    const host = url.searchParams.get("host") === "true"
-    const { 0: clientWs, 1: serverWs } = new WebSocketPair()
-    this.ctx.acceptWebSocket(serverWs, [
-      JSON.stringify({ kind: "attach", service, host }),
-    ])
-    return new Response(null, { status: 101, webSocket: clientWs })
-  }
-
-  override async webSocketMessage(
-    ws: WebSocket,
-    message: string | ArrayBuffer,
-  ): Promise<void> {
-    const tags = this.ctx.getTags(ws)
-    const first = tags[0]
-    if (!first) return ws.close(1011, "missing session tag")
-    const info = JSON.parse(first) as { kind: string; service?: string; host?: boolean }
-    if (info.kind === "attach") {
-      // The CF Containers SDK has container.exec() for spawning a process
-      // inside the outer Container. We forward stdio over the WS.
-      // Implementation note: CF's `exec` API is stabilising; the call shape
-      // below is the documented form as of mid-2026 and may need adjustment.
-      const exec = await this.getContainer().exec(
-        info.host
-          ? ["bash"]
-          : ["docker", "compose", "-f", "/etc/afk/compose.yml", "exec", info.service ?? "agent", "bash"],
-        { tty: true },
+  /** Resolve the CF Container instance id backing this Run, so the CLI can run
+   *  `wrangler containers ssh <instanceId>`. Owner auth is enforced upstream by
+   *  the launcher; here we only translate runId → instance id.
+   *
+   *  We do NOT proxy an interactive shell ourselves: `container.exec()` is
+   *  pipe-based (no PTY, no resize — see workers-types ContainerExecOptions), so
+   *  it can't host a real terminal. Cloudflare's own `wrangler containers ssh`
+   *  allocates a proper PTY, so attach shells out to it from the CLI instead. */
+  private async handleSshTarget(): Promise<Response> {
+    const state = await this.ctx.storage.get<PersistedState>("state")
+    if (!state || state.meta.status === "STOPPED") {
+      return Response.json(
+        { error: "Run is not running — `wrangler containers ssh` needs a live instance." },
+        { status: 409 },
       )
-      ;(async () => {
-        for await (const chunk of exec.stdout) {
-          try {
-            ws.send(chunk)
-          } catch {
-            break
-          }
-        }
-        ws.close(1000, "exec-exited")
-      })()
-      ;(async () => {
-        const buf =
-          typeof message === "string"
-            ? new TextEncoder().encode(message)
-            : new Uint8Array(message)
-        await exec.stdin.write(buf)
-      })()
+    }
+    try {
+      const instanceId = await this.resolveInstanceId()
+      if (!instanceId) {
+        return Response.json(
+          { error: "Could not resolve a running Container instance for this Run." },
+          { status: 404 },
+        )
+      }
+      return Response.json({ instanceId })
+    } catch (e) {
+      return Response.json({ error: String(e) }, { status: 502 })
     }
   }
 
-  override async webSocketClose(ws: WebSocket): Promise<void> {
-    try {
-      ws.close()
-    } catch {
-      /* ignore */
+  /**
+   * Resolve the runtime Container instance id for this Run.
+   *
+   * The `@cloudflare/containers` SDK exposes no API for a DO to read its own
+   * Container's instance id, so we go through the CF REST API: find the
+   * `RunContainer` application, list its instances, and correlate the one
+   * backing THIS RunDO. The correlation key is the Container DO id
+   * (`RUN_CONTAINER.idFromName(runDOid)` — see `getContainer()`), from which CF
+   * derives the instance.
+   *
+   * LIVE-VERIFY: the REST paths and the instance field that carries the DO id
+   * are unconfirmed against a live account (the public API reference 404s on
+   * the containers section as of 2026-05). The three marked lines are the only
+   * places to adjust once a real instance can be inspected. See IMPROVEMENTS.md
+   * #11.
+   */
+  private async resolveInstanceId(): Promise<string | null> {
+    const apiToken = this.env.CF_API_TOKEN
+    const accountId = this.env.CF_ACCOUNT_ID
+    if (!apiToken || !accountId) {
+      throw new Error("Worker missing CF_API_TOKEN / CF_ACCOUNT_ID secrets")
     }
+    const base = `https://api.cloudflare.com/client/v4/accounts/${accountId}/containers`
+    const auth = { Authorization: `Bearer ${apiToken}` }
+
+    // The Container DO that backs this Run (mirrors getContainer()).
+    const containerDoId = this.env.RUN_CONTAINER.idFromName(
+      this.ctx.id.toString(),
+    ).toString()
+
+    // 1. Find the RunContainer application.            // LIVE-VERIFY: path + shape
+    const appsRes = await fetch(`${base}/applications`, { headers: auth })
+    const appsBody = (await appsRes.json()) as {
+      result?: Array<{ id: string; name?: string; class_name?: string }>
+    }
+    const app = (appsBody.result ?? []).find(
+      (a) => a.class_name === "RunContainer" || (a.name ?? "").includes("RunContainer"),
+    )
+    if (!app) return null
+
+    // 2. List its instances.                           // LIVE-VERIFY: path + shape
+    const insRes = await fetch(`${base}/applications/${app.id}/instances`, {
+      headers: auth,
+    })
+    const insBody = (await insRes.json()) as { result?: Array<Record<string, unknown>> }
+    const instances = insBody.result ?? []
+
+    // 3. Correlate to this Run's Container DO.          // LIVE-VERIFY: which field
+    const match = instances.find((i) =>
+      [i["durable_object_id"], i["name"], i["id"]].some(
+        (v) => typeof v === "string" && v === containerDoId,
+      ),
+    )
+    const id = match?.["id"]
+    return typeof id === "string" ? id : null
   }
 
   private async handleLogsStream(_req: Request): Promise<Response> {

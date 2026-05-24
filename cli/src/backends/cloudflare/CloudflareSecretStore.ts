@@ -76,7 +76,7 @@ export const CloudflareSecretStoreLive = Layer.effect(
         }
         return out.secrets.map<Secret>((name) => ({
           name,
-          ssmName: `AFK_SECRET_${name}`,
+          reference: `AFK_SECRET_${name}`,
         }))
       }),
     })

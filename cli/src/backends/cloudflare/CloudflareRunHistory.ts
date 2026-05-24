@@ -2,15 +2,7 @@ import { DateTime, Effect, Layer } from "effect"
 import { RunHistory, type HistoryRow } from "../../services/backend/RunHistory.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { CloudflareError, UserError } from "../../infra/Errors.ts"
-
-const authHeaders = (): Record<string, string> => {
-  const id = process.env.AFK_CF_CLIENT_ID
-  const secret = process.env.AFK_CF_CLIENT_SECRET
-  const out: Record<string, string> = { "content-type": "application/json" }
-  if (id) out["CF-Access-Client-Id"] = id
-  if (secret) out["CF-Access-Client-Secret"] = secret
-  return out
-}
+import { cfAuthHeaders } from "./cfAuth.ts"
 
 /**
  * Cloudflare implementation of RunHistory.
@@ -60,7 +52,7 @@ export const CloudflareRunHistoryLive = Layer.effect(
           const url = `${base}/history?${params.toString()}`
           const out = yield* Effect.tryPromise({
             try: async () => {
-              const res = await fetch(url, { headers: authHeaders() })
+              const res = await fetch(url, { headers: cfAuthHeaders() })
               const text = await res.text()
               if (!res.ok) {
                 throw new CloudflareError({
