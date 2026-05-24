@@ -63,3 +63,38 @@ export const AFK_IMAGE_PLACEHOLDER = "${AFK_IMAGE}"
 // User_data conventions on the VM.
 export const VM_AFK_DIR = "/etc/afk"
 export const VM_COMPOSE_PATH = "/etc/afk/compose.yml"
+
+// ---------- Local Backend ----------
+//
+// Docker container labels are the Local Backend's truth source — the analogue
+// of the `afk:*` EC2 tags. Label keys can't contain ':' the way tags do, so we
+// use the dotted `afk.*` convention Docker recommends.
+export const LABEL_OWNER = "afk.owner"
+export const LABEL_RUN_ID = "afk.run-id"
+export const LABEL_BRANCH = "afk.branch"
+export const LABEL_SHA = "afk.sha"
+export const LABEL_MANAGED = "afk.managed"
+export const LABEL_REPO = "afk.repo"
+export const LABEL_TIMEOUT_HOURS = "afk.timeout-hours"
+export const LABEL_STARTED_AT = "afk.started-at"
+export const LABEL_IMAGE = "afk.image"
+export const LABEL_MAIN_SERVICE = "afk.main-service"
+
+// The single principal every local Run is owned by (single-machine backend —
+// see CONTEXT.md "Owner"). Ownership scoping is a no-op locally.
+export const LOCAL_OWNER_ID = "local"
+
+// Local Golden Image repository (an image in the developer's own daemon, never
+// pushed to a registry). Tagged `<repo>:<version>` like the cloud artifacts.
+export const LOCAL_GOLDEN_REPO = "afk-golden-local"
+
+// Inside the outer dind container the bootstrap writes here; this path is the
+// bind-mounted per-Run scratch dir (host side: ~/.afk/runs/<runId>).
+export const LOCAL_RUN_MOUNT = "/var/afk/run"
+
+// Socket the inner rootless dockerd listens on (XDG_RUNTIME_DIR/docker.sock for
+// the `rootless` user). A `docker exec` shell into the outer container does not
+// inherit the bootstrap's exported DOCKER_HOST, so `afk attach` must set it to
+// talk to the inner daemon.
+export const LOCAL_INNER_DOCKER_HOST =
+  "unix:///home/rootless/.docker/run/docker.sock"

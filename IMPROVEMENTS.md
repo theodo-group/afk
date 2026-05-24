@@ -67,10 +67,6 @@ First end-to-end CF deploy against a real account (the verification work #12 ant
 
 **15.8 `afk doctor` should precheck the Workers Paid / Containers entitlement ⏳.** CF Containers requires the Workers Paid plan; on a Free-plan account every container op fails with a bare `Unauthorized` (the real *"requires the Workers Paid plan"* message is buried in wrangler's log file). `afk doctor` (and `golden build`) should detect this early via `wrangler containers list` and surface the upgrade URL.
 
-**15.16 CF execution — remaining follow-ups ⏳.** The CF execution path is now resolved end-to-end (`afk run` executes and is fully observable; logs + status arrive via the golden bootstrap's `POST /runs/:id/complete` callback). Remaining minor items:
-- `afk logs --follow` can't stream a still-running container (logs are shipped at exit) — needs incremental log push.
-- `POST /runs/:id/complete` should carry a per-run token rather than relying on runId unguessability.
-
 **15.17 `afk logs` options must precede the positional run-id ⏳ (cosmetic).** `afk logs <id> --follow` errors with "Received unknown argument '--follow'"; `afk logs --follow <id>` works. An @effect/cli ordering quirk — surface a clearer error or allow interleaving.
 
 ---

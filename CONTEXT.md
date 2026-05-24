@@ -24,13 +24,13 @@ Not to be confused with the launch itself: a Run Plan describes intent; launchin
 
 A provider-specific implementation of the operations a Run depends on: launching a container, attaching an interactive shell, streaming logs, terminating. The CLI is written against a Backend interface so the user-facing surface (`afk run`, `afk attach`, …) stays identical across providers.
 
-The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`) is the default for every command. A per-command `--local` flag overrides it for that invocation only.
+The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`) is the default for every command. The Local Backend is special among Backends in being reachable through two channels: it can be the persisted Backend (`afk init --provider local`) like any other, *and* a per-command `--local` flag selects it for that invocation only regardless of the persisted Backend.
 
 Backends:
 - **AWS EC2** — shipped. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
 - **Cloudflare Containers** — shipped. Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. Runs `dockerd` rootless inside the Container to host the workload. Compose Contract honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
 - **GCP (Compute Engine)**, **Azure (Virtual Machines)** — anticipated future cloud Backends. Each is expected to follow the same one-VM-per-Run shape as AWS.
-- **Local** — a peer Backend that would launch the Run on the developer's local Docker daemon instead of in the cloud. Same image, entrypoint, env, secrets, and lifecycle rules as the cloud Backends; differs only in where the containers run. Selected via `--local` on any command. Not yet implemented.
+- **Local** — a peer Backend that mirrors the Cloudflare shape with the Cloudflare Container instance swapped for a Docker container on the developer's own machine. Each Run is one outer container running rootless `dockerd`, booted from a local [[golden-image]], hosting the `docker compose` stack inside it — so it honors the same Compose addenda and rootless constraints as Cloudflare. Fully self-contained: it makes no cloud API calls and needs no cloud credentials (secrets, history, and the Run index all live on the developer's machine). Selectable both as the persisted Backend (`afk init --provider local`) and per-command via `--local`.
 
 ## Owner
 
@@ -53,6 +53,7 @@ The per-account, per-[[backend]] **boot artifact** used by every Run. Its sole p
 The concrete artifact type is Backend-specific:
 - On **AWS EC2**, the Golden Image is an **AMI** (a VM disk image) containing Amazon Linux + Docker + the pre-pulled images in `/var/lib/docker`.
 - On **Cloudflare Containers**, the Golden Image is a **Container image** (pushed to CF managed registry) containing rootless `dockerd` + the pre-pulled images baked into `/var/afk/cache/`.
+- On **Local**, the Golden Image is a **Container image** of the same shape as Cloudflare's (rootless `dockerd` + pre-pulled cache), built into the developer's own Docker daemon rather than pushed to a registry. It is the boot artifact for the outer dind container that backs each local Run.
 
 Despite the artifact difference, the role is identical: it's the layer below the dev's per-build agent image, providing the runtime engine + sidecar cache. Run-time behavior (cloning source, running the workload, shipping logs, self-terminating) is injected fresh per Run, not baked into the Golden Image.
 

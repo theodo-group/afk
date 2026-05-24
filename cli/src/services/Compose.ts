@@ -23,7 +23,12 @@ import { AFK_IMAGE_PLACEHOLDER } from "../constants.ts"
 export interface ComposeLintInput {
   readonly content: string
   readonly mainService: string
-  readonly backend: "aws" | "cloudflare"
+  /**
+   * "local" reuses the "cloudflare" mutation: it runs the workload inside
+   * rootless `dind`, so it needs the same `network_mode: host` + `extra_hosts`
+   * addenda and the same port-collision hard error.
+   */
+  readonly backend: "aws" | "cloudflare" | "local"
 }
 
 export interface ComposeLintResult {

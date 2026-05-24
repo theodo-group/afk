@@ -102,7 +102,7 @@ export class Compute extends Context.Tag("Compute")<
      * Identify the Backend at runtime. Used by `afk doctor` and surfaced in
      * `afk ls`/`afk history` output.
      */
-    readonly backendName: "aws" | "cloudflare"
+    readonly backendName: "aws" | "cloudflare" | "local"
 
     /**
      * Resolve everything needed to launch a Run without launching anything.

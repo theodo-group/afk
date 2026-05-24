@@ -89,28 +89,84 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
   echo "afk-golden: pulling \$AFK_IMAGE" >>"\$LOG"
   timeout 600 docker pull "\$AFK_IMAGE" >>"\$LOG" 2>&1
 
-  TIMEOUT="\${AFK_TIMEOUT_SECONDS:-14400}"
-  set +e
+  MAIN_SVC="\${AFK_MAIN_SERVICE:-agent}"
+
+  # Materialise the compose graph (if any) and learn the service list up front —
+  # the incremental log poller below starts BEFORE \`docker compose up\`.
   if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
     mkdir -p /etc/afk
     printf '%s' "\$AFK_COMPOSE_YML" > /etc/afk/compose.yml
+    SVCS=\$(docker compose -f /etc/afk/compose.yml config --services 2>/dev/null) || SVCS="\$MAIN_SVC"
+  else
+    SVCS="\$MAIN_SVC"
+  fi
+
+  # Snapshot every service's current logs into /var/afk/svc-<svc>.log. Called
+  # periodically by the poller and once more after teardown.
+  capture_services() {
+    if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
+      for svc in \$SVCS; do
+        docker compose -f /etc/afk/compose.yml logs --no-log-prefix --no-color "\$svc" \\
+          > "/var/afk/svc-\$svc.log" 2>/dev/null || true
+      done
+    else
+      cp "\$LOG" "/var/afk/svc-\$MAIN_SVC.log" 2>/dev/null || true
+    fi
+  }
+
+  # Build the {"<svc>":"<base64>"} object from the captured files. The main
+  # service gets a larger byte budget than the diagnostic sidecars.
+  build_services_json() {
+    printf '{'
+    SEP=""
+    for svc in \$SVCS; do
+      f="/var/afk/svc-\$svc.log"
+      [ -f "\$f" ] || continue
+      if [ "\$svc" = "\$MAIN_SVC" ]; then BUDGET=131072; else BUDGET=32768; fi
+      B64=\$(tail -c "\$BUDGET" "\$f" 2>/dev/null | base64 | tr -d '\\n')
+      printf '%s"%s":"%s"' "\$SEP" "\$svc" "\$B64"
+      SEP=","
+    done
+    printf '}'
+  }
+
+  # POST a JSON body to the launcher, carrying the per-Run token so the Worker
+  # can authenticate the callback (the container has no CF Access creds).
+  post_json() {
+    wget -qO- --header="Content-Type: application/json" \\
+      --header="X-AFK-Run-Token: \${AFK_COMPLETE_TOKEN:-}" \\
+      --post-data="\$2" "\$1" >/dev/null 2>&1 || true
+  }
+
+  # Incremental log push: while the workload runs, ship a growing per-service
+  # snapshot every few seconds so \`afk logs --follow\` streams a live Run rather
+  # than waiting for exit. The final /complete callback ships the authoritative
+  # copy. (The stored snapshot only grows, so the CLI prints byte deltas.)
+  POLLER_PID=""
+  if [ -n "\${AFK_PROGRESS_URL:-}" ]; then
+    (
+      set +e
+      while true; do
+        sleep "\${AFK_LOG_PUSH_INTERVAL:-5}"
+        capture_services
+        post_json "\$AFK_PROGRESS_URL" "\$(printf '{"services":%s}' "\$(build_services_json)")"
+      done
+    ) &
+    POLLER_PID=\$!
+  fi
+
+  TIMEOUT="\${AFK_TIMEOUT_SECONDS:-14400}"
+  set +e
+  if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
     # Export the vars the compose file interpolates: \${AFK_COMMAND} and
     # \${AFK_ENV_FILE} (the env_file: path), plus source the env for the rest.
     export AFK_COMMAND
     export AFK_ENV_FILE="\$ENV_FILE"
     set -a; . "\$ENV_FILE"; set +a
     timeout "\$TIMEOUT" docker compose -f /etc/afk/compose.yml \\
-      up --exit-code-from "\${AFK_MAIN_SERVICE:-agent}" --abort-on-container-exit \\
+      up --exit-code-from "\$MAIN_SVC" --abort-on-container-exit \\
       >>"\$LOG" 2>&1
     RUN_EXIT=\$?
-    # Capture each service's logs to its own file BEFORE teardown removes them,
-    # so the per-service payload below mirrors the AWS per-service awslogs streams.
-    SVCS=\$(docker compose -f /etc/afk/compose.yml config --services 2>/dev/null)
-    for svc in \$SVCS; do
-      docker compose -f /etc/afk/compose.yml logs --no-log-prefix --no-color "\$svc" \\
-        > "/var/afk/svc-\$svc.log" 2>/dev/null || true
-    done
-    docker compose -f /etc/afk/compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
   else
     # --network host: child containers share the CF container's network (no
     # bridge/NAT is available — see dockerd flags above).
@@ -118,35 +174,25 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
       --env-file "\$ENV_FILE" "\$AFK_IMAGE" sh -c "\$AFK_COMMAND" \\
       >>"\$LOG" 2>&1
     RUN_EXIT=\$?
-    # Single-container Run: its one logical service is the main service.
-    SVCS="\${AFK_MAIN_SERVICE:-agent}"
-    cp "\$LOG" "/var/afk/svc-\${AFK_MAIN_SERVICE:-agent}.log" 2>/dev/null || true
   fi
+
+  # Stop the poller and take a final snapshot BEFORE compose teardown removes
+  # the containers, so the per-service payload is complete.
+  [ -n "\$POLLER_PID" ] && kill "\$POLLER_PID" 2>/dev/null || true
+  capture_services
+  if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
+    docker compose -f /etc/afk/compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+
   cat "\$LOG" 2>/dev/null || true
   echo "afk-golden: workload exited \$RUN_EXIT"
 
-  # Ship a per-service log map + exit code to the launcher Worker (the CF analog
-  # of the AWS awslogs driver). The main service gets a larger byte budget than
-  # sidecars, which are diagnostic. The Worker stores the map so \`afk logs\`
-  # (default/--service/--all) and \`afk ls\` work.
+  # Authoritative final callback: per-service log map + exit code. The Worker
+  # stores the map (so \`afk logs\` default/--service/--all work) and flips the
+  # Run to STOPPED.
   if [ -n "\${AFK_COMPLETE_URL:-}" ]; then
-    MAIN_SVC="\${AFK_MAIN_SERVICE:-agent}"
-    {
-      printf '{"exitCode":%s,"services":{' "\$RUN_EXIT"
-      SEP=""
-      for svc in \$SVCS; do
-        f="/var/afk/svc-\$svc.log"
-        [ -f "\$f" ] || continue
-        if [ "\$svc" = "\$MAIN_SVC" ]; then BUDGET=131072; else BUDGET=32768; fi
-        B64=\$(tail -c "\$BUDGET" "\$f" 2>/dev/null | base64 | tr -d '\\n')
-        printf '%s"%s":"%s"' "\$SEP" "\$svc" "\$B64"
-        SEP=","
-      done
-      printf '}}'
-    } > /var/afk/complete.json
-    wget -qO- --header="Content-Type: application/json" \\
-      --post-data="\$(cat /var/afk/complete.json)" \\
-      "\$AFK_COMPLETE_URL" >/dev/null 2>&1 || true
+    post_json "\$AFK_COMPLETE_URL" \\
+      "\$(printf '{"exitCode":%s,"services":%s}' "\$RUN_EXIT" "\$(build_services_json)")"
   fi
   exit "\$RUN_EXIT"
 fi
