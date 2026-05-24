@@ -16,7 +16,7 @@ One rule buys this:
 
 No command imports `AwsCompute` or `CloudflareCompute`; it imports the `Compute`
 tag. Which implementation answers the tag is a layer-composition decision
-(`cli.ts:165`), invisible to commands.
+(`cli.ts:175`), invisible to commands.
 
 ## Layers (the directories)
 
@@ -44,14 +44,16 @@ cli/src/
 ├── services/           Backend-neutral business logic.
 │   ├── backend/          Interface tags only — NO implementations.
 │   │   └── Compute.ts, ImageRegistry.ts, SecretStore.ts, LogStore.ts,
-│   │       RunHistory.ts, GoldenImage.ts, BackendDoctor.ts, Team.ts
+│   │       RunHistory.ts, GoldenImage.ts, BackendDoctor.ts, Team.ts,
+│   │       Provisioner.ts
 │   ├── RunService.ts      Orchestrator: build image, delegate to Compute, stream logs.
 │   └── BuildService, ConfigService, HistoryService, TeamService, BootstrapService,
 │       Compose, RunPlan, GoldenImageVersion, Pricing, UserData
 │
 ├── backends/           Provider implementations of services/backend/.
 │   ├── aws/              AwsCompute, AwsImageRegistry, … + index.ts aggregate
-│   └── cloudflare/       CloudflareCompute, …            + index.ts aggregate
+│   ├── cloudflare/       CloudflareCompute, …            + index.ts aggregate
+│   └── local/            LocalCompute, …  (rootless dind) + index.ts aggregate
 │
 └── commands/           @effect/cli Command definitions, one per file.
     └── golden/, secrets/, team/   subcommand groups (each an index.ts dispatcher)
@@ -79,7 +81,7 @@ backends' error types, so the caller's type is stable across backends.
 export class Compute extends Context.Tag("Compute")<
   Compute,
   {
-    readonly backendName: "aws" | "cloudflare"
+    readonly backendName: "aws" | "cloudflare" | "local"
     readonly prepare: (input: StartInput) => Effect.Effect<PreparedRun, …>
     readonly launch:  (plan: PreparedRun) => Effect.Effect<RunStarted, …>
     // …kill, listMine, listAll, findByRunId, attach, callerPrincipal
@@ -94,7 +96,8 @@ irreversible step. RunService orchestrates the two (and owns log streaming via
 
 **2. Implementations — `backends/<provider>/*.ts`.** One `Layer.effect` per tag.
 Backends map native concepts onto neutral ones (e.g. `schema/Run.ts` collapses
-EC2/CF states into `RunStatus`: `PROVISIONING | RUNNING | STOPPING | STOPPED`).
+EC2 / CF / local-container states into `RunStatus`: `PROVISIONING | RUNNING |
+STOPPING | STOPPED`).
 
 ```ts
 // backends/aws/AwsCompute.ts
@@ -123,10 +126,11 @@ const Leaves = Layer.mergeAll(
 export const AwsBackendLive = AwsComputeLive.pipe(Layer.provideMerge(Leaves))
 ```
 
-**Adding a Backend:** implement the eight `services/backend/` tags (Compute,
+**Adding a Backend:** implement the nine `services/backend/` tags (Compute,
 ImageRegistry, SecretStore, LogStore, RunHistory, GoldenImageStore,
-BackendDoctor, Team) under `backends/<new>/`, write `<New>BackendLive` in its
-`index.ts`, add one branch to `cli.ts`. No command changes.
+BackendDoctor, Team, Provisioner) under `backends/<new>/`, write
+`<New>BackendLive` in its `index.ts`, add one branch to `cli.ts`. No command
+changes.
 
 ## Layer composition in `cli.ts`
 
@@ -148,22 +152,30 @@ Two subtleties before editing this file:
 
 - **The Backend is picked synchronously, before the runtime exists.**
   `pickBackendName()` walks up from cwd, reads `afk.config.json`, returns `"aws"`
-  (default) or `"cloudflare"` — a layer can't be selected from inside an Effect
-  because the layer *provides* the runtime. The two aggregates have different
-  external deps (AWS SDK vs Docker) and can't be unified into one value, so
-  `cli.ts` branches into two fully-resolved `L_backend`s; downstream is identical.
+  (default), `"cloudflare"`, or `"local"` — a layer can't be selected from inside
+  an Effect because the layer *provides* the runtime. The aggregates have
+  different external deps (AWS SDK vs Docker) and can't be unified into one
+  value, so `cli.ts` branches into three fully-resolved `L_backend`s; downstream
+  is identical. `pickBackendName()` also checks `argv` for `--local` *first* — the
+  Local Backend is reachable both as the persisted `backend` and as a
+  per-command override (the only Backend with two selection channels). Because
+  `--local` is consumed here, before the runtime, the `program` strips it from
+  the argv handed to `@effect/cli` so a command's args never swallow it.
 - **`.env` loads even earlier.** `loadProjectDotenv()` runs at import time,
   walking up to the project root and loading the `.env` beside `afk.config.json`.
   It does not override already-exported variables.
 
 Output mode and log level come from `argv` (`--json/--verbose/--quiet`) and are
-provided as separate layers at the call site, independent of `AppLive`.
+provided as separate layers at the call site. `OutputLive` is provided *outside*
+`AppLive` (after it in the provide chain): backend layers stream progress through
+the `Output` tag (the `Provisioner` prints its `terraform`/`wrangler` steps), so
+`AppLive` carries an `Output` requirement this outer provide satisfies.
 
 **No cross-backend stubs.** Every command depends only on neutral tags resolved
-by the active aggregate, so neither aggregate stubs the other's impls. (An
-earlier design stubbed the inactive backend's golden builder to keep `AppLive`'s
-type resolved; folding both builders into the one `GoldenImageStore` seam removed
-the need.)
+by the active aggregate, so no aggregate stubs another's impls. (An earlier
+design stubbed the inactive backend's golden builder to keep `AppLive`'s type
+resolved; folding every builder into the one `GoldenImageStore` seam removed the
+need.)
 
 ## Request flow: `afk run`
 
@@ -201,14 +213,18 @@ Run-id is optional: omitted with a TTY, the command prompts (`Prompt.select`)
 from recent `HistoryService` rows so the developer picks a Run instead of
 copying an id; omitted without a TTY it errors rather than hang a pipe.
 
-Both Backends key logs by `<runId>/<service>` so the filter works identically.
+Every Backend keys logs per service so the filter works identically.
 AWS: per-service CloudWatch streams — the compose path injects a per-service
 `logging.options.awslogs-stream: <runId>/<service>` at submit time (the daemon
 default `{{.Name}}` is the *container* name, which doesn't match). CF: no log
 driver, so
 the golden bootstrap captures `docker compose logs` per service and POSTs a
 `{ exitCode, services: { <name>: <b64> } }` map to `/runs/:id/complete`; sidecars
-get a tighter truncation budget than the main service.
+get a tighter truncation budget than the main service. Local: the outer
+container's bootstrap streams each service's `docker compose logs` *live* into a
+bind-mounted `logs/<service>.log` (plus a prefixed `combined.log` for `--all`),
+which the CLI reads straight off disk — so scoping is correct while the Run is
+alive, not just after exit.
 
 ## Errors
 
