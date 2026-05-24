@@ -1,9 +1,7 @@
 import { Effect, Layer } from "effect"
 import { SecretStore } from "../../services/backend/SecretStore.ts"
-import { ConfigService } from "../../services/ConfigService.ts"
-import { CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
 import type { Secret } from "../../schema/Secret.ts"
-import { cfAuthHeaders } from "./cfAuth.ts"
+import { CfWorker } from "./CfWorker.ts"
 
 /**
  * Cloudflare implementation of SecretStore. Proxies to the launcher Worker's
@@ -13,67 +11,25 @@ import { cfAuthHeaders } from "./cfAuth.ts"
 export const CloudflareSecretStoreLive = Layer.effect(
   SecretStore,
   Effect.gen(function* () {
-    const cfg = yield* ConfigService
-
-    const resolveWorkerUrl = Effect.gen(function* () {
-      const { config } = yield* cfg.load
-      const url = config.cloudflare?.workerUrl
-      if (!url) {
-        return yield* Effect.fail(
-          new UserError({
-            message: "cloudflare.workerUrl is not set in afk.config.json.",
-          }),
-        )
-      }
-      return url.replace(/\/$/, "")
-    })
-
-    const call = (
-      operation: string,
-      path: string,
-      init?: RequestInit,
-    ): Effect.Effect<unknown, CloudflareError | UserError | ConfigError> =>
-      Effect.gen(function* () {
-        const base = yield* resolveWorkerUrl
-        return yield* Effect.tryPromise({
-          try: async () => {
-            const res = await fetch(`${base}${path}`, {
-              ...init,
-              headers: { ...cfAuthHeaders(), ...(init?.headers ?? {}) },
-            })
-            const text = await res.text()
-            if (!res.ok) {
-              throw new CloudflareError({
-                operation,
-                status: res.status,
-                message: text || res.statusText,
-              })
-            }
-            return text ? JSON.parse(text) : {}
-          },
-          catch: (e): CloudflareError =>
-            e instanceof CloudflareError
-              ? e
-              : new CloudflareError({ operation, message: String(e) }),
-        })
-      })
+    const worker = yield* CfWorker
 
     return SecretStore.of({
       put: (name, value) =>
-        call("POST /secrets/:name", `/secrets/${encodeURIComponent(name)}`, {
-          method: "POST",
-          body: JSON.stringify({ value }),
-        }).pipe(Effect.asVoid),
+        worker
+          .postJson("POST /secrets/:name", `/secrets/${encodeURIComponent(name)}`, {
+            value,
+          })
+          .pipe(Effect.asVoid),
 
       delete: (name) =>
-        call("DELETE /secrets/:name", `/secrets/${encodeURIComponent(name)}`, {
-          method: "DELETE",
-        }).pipe(Effect.asVoid),
+        worker
+          .del("DELETE /secrets/:name", `/secrets/${encodeURIComponent(name)}`)
+          .pipe(Effect.asVoid),
 
       list: Effect.gen(function* () {
-        const out = (yield* call("GET /secrets", "/secrets")) as {
+        const out = yield* worker.getJson<{
           secrets: ReadonlyArray<string>
-        }
+        }>("GET /secrets", "/secrets")
         return out.secrets.map<Secret>((name) => ({
           name,
           reference: `AFK_SECRET_${name}`,

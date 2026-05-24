@@ -3,6 +3,7 @@ import { ImageRegistry } from "../../services/backend/ImageRegistry.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { CloudflareError } from "../../infra/Errors.ts"
+import { parseWranglerJsonArray } from "./wranglerJson.ts"
 
 const CF_REGISTRY_HOST = "registry.cloudflare.com"
 
@@ -47,28 +48,10 @@ export const CloudflareImageRegistryLive = Layer.effect(
               }),
           ),
           Effect.flatMap((result) =>
-            Effect.try({
-              try: () => {
-                const start = result.stdout.indexOf("[")
-                const end = result.stdout.lastIndexOf("]")
-                if (start === -1 || end === -1 || end < start) {
-                  throw new Error(
-                    `no JSON array in output: ${result.stdout.slice(0, 200)}`,
-                  )
-                }
-                return JSON.parse(
-                  result.stdout.slice(start, end + 1),
-                ) as ReadonlyArray<{
-                  name: string
-                  tags?: ReadonlyArray<string>
-                }>
-              },
-              catch: (cause) =>
-                new CloudflareError({
-                  operation: "registry:list",
-                  message: `could not parse wrangler images JSON: ${String(cause)}`,
-                }),
-            }),
+            parseWranglerJsonArray<{
+              name: string
+              tags?: ReadonlyArray<string>
+            }>(result.stdout, "registry:list"),
           ),
           Effect.map((repos) => {
             const target = bareRepo(repoName)
@@ -78,6 +61,13 @@ export const CloudflareImageRegistryLive = Layer.effect(
         )
 
     const accountId = cfg.load.pipe(
+      Effect.mapError(
+        (e) =>
+          new CloudflareError({
+            operation: "config:accountId",
+            message: e.message,
+          }),
+      ),
       Effect.flatMap((r) => {
         const id = r.config.cloudflare?.accountId
         if (!id) {
@@ -91,14 +81,6 @@ export const CloudflareImageRegistryLive = Layer.effect(
         }
         return Effect.succeed(id)
       }),
-      Effect.mapError((e) =>
-        e instanceof CloudflareError
-          ? e
-          : new CloudflareError({
-              operation: "config:accountId",
-              message: (e as { message?: string }).message ?? String(e),
-            }),
-      ),
     )
 
     const registryUriEffect = accountId.pipe(

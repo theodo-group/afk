@@ -4,13 +4,14 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { Subprocess } from "../../infra/Subprocess.ts"
+import { Output } from "../../infra/Output.ts"
 import { RunHistory } from "../../services/backend/RunHistory.ts"
 import { GoldenImageStore } from "../../services/backend/GoldenImage.ts"
+import { CfWorker } from "./CfWorker.ts"
 import {
   Compute,
   type AttachOptions,
   type PreparedRun,
-  type RunStarted,
   type StartInput,
 } from "../../services/backend/Compute.ts"
 import {
@@ -19,98 +20,18 @@ import {
   UserError,
 } from "../../infra/Errors.ts"
 import { COMPOSE_FILE, DEFAULT_MAIN_SERVICE } from "../../constants.ts"
-import type { Run, RunStatus } from "../../schema/Run.ts"
-import { assembleRunPlan } from "../../services/RunPlan.ts"
-import { cfAuthHeaders } from "./cfAuth.ts"
-
-const DEFAULT_INSTANCE_TIER = "standard-1"
+import type { Run } from "../../schema/Run.ts"
+import {
+  type CloudflareBackendPlan,
+  type RunMetadataWire,
+  planCloudflareRun,
+  toRunStarted,
+  toStartRequest,
+  wireToRun,
+} from "./CloudflareRunPlan.ts"
 
 /** Where the golden bootstrap writes the compose file inside the Container. */
 const CONTAINER_COMPOSE_PATH = "/etc/afk/compose.yml"
-
-const mapStatus = (s: string): RunStatus => {
-  switch (s) {
-    case "PROVISIONING":
-      return "PROVISIONING"
-    case "RUNNING":
-      return "RUNNING"
-    case "STOPPING":
-      return "STOPPING"
-    default:
-      return "STOPPED"
-  }
-}
-
-interface CloudflareBackendPlan {
-  readonly workerUrl: string
-  readonly instanceTier: string
-  readonly accountId?: string
-  readonly startedAt: string
-  readonly composeContent?: string
-}
-
-interface RunMetadataWire {
-  readonly runId: string
-  readonly owner: string
-  readonly branch: string
-  readonly sha: string
-  readonly image: string
-  readonly repoName: string
-  readonly startedAt: string
-  readonly timeoutHours: number
-  readonly status: "PROVISIONING" | "RUNNING" | "STOPPING" | "STOPPED"
-  readonly mainService: string
-  readonly instanceTier: string
-  readonly resourceId?: string
-  readonly stoppedAt?: string
-  readonly exitCode?: number
-  readonly stopReason?: string
-}
-
-const wireToRun = (m: RunMetadataWire): Run => ({
-  runId: m.runId as Run["runId"],
-  resourceId: m.resourceId ?? m.runId,
-  status: mapStatus(m.status),
-  backend: "cloudflare",
-  owner: m.owner,
-  branch: m.branch,
-  sha: m.sha,
-  image: m.image,
-  backendDetails: {
-    instanceTier: m.instanceTier,
-    mainService: m.mainService,
-  },
-  startedAt: m.startedAt,
-  ...(m.stoppedAt !== undefined ? { stoppedAt: m.stoppedAt } : {}),
-  ...(m.stopReason !== undefined ? { stopReason: m.stopReason } : {}),
-})
-
-const httpJson = <T>(
-  operation: string,
-  url: string,
-  init?: RequestInit,
-): Effect.Effect<T, CloudflareError> =>
-  Effect.tryPromise({
-    try: async (): Promise<T> => {
-      const res = await fetch(url, {
-        ...init,
-        headers: { ...cfAuthHeaders(), ...(init?.headers ?? {}) },
-      })
-      const text = await res.text()
-      if (!res.ok) {
-        throw new CloudflareError({
-          operation,
-          status: res.status,
-          message: text || res.statusText,
-        })
-      }
-      return text ? (JSON.parse(text) as T) : ({} as T)
-    },
-    catch: (e): CloudflareError =>
-      e instanceof CloudflareError
-        ? e
-        : new CloudflareError({ operation, message: String(e) }),
-  })
 
 /**
  * Cloudflare implementation of the abstract Compute tag. Every operation is
@@ -124,13 +45,20 @@ export const CloudflareComputeLive = Layer.effect(
   Effect.gen(function* () {
     const cfg = yield* ConfigService
     const sub = yield* Subprocess
+    const out = yield* Output
     const history = yield* RunHistory
     const golden = yield* GoldenImageStore
+    const worker = yield* CfWorker
 
+    // Owner principal for this caller (Cloudflare Access service-token client-id,
+    // or "local" in single-dev / no-Access mode).
+    const principalId = process.env.AFK_CF_CLIENT_ID ?? "local"
+
+    // The Run's completion callback needs the Worker's absolute URL; resolve it
+    // from config here (CfWorker owns relative-path calls, not URL exposure).
     const resolveWorkerUrl = Effect.gen(function* () {
       const { config } = yield* cfg.load
-      const cf = config.cloudflare
-      const url = cf?.workerUrl
+      const url = config.cloudflare?.workerUrl
       if (!url) {
         return yield* Effect.fail(
           new UserError({
@@ -144,6 +72,7 @@ export const CloudflareComputeLive = Layer.effect(
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
+        // Shell: gather the effectful inputs the core needs.
         const { config, envEntries, projectRoot, sourceRepoName } = yield* cfg.load
         const workerUrl = yield* resolveWorkerUrl
 
@@ -161,18 +90,6 @@ export const CloudflareComputeLive = Layer.effect(
             }),
           )
         }
-        const built = input.built
-        const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
-
-        const tierOverride =
-          typeof input.backendOverrides?.instanceType === "string"
-            ? (input.backendOverrides.instanceType as string)
-            : undefined
-        const instanceTier =
-          tierOverride ??
-          config.cloudflare?.defaultInstanceTier ??
-          config.defaultInstanceType ??
-          DEFAULT_INSTANCE_TIER
 
         const composePath = resolve(projectRoot, COMPOSE_FILE)
         const composeRaw = existsSync(composePath)
@@ -186,86 +103,33 @@ export const CloudflareComputeLive = Layer.effect(
             })
           : undefined
 
-        const runId = randomUUID()
-        const startedAt = new Date().toISOString()
-
-        const assembled = assembleRunPlan({
+        // Core: pure resolution + validation. Non-deterministic seeds are
+        // generated here in the shell and injected, so the core stays testable.
+        const core = yield* planCloudflareRun({
           config,
           envEntries,
-          built,
-          ref: input.ref,
-          timeoutHours: input.timeoutHours,
-          mainService,
-          backend: "cloudflare",
-          composeContent: composeRaw,
-          runId,
-        })
-        if (assembled.composeError) {
-          return yield* Effect.fail(new UserError({ message: assembled.composeError }))
-        }
-        for (const w of assembled.warnings) console.warn(`warning: ${w}`)
-        const { timeoutHours, timeoutSeconds, env, secrets, composeContent, composeUsed } =
-          assembled
-
-        const backendPlan: CloudflareBackendPlan = {
+          sourceRepoName,
           workerUrl,
-          instanceTier,
-          ...(config.cloudflare?.accountId !== undefined
-            ? { accountId: config.cloudflare.accountId }
-            : {}),
-          startedAt,
-          ...(composeContent !== undefined ? { composeContent } : {}),
-        }
-
-        const plan: PreparedRun = {
-          runId,
-          command: input.command,
-          image: built.image,
-          branch: built.branch,
-          sha: built.sha,
-          composeUsed,
-          mainService,
-          timeoutHours,
-          timeoutSeconds,
-          owner: process.env.AFK_CF_CLIENT_ID ?? "local",
-          repoName: sourceRepoName,
-          env,
-          secrets,
-          logChannel: `Workers Logs (runId=${runId})`,
-          backendPlan: backendPlan as unknown as Record<string, unknown>,
-        }
-        return plan
+          principalId,
+          composeContent: composeRaw,
+          input,
+          runId: randomUUID(),
+          startedAt: new Date().toISOString(),
+        })
+        for (const w of core.warnings) yield* out.print(`warning: ${w}`)
+        return core.prepared
       })
 
     const launch = (plan: PreparedRun) =>
       Effect.gen(function* () {
-        const cf = plan.backendPlan as unknown as CloudflareBackendPlan
-        const startRequest = {
-          runId: plan.runId,
-          command: plan.command, // golden's bootstrap runs `docker run … sh -c "<command>"` inside the container
-
-          timeoutHours: plan.timeoutHours,
-          image: plan.image,
-          branch: plan.branch,
-          sha: plan.sha,
-          mainService: plan.mainService,
-          repoName: plan.repoName,
-          env: plan.env,
-          secretNames: plan.secrets,
-          ...(cf.composeContent !== undefined ? { compose: cf.composeContent } : {}),
-          instanceTier: cf.instanceTier,
-          // So the container can POST its completion callback (logs + exit) back.
-          workerUrl: cf.workerUrl,
-        }
-        const resp = yield* httpJson<{
+        const cf = plan.backendPlan as CloudflareBackendPlan
+        const startRequest = toStartRequest(plan, cf)
+        const resp = yield* worker.postJson<{
           runId: string
           resourceId: string
           status: "PROVISIONING"
           startedAt: string
-        }>("POST /runs", `${cf.workerUrl}/runs`, {
-          method: "POST",
-          body: JSON.stringify(startRequest),
-        })
+        }>("POST /runs", "/runs", startRequest)
 
         // recordStart is a no-op on CF (Worker writes D1) but we call it so
         // the abstract RunHistory interface stays uniform.
@@ -286,38 +150,21 @@ export const CloudflareComputeLive = Layer.effect(
           })
           .pipe(Effect.catchAll(() => Effect.void))
 
-        const result: RunStarted = {
-          runId: plan.runId,
-          resourceId: resp.resourceId,
-          image: plan.image,
-          branch: plan.branch,
-          sha: plan.sha,
-          composeUsed: plan.composeUsed,
-          backendDetails: {
-            instanceTier: cf.instanceTier,
-            mainService: plan.mainService,
-          },
-          logChannel: plan.logChannel,
-        }
-        return result
+        return toRunStarted(plan, cf, resp.resourceId)
       })
 
     const listMine = (_ownerUserId: string) =>
       Effect.gen(function* () {
-        const workerUrl = yield* resolveWorkerUrl
-        const { runs } = yield* httpJson<{ runs: ReadonlyArray<RunMetadataWire> }>(
-          "GET /runs",
-          `${workerUrl}/runs`,
-        )
+        const { runs } = yield* worker.getJson<{
+          runs: ReadonlyArray<RunMetadataWire>
+        }>("GET /runs", "/runs")
         return runs.map(wireToRun)
       })
 
     const listAll = Effect.gen(function* () {
-      const workerUrl = yield* resolveWorkerUrl
-      const { runs } = yield* httpJson<{ runs: ReadonlyArray<RunMetadataWire> }>(
-        "GET /runs?all=true",
-        `${workerUrl}/runs?all=true`,
-      )
+      const { runs } = yield* worker.getJson<{
+        runs: ReadonlyArray<RunMetadataWire>
+      }>("GET /runs?all=true", "/runs?all=true")
       return runs.map(wireToRun)
     })
 
@@ -325,10 +172,9 @@ export const CloudflareComputeLive = Layer.effect(
       runId: string,
     ): Effect.Effect<Run, CloudflareError | UserError | ConfigError> =>
       Effect.gen(function* () {
-        const workerUrl = yield* resolveWorkerUrl
-        const wire: RunMetadataWire = yield* httpJson<RunMetadataWire>(
+        const wire: RunMetadataWire = yield* worker.getJson<RunMetadataWire>(
           `GET /runs/${runId}`,
-          `${workerUrl}/runs/${encodeURIComponent(runId)}`,
+          `/runs/${encodeURIComponent(runId)}`,
         ).pipe(
           Effect.catchTag(
             "CloudflareError",
@@ -347,12 +193,9 @@ export const CloudflareComputeLive = Layer.effect(
       })
 
     const kill = (runId: string) =>
-      Effect.gen(function* () {
-        const workerUrl = yield* resolveWorkerUrl
-        yield* httpJson(`DELETE /runs/${runId}`, `${workerUrl}/runs/${encodeURIComponent(runId)}`, {
-          method: "DELETE",
-        })
-      })
+      worker
+        .del(`DELETE /runs/${runId}`, `/runs/${encodeURIComponent(runId)}`)
+        .pipe(Effect.asVoid)
 
     /**
      * Interactive shell into a Run via `wrangler containers ssh`.
@@ -371,7 +214,6 @@ export const CloudflareComputeLive = Layer.effect(
     const attach = (runId: string, opts: AttachOptions) =>
       Effect.gen(function* () {
         const { config } = yield* cfg.load
-        const workerUrl = yield* resolveWorkerUrl
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
 
         if ((process.env.CLOUDFLARE_API_TOKEN ?? "").length === 0) {
@@ -383,9 +225,9 @@ export const CloudflareComputeLive = Layer.effect(
           )
         }
 
-        const { instanceId } = yield* httpJson<{ instanceId: string }>(
+        const { instanceId } = yield* worker.getJson<{ instanceId: string }>(
           `GET /runs/${runId}/ssh-target`,
-          `${workerUrl}/runs/${encodeURIComponent(runId)}/ssh-target`,
+          `/runs/${encodeURIComponent(runId)}/ssh-target`,
         )
 
         const args = ["containers", "ssh", instanceId]
@@ -416,8 +258,8 @@ export const CloudflareComputeLive = Layer.effect(
       })
 
     const callerPrincipal = Effect.sync(() => ({
-      id: process.env.AFK_CF_CLIENT_ID ?? "local",
-      displayName: process.env.AFK_CF_CLIENT_ID ?? "local",
+      id: principalId,
+      displayName: principalId,
     }))
 
     return Compute.of({

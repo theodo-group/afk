@@ -8,19 +8,11 @@ import { CloudflareError, UserError } from "../../infra/Errors.ts"
 import { patchWranglerToml, patchConfigWorkerUrl } from "../../infra/CfToml.ts"
 import { Provisioner } from "../../services/backend/Provisioner.ts"
 import { CONFIG_FILE } from "../../constants.ts"
+import { parseWranglerJsonArray } from "./wranglerJson.ts"
 
 const D1_NAME = "afk-launcher-history"
 const KV_TITLE = "DEVELOPERS_KV"
 const MIGRATION = "migrations/0001_runs.sql"
-
-/** Slice the first top-level JSON array out of wrangler stdout (which is
- * prefixed by human banners like the "agent skills" notice). */
-const sliceJsonArray = (stdout: string): unknown => {
-  const start = stdout.indexOf("[")
-  const end = stdout.lastIndexOf("]")
-  if (start === -1 || end === -1 || end < start) return []
-  return JSON.parse(stdout.slice(start, end + 1))
-}
 
 const firstMatch = (s: string, re: RegExp): string | null => {
   const m = s.match(re)
@@ -82,6 +74,50 @@ export const CloudflareProvisionerLive = Layer.effect(
             ),
           )
 
+      // Idempotently ensure one wrangler resource (D1 db / KV namespace):
+      // list → reuse the existing match, else create it. Returns its id and
+      // patches it into wrangler.toml.
+      const ensureResource = <T>(input: {
+        readonly listArgs: ReadonlyArray<string>
+        readonly listOperation: string
+        readonly findExisting: (resources: ReadonlyArray<T>) => T | undefined
+        readonly idOf: (resource: T) => string
+        readonly displayName: string
+        readonly createArgs: ReadonlyArray<string>
+        readonly idRegex: RegExp
+        readonly parseOperation: string
+        readonly parseMessage: (stdout: string) => string
+        readonly tomlPatch: (id: string) => Parameters<typeof patchWranglerToml>[1]
+      }) =>
+        Effect.gen(function* () {
+          const listed = yield* wrangler(input.listArgs)
+          const resources = yield* parseWranglerJsonArray<T>(
+            listed.stdout,
+            input.listOperation,
+          )
+          const existing = input.findExisting(resources)
+          let resourceId: string
+          if (existing) {
+            resourceId = input.idOf(existing)
+            yield* out.print(`  reusing ${input.displayName} (${resourceId})`)
+          } else {
+            const created = yield* wrangler(input.createArgs)
+            const id = firstMatch(created.stdout, input.idRegex)
+            if (!id) {
+              return yield* Effect.fail(
+                new CloudflareError({
+                  operation: input.parseOperation,
+                  message: input.parseMessage(created.stdout),
+                }),
+              )
+            }
+            resourceId = id
+            yield* out.print(`  created ${input.displayName} (${resourceId})`)
+          }
+          patchWranglerToml(tomlPath, input.tomlPatch(resourceId))
+          return resourceId
+        })
+
       yield* out.print("• installing Worker dependencies (npm install)…")
       yield* sub
         .run("npm", ["install"], { cwd: workerDir })
@@ -96,56 +132,41 @@ export const CloudflareProvisionerLive = Layer.effect(
         )
 
       yield* out.print("• ensuring D1 database…")
-      const d1List = yield* wrangler(["d1", "list", "--json"])
-      const existingD1 = (sliceJsonArray(d1List.stdout) as Array<{
+      const databaseId = yield* ensureResource<{
         uuid: string
         name: string
-      }>).find((d) => d.name === D1_NAME)
-      let databaseId: string
-      if (existingD1) {
-        databaseId = existingD1.uuid
-        yield* out.print(`  reusing ${D1_NAME} (${databaseId})`)
-      } else {
-        const created = yield* wrangler(["d1", "create", D1_NAME])
-        const id = firstMatch(created.stdout, /database_id = "([^"]+)"/)
-        if (!id) {
-          return yield* Effect.fail(
-            new CloudflareError({
-              operation: "d1 create",
-              message: `could not parse database_id from:\n${created.stdout}`,
-            }),
-          )
-        }
-        databaseId = id
-        yield* out.print(`  created ${D1_NAME} (${databaseId})`)
-      }
-      patchWranglerToml(tomlPath, { databaseId })
+      }>({
+        listArgs: ["d1", "list", "--json"],
+        listOperation: "d1 list",
+        findExisting: (dbs) => dbs.find((d) => d.name === D1_NAME),
+        idOf: (db) => db.uuid,
+        displayName: D1_NAME,
+        createArgs: ["d1", "create", D1_NAME],
+        idRegex: /database_id = "([^"]+)"/,
+        parseOperation: "d1 create",
+        parseMessage: (stdout) => `could not parse database_id from:\n${stdout}`,
+        tomlPatch: (databaseId) => ({ databaseId }),
+      })
 
       yield* out.print("• ensuring KV namespace…")
-      const kvList = yield* wrangler(["kv", "namespace", "list"])
-      const existingKv = (sliceJsonArray(kvList.stdout) as Array<{
+      const kvId = yield* ensureResource<{
         id: string
         title: string
-      }>).find((n) => n.title === KV_TITLE || n.title.endsWith(`-${KV_TITLE}`))
-      let kvId: string
-      if (existingKv) {
-        kvId = existingKv.id
-        yield* out.print(`  reusing ${KV_TITLE} (${kvId})`)
-      } else {
-        const created = yield* wrangler(["kv", "namespace", "create", KV_TITLE])
-        const id = firstMatch(created.stdout, /id = "([^"]+)"/)
-        if (!id) {
-          return yield* Effect.fail(
-            new CloudflareError({
-              operation: "kv create",
-              message: `could not parse namespace id from:\n${created.stdout}`,
-            }),
-          )
-        }
-        kvId = id
-        yield* out.print(`  created ${KV_TITLE} (${kvId})`)
-      }
-      patchWranglerToml(tomlPath, { kvId })
+      }>({
+        listArgs: ["kv", "namespace", "list"],
+        listOperation: "kv list",
+        findExisting: (ns) =>
+          ns.find(
+            (n) => n.title === KV_TITLE || n.title.endsWith(`-${KV_TITLE}`),
+          ),
+        idOf: (n) => n.id,
+        displayName: KV_TITLE,
+        createArgs: ["kv", "namespace", "create", KV_TITLE],
+        idRegex: /id = "([^"]+)"/,
+        parseOperation: "kv create",
+        parseMessage: (stdout) => `could not parse namespace id from:\n${stdout}`,
+        tomlPatch: (kvId) => ({ kvId }),
+      })
 
       // Migration is CREATE IF NOT EXISTS — safe to re-run.
       yield* out.print("• applying D1 migration…")

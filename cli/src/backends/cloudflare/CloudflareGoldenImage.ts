@@ -11,7 +11,8 @@ import {
 } from "../../services/backend/GoldenImage.ts"
 import { goldenVersionHash } from "../../services/GoldenImageVersion.ts"
 import { patchWranglerToml } from "../../infra/CfToml.ts"
-import { CloudflareError, UserError } from "../../infra/Errors.ts"
+import { CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
+import { parseWranglerJsonArray } from "./wranglerJson.ts"
 
 const CF_REGISTRY_HOST = "registry.cloudflare.com"
 const GOLDEN_REPO = "afk-golden"
@@ -202,38 +203,40 @@ exec "\$@"
 `
 
 const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
-  const lines: string[] = []
-  lines.push(`# syntax=docker/dockerfile:1.7`)
-  lines.push(`FROM alpine:3.20 AS skopeo-bake`)
-  lines.push(`RUN apk add --no-cache skopeo ca-certificates`)
-  lines.push(`WORKDIR /out`)
-  for (const img of cachedImages) {
-    const name = safeName(img)
-    // Each skopeo copy is its own RUN so layer caching is per-image.
-    lines.push(
-      `RUN skopeo copy --override-os linux docker://${img} oci-archive:/out/${name}.tar`,
-    )
-  }
-  lines.push(``)
-  lines.push(`FROM docker:28-dind-rootless`)
-  lines.push(`USER root`)
-  lines.push(`RUN mkdir -p /var/afk/cache /var/log && chown -R rootless:rootless /var/afk /var/log`)
-  if (cachedImages.length > 0) {
-    lines.push(`COPY --from=skopeo-bake /out/ /var/afk/cache/`)
-  }
-  lines.push(`COPY bootstrap.sh /var/afk/bootstrap.sh`)
-  lines.push(`RUN chmod +x /var/afk/bootstrap.sh`)
-  // Run as ROOT (no `USER rootless`). On CF's Firecracker microVM the VM is the
-  // isolation boundary; root is required to run dockerd with a working engine
-  // (open /dev/net/tun, manage cgroups, attach containers to the host network).
-  // Rootless (uid 1000) cannot — /dev/net/tun is root-only and netns ops are
-  // denied. Verified on Cloudflare Containers.
-  lines.push(`ENTRYPOINT ["/var/afk/bootstrap.sh"]`)
-  // Default CMD just keeps the container alive — the per-Run wrapper
-  // (FROM afk-golden:*) overrides this with the agent's actual command.
-  lines.push(`CMD ["sh", "-c", "tail -f /dev/null"]`)
-  lines.push(``)
-  return lines.join("\n")
+  // Each skopeo copy is its own RUN so layer caching is per-image.
+  const bakeSteps = cachedImages.map(
+    (img) =>
+      `RUN skopeo copy --override-os linux docker://${img} oci-archive:/out/${safeName(img)}.tar`,
+  )
+  // COPY the bake output only when there is something to copy.
+  const copyCache =
+    cachedImages.length > 0
+      ? [`COPY --from=skopeo-bake /out/ /var/afk/cache/`]
+      : []
+  return [
+    `# syntax=docker/dockerfile:1.7`,
+    `FROM alpine:3.20 AS skopeo-bake`,
+    `RUN apk add --no-cache skopeo ca-certificates`,
+    `WORKDIR /out`,
+    ...bakeSteps,
+    ``,
+    `FROM docker:28-dind-rootless`,
+    `USER root`,
+    `RUN mkdir -p /var/afk/cache /var/log && chown -R rootless:rootless /var/afk /var/log`,
+    ...copyCache,
+    `COPY bootstrap.sh /var/afk/bootstrap.sh`,
+    `RUN chmod +x /var/afk/bootstrap.sh`,
+    // Run as ROOT (no `USER rootless`). On CF's Firecracker microVM the VM is the
+    // isolation boundary; root is required to run dockerd with a working engine
+    // (open /dev/net/tun, manage cgroups, attach containers to the host network).
+    // Rootless (uid 1000) cannot — /dev/net/tun is root-only and netns ops are
+    // denied. Verified on Cloudflare Containers.
+    `ENTRYPOINT ["/var/afk/bootstrap.sh"]`,
+    // Default CMD just keeps the container alive — the per-Run wrapper
+    // (FROM afk-golden:*) overrides this with the agent's actual command.
+    `CMD ["sh", "-c", "tail -f /dev/null"]`,
+    ``,
+  ].join("\n")
 }
 
 /**
@@ -289,26 +292,10 @@ export const CloudflareGoldenImageLive = Layer.effect(
               }),
           ),
         )
-      // wrangler prints human banners (telemetry notice, …) to stdout before the
-      // JSON payload, so slice out the top-level array rather than parsing raw.
-      const repos = yield* Effect.try({
-        try: () => {
-          const start = result.stdout.indexOf("[")
-          const end = result.stdout.lastIndexOf("]")
-          if (start === -1 || end === -1 || end < start) {
-            throw new Error(`no JSON array in output: ${result.stdout.slice(0, 200)}`)
-          }
-          return JSON.parse(result.stdout.slice(start, end + 1)) as ReadonlyArray<{
-            name: string
-            tags?: ReadonlyArray<string>
-          }>
-        },
-        catch: (cause) =>
-          new CloudflareError({
-            operation: "registry:list",
-            message: `could not parse wrangler images JSON: ${String(cause)}`,
-          }),
-      })
+      const repos = yield* parseWranglerJsonArray<{
+        name: string
+        tags?: ReadonlyArray<string>
+      }>(result.stdout, "registry:list")
       const repo = repos.find((r) => r.name === GOLDEN_REPO)
       const tags = [...(repo?.tags ?? [])].sort((a, b) => b.localeCompare(a))
       return tags.map(
@@ -357,10 +344,22 @@ export const CloudflareGoldenImageLive = Layer.effect(
       // Materialize build context under .afk/cf-golden-build/ (gitignored via
       // the `.afk/` entry that `afk init` adds for us).
       const buildDir = resolve(projectRoot, ".afk", "cf-golden-build")
-      mkdirSync(buildDir, { recursive: true })
-      writeFileSync(resolve(buildDir, "Dockerfile"), dockerfileFor(cachedImages))
-      writeFileSync(resolve(buildDir, "bootstrap.sh"), ENTRYPOINT_SCRIPT, {
-        mode: 0o755,
+      yield* Effect.try({
+        try: () => {
+          mkdirSync(buildDir, { recursive: true })
+          writeFileSync(
+            resolve(buildDir, "Dockerfile"),
+            dockerfileFor(cachedImages),
+          )
+          writeFileSync(resolve(buildDir, "bootstrap.sh"), ENTRYPOINT_SCRIPT, {
+            mode: 0o755,
+          })
+        },
+        catch: (cause) =>
+          new ConfigError({
+            path: buildDir,
+            message: `cannot write golden build context: ${String(cause)}`,
+          }),
       })
 
       // Ensure CF registry auth (docker login against registry.cloudflare.com/
@@ -381,7 +380,16 @@ export const CloudflareGoldenImageLive = Layer.effect(
       // [[containers]] block so `afk provision` / `wrangler deploy` boots from it.
       const tomlPath = resolve(projectRoot, "worker", "afk", "wrangler.toml")
       const patched = existsSync(tomlPath)
-      if (patched) patchWranglerToml(tomlPath, { imageUri })
+      if (patched) {
+        yield* Effect.try({
+          try: () => patchWranglerToml(tomlPath, { imageUri }),
+          catch: (cause) =>
+            new ConfigError({
+              path: tomlPath,
+              message: `cannot patch wrangler.toml: ${String(cause)}`,
+            }),
+        })
+      }
 
       return {
         id: imageUri,

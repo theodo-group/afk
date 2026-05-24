@@ -8,6 +8,7 @@ import { CloudflareGoldenImageLive } from "./CloudflareGoldenImage.ts"
 import { CloudflareBackendDoctorLive } from "./CloudflareBackendDoctor.ts"
 import { CloudflareTeamLive } from "./CloudflareTeam.ts"
 import { CloudflareProvisionerLive } from "./CloudflareProvisioner.ts"
+import { CfWorkerLive } from "./CfWorker.ts"
 
 /**
  * Aggregate Layer that wires up every Backend service tag with the Cloudflare
@@ -18,6 +19,10 @@ import { CloudflareProvisionerLive } from "./CloudflareProvisioner.ts"
  * so it is provided on top of the leaves (for ImageRegistry) and re-exported for
  * the `golden` commands. `CloudflareComputeLive` consumes GoldenImageStore (the
  * Run-start gate) + RunHistory, so the golden+leaves bundle is provided into it.
+ *
+ * `CfWorkerLive` (the launcher-Worker HTTP client) is consumed by Compute and
+ * several leaves (LogStore, RunHistory, SecretStore, Team), so it is provided
+ * into the leaves *and* re-exported upward for Compute via `provideMerge`.
  */
 const Leaves = Layer.mergeAll(
   CloudflareImageRegistryLive,
@@ -27,7 +32,7 @@ const Leaves = Layer.mergeAll(
   CloudflareBackendDoctorLive,
   CloudflareTeamLive,
   CloudflareProvisionerLive,
-)
+).pipe(Layer.provideMerge(CfWorkerLive))
 
 const Golden = CloudflareGoldenImageLive.pipe(Layer.provideMerge(Leaves))
 
