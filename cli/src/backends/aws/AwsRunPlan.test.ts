@@ -47,7 +47,7 @@ describe("planAwsRun", () => {
       expect(core.preparedBase.owner).toBe("AIDAEXAMPLE")
       expect(core.preparedBase.image).toBe("acme/widget:abc123")
       expect(core.backendPlanBase.amiId).toBe("ami-0abc")
-      expect(core.backendPlanBase.spot).toBe(true) // spot by default
+      expect(core.backendPlanBase.spot).toBe(false) // on-demand by default
       const tags = Object.fromEntries(
         core.backendPlanBase.tags.map((t) => [t.key, t.value]),
       )
@@ -70,13 +70,13 @@ describe("planAwsRun", () => {
     }
   })
 
-  it("honours the on-demand override (spot disabled)", () => {
+  it("honours the --spot override (spot enabled)", () => {
     const result = planAwsRun(
-      baseInput({ startInput: { backendOverrides: { onDemand: true } } }),
+      baseInput({ startInput: { backendOverrides: { spot: true } } }),
     )
     expect(Either.isRight(result)).toBe(true)
     if (Either.isRight(result)) {
-      expect(result.right.backendPlanBase.spot).toBe(false)
+      expect(result.right.backendPlanBase.spot).toBe(true)
     }
   })
 

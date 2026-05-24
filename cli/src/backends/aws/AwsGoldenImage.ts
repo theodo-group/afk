@@ -105,6 +105,8 @@ export const AwsGoldenImageLive = Layer.effect(
         iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
         userData: plan.builderUserData,
         spot: false,
+        // The builder VM is not a Run; it is terminated once the AMI is baked.
+        shutdownBehavior: "terminate",
         tags: [...plan.builderTags],
       })
 

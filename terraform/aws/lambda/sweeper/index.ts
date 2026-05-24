@@ -3,9 +3,12 @@
  *
  * Two duties on every EventBridge tick (default: every 15 minutes):
  *
- *   1. Terminate any AFK-managed EC2 instance whose age exceeds its declared
- *      afk:timeout-hours plus a configurable grace window. Backstop for crashed
- *      agents that never reached `shutdown -h now`.
+ *   1. Terminate expired AFK-managed EC2 instances:
+ *        - a *running* instance past its afk:timeout-hours plus a grace window
+ *          (backstop for crashed agents that never reached `shutdown -h now`);
+ *        - a *stopped* (retained) instance past afk:started-at +
+ *          afk:retention-days — reclaiming a retained Run once its window
+ *          closes (the retention reaper; see CONTEXT.md "Retention").
  *
  *   2. Reconcile the DynamoDB run-history table. Any row still in
  *      status="running" whose EC2 instance is no longer in a live state is
@@ -43,6 +46,8 @@ interface ExpiredInstance {
   readonly owner: string
   readonly ageMinutes: number
   readonly timeoutMinutes: number
+  /** Why it's being reclaimed: overran its run timeout, or past its retention window. */
+  readonly kind: "timeout" | "retention"
 }
 
 const getTag = (i: Instance, key: string): string | undefined =>
@@ -58,21 +63,40 @@ const collectExpired = (instances: ReadonlyArray<Instance>, nowMs: number): Expi
   const out: ExpiredInstance[] = []
   for (const inst of instances) {
     if (!inst.InstanceId) continue
-    if (inst.State?.Name !== "pending" && inst.State?.Name !== "running") continue
+    const state = inst.State?.Name
     const startedAt =
       parseStartedAt(getTag(inst, "afk:started-at")) ??
       inst.LaunchTime?.getTime()
     if (startedAt === undefined) continue
-    const timeoutHours = Number(getTag(inst, "afk:timeout-hours") ?? "4")
-    if (!Number.isFinite(timeoutHours)) continue
-    const deadlineMs = startedAt + timeoutHours * 3600 * 1000 + GRACE_MINUTES * 60 * 1000
+
+    let deadlineMs: number
+    let kind: "timeout" | "retention"
+    if (state === "pending" || state === "running") {
+      // Running too long: timeout + grace backstop.
+      const timeoutHours = Number(getTag(inst, "afk:timeout-hours") ?? "4")
+      if (!Number.isFinite(timeoutHours)) continue
+      deadlineMs = startedAt + timeoutHours * 3600 * 1000 + GRACE_MINUTES * 60 * 1000
+      kind = "timeout"
+    } else if (state === "stopped") {
+      // Retained too long. Only instances tagged afk:retention-days are
+      // AFK-retained; a stopped instance without it isn't ours to reclaim.
+      const retentionDays = Number(getTag(inst, "afk:retention-days"))
+      if (!Number.isFinite(retentionDays)) continue
+      deadlineMs = startedAt + retentionDays * 86400 * 1000
+      kind = "retention"
+    } else {
+      continue
+    }
     if (nowMs < deadlineMs) continue
     out.push({
       instanceId: inst.InstanceId,
       runId: getTag(inst, "afk:run-id") ?? "?",
       owner: getTag(inst, "afk:owner") ?? "?",
       ageMinutes: Math.floor((nowMs - startedAt) / 60000),
-      timeoutMinutes: timeoutHours * 60,
+      timeoutMinutes: kind === "timeout"
+        ? Number(getTag(inst, "afk:timeout-hours") ?? "4") * 60
+        : Number(getTag(inst, "afk:retention-days") ?? "0") * 24 * 60,
+      kind,
     })
   }
   return out
@@ -184,7 +208,11 @@ export const handler = async (): Promise<{
       new DescribeInstancesCommand({
         Filters: [
           { Name: "tag:afk:managed", Values: ["true"] },
-          { Name: "instance-state-name", Values: ["pending", "running"] },
+          {
+            Name: "instance-state-name",
+            // running/pending → timeout backstop; stopped → retention reaper.
+            Values: ["pending", "running", "stopped"],
+          },
         ],
         NextToken: nextToken,
       }),
@@ -202,7 +230,7 @@ export const handler = async (): Promise<{
       `sweeper: terminating ${expired.length} expired instance(s):`,
       expired.map(
         (e) =>
-          `${e.instanceId} (run ${e.runId}, ${e.ageMinutes}m / ${e.timeoutMinutes}m + grace)`,
+          `${e.instanceId} (run ${e.runId}, ${e.kind}, age ${e.ageMinutes}m / ${e.timeoutMinutes}m)`,
       ),
     )
     await ec2.send(

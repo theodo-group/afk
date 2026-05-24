@@ -73,6 +73,17 @@ export class Ssm extends Context.Tag("Ssm")<
       readonly region: string
       readonly instanceId: string
     }) => Effect.Effect<void, AwsError>
+
+    /**
+     * Wait until the instance's SSM agent is registered and Online — needed
+     * after resuming a stopped instance, before the agent can accept a session.
+     */
+    readonly waitForAgent: (input: {
+      readonly region: string
+      readonly instanceId: string
+      readonly pollIntervalMs?: number
+      readonly maxWaitMs?: number
+    }) => Effect.Effect<void, AwsError>
   }
 >() {}
 
@@ -170,6 +181,48 @@ export const SsmLive = Layer.effect(
         }
       })
 
+    const waitForAgent = (input: {
+      readonly region: string
+      readonly instanceId: string
+      readonly pollIntervalMs?: number
+      readonly maxWaitMs?: number
+    }) =>
+      Effect.gen(function* () {
+        const pollMs = input.pollIntervalMs ?? 3000
+        const maxMs = input.maxWaitMs ?? 3 * 60 * 1000
+        const deadline = Date.now() + maxMs
+        // biome-ignore lint/plugin/noloops: deadline-bounded poll of SSM agent registration — each pass depends on the previous ping status (code-style.md exception)
+        while (true) {
+          const online = yield* aws
+            .json<{
+              InstanceInformationList: ReadonlyArray<{ PingStatus?: string }>
+            }>("ssm:DescribeInstanceInformation", [
+              "ssm",
+              "describe-instance-information",
+              "--region",
+              input.region,
+              "--filters",
+              `Key=InstanceIds,Values=${input.instanceId}`,
+            ])
+            .pipe(
+              Effect.map(
+                (r) => r.InstanceInformationList[0]?.PingStatus === "Online",
+              ),
+              Effect.catchAll(() => Effect.succeed(false)),
+            )
+          if (online) return
+          if (Date.now() > deadline) {
+            return yield* Effect.fail(
+              new AwsError({
+                operation: "ssm:DescribeInstanceInformation",
+                message: `SSM agent on ${input.instanceId} did not come Online within ${Math.floor(maxMs / 1000)}s`,
+              }),
+            )
+          }
+          yield* sleep(pollMs)
+        }
+      })
+
     return Ssm.of({
       putSecret: (region, name, value) =>
         aws.run("ssm:PutParameter", [
@@ -222,6 +275,7 @@ export const SsmLive = Layer.effect(
 
       sendShellCommand,
       waitForCommand,
+      waitForAgent,
 
       startInteractiveCommand: (input) =>
         sub

@@ -174,7 +174,7 @@ afk build [--ref <ref>]                        # explicit container image build 
 afk run <command…>                             # launch a Run
   --ref <branch|sha|tag>                       #   defaults to current local branch
   --instance-type <type>                       #   AWS only: overrides project default EC2 type
-  --on-demand                                  #   AWS only: disable Spot for this Run (default is Spot)
+  --spot                                       #   AWS only: use a Spot instance (cheaper, not retainable; on-demand by default)
   --instance-tier <tier>                       #   CF only: overrides project default CF Containers tier
   --timeout <hours>                            #   overrides default (4h)
   --detach / -d                                #   default: launch and exit (currently the only mode)
@@ -187,7 +187,8 @@ afk logs <run-id> [--follow] [--service <name>] [--since <duration>]
                                                # tail logs from the active Backend's log store
                                                #   (per-backend storage detail in the backend docs)
 afk kill <run-id>                              # terminate the Run's compute primitive
-afk session-artifact <run-id> [--out <dir>]    # download the Run's Session Artifact(s) (see contract below)
+afk session-artifact [--out <dir>] <run-id>    # download the Run's Session Artifact(s) (see contract below)
+                                               #   writes to ./session-artifacts/ by default;
                                                #   collected best-effort from the main service at Run end;
                                                #   Owner-scoped like `afk logs`
 
@@ -310,7 +311,7 @@ Sidecars share the Run's Docker daemon and network. `/workspace` is mounted into
 }
 ```
 
-`backend` and `gitUrl` are required (`backend` is one of `aws`, `cloudflare`, `local`). `mainService` defaults to `agent`. `sessionArtifacts` is optional: a list of container-side path globs, resolved **inside the main service only**, that afk collects (best-effort, at graceful exit) and stores per Run for later `afk session-artifact <run-id>` retrieval — the motivating case being an AI agent's structured `.jsonl` transcript. Files over the size cap are skipped with a warning rather than truncated; a glob matching nothing warns but never changes the Run's exit status. Only the block matching the active `backend` is consulted — `aws:`, `cloudflare:`, and `local:` may coexist, and `afk init --provider <other>` re-runs are non-destructive of the other blocks.
+`backend` and `gitUrl` are required (`backend` is one of `aws`, `cloudflare`, `local`). `mainService` defaults to `agent`. `sessionArtifacts` is optional: a list of container-side path globs, resolved **inside the main service only**, that afk collects (best-effort, at graceful exit) and stores per Run for later `afk session-artifact <run-id>` retrieval — the motivating case being an AI agent's structured `.jsonl` transcript. Files over the size cap are skipped with a warning rather than truncated; a glob matching nothing warns but never changes the Run's exit status. Collection is a single snapshot at the Run command's graceful exit, so it captures the Run's own execution only — not anything done in a later `afk attach` session, and not a Run that was `afk kill`-ed or hard-timed-out before exiting. Only the block matching the active `backend` is consulted — `aws:`, `cloudflare:`, and `local:` may coexist, and `afk init --provider <other>` re-runs are non-destructive of the other blocks.
 
 - **Local-specific.** The `local:` block needs only `cachedImages` (the sidecar images baked into the local Golden Image). Everything else the Local Backend uses comes from the Backend-neutral top level (`gitUrl`, `mainService`, `defaultTimeoutHours`).
 
@@ -349,7 +350,7 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 
 The same CLI surface runs on three shipped backends — pick one with `afk init --provider <name>`, or use `--local` per command. Each backend's deep detail (what it provisions, attach / lifecycle / cost specifics, teardown) lives in its own doc:
 
-- **[AWS EC2](./docs/backends/aws.md)** — one EC2 VM per Run, Terraform-provisioned (VPC, IAM, sweeper Lambda, DynamoDB, S3 state). Full Compose Contract. Spot by default.
+- **[AWS EC2](./docs/backends/aws.md)** — one EC2 VM per Run, Terraform-provisioned (VPC, IAM, sweeper Lambda, DynamoDB, S3 state). Full Compose Contract. On-demand by default (`--spot` for cheaper, interruptible Spot).
 - **[Cloudflare Containers](./docs/backends/cloudflare.md)** — one Container instance per Run via a customer-deployed launcher Worker (rootless dind). Requires the Workers Paid plan.
 - **[Local](./docs/backends/local.md)** — one container per Run on your own Docker daemon (rootless dind), fully self-contained. Needs only Docker; selectable persistently or via `--local`.
 

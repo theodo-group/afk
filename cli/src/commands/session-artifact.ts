@@ -10,12 +10,13 @@ import {
 } from "../services/HistoryService.ts"
 import { Output } from "../infra/Output.ts"
 import { UserError } from "../infra/Errors.ts"
+import { SESSION_ARTIFACT_DIR } from "../constants.ts"
 
 const runId = Args.text({ name: "run-id" }).pipe(Args.optional)
 const out = Options.directory("out", { exists: "either" }).pipe(
-  Options.withDefault("."),
+  Options.withDefault(SESSION_ARTIFACT_DIR),
   Options.withDescription(
-    "directory to write the retrieved Session Artifact(s) into (default: cwd)",
+    `directory to write the retrieved Session Artifact(s) into (default: ./${SESSION_ARTIFACT_DIR})`,
   ),
 )
 

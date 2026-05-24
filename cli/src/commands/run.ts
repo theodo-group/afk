@@ -6,8 +6,10 @@ import { Output } from "../infra/Output.ts"
 
 const ref = Options.text("ref").pipe(Options.optional)
 const instanceType = Options.text("instance-type").pipe(Options.optional)
-const onDemand = Options.boolean("on-demand").pipe(
-  Options.withDescription("disable Spot on AWS (Runs use Spot by default)"),
+const spot = Options.boolean("spot").pipe(
+  Options.withDescription(
+    "use a Spot instance on AWS (cheaper, but not retainable; on-demand by default)",
+  ),
 )
 const timeout = Options.integer("timeout").pipe(
   Options.optional,
@@ -33,8 +35,8 @@ const formatBackendDetails = (d: Record<string, string>): string => {
 
 export const run = Command.make(
   "run",
-  { ref, instanceType, onDemand, timeout, detach, dryRun, command },
-  ({ ref, instanceType, onDemand, timeout, detach, dryRun, command }) =>
+  { ref, instanceType, spot, timeout, detach, dryRun, command },
+  ({ ref, instanceType, spot, timeout, detach, dryRun, command }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       const cfg = yield* ConfigService
@@ -43,7 +45,7 @@ export const run = Command.make(
       const backendOverrides: Record<string, string | boolean> = {}
       if (instanceType._tag === "Some")
         backendOverrides.instanceType = instanceType.value
-      if (onDemand) backendOverrides.onDemand = true
+      if (spot) backendOverrides.spot = true
 
       const planInput = {
         command,

@@ -26,7 +26,6 @@ import {
   LOG_RETENTION_DAYS,
   TAG_MANAGED,
   TAG_OWNER,
-  VM_AFK_DIR,
   VM_COMPOSE_PATH,
 } from "../../constants.ts"
 import {
@@ -168,6 +167,8 @@ export const AwsComputeLive = Layer.effect(
           iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
           userData: aws.userData,
           spot: aws.spot,
+          // Retained Runs stop (EBS preserved) on exit; others terminate.
+          shutdownBehavior: aws.retain ? "stop" : "terminate",
           tags: aws.tags,
         })
 
@@ -219,28 +220,80 @@ export const AwsComputeLive = Layer.effect(
         const region = config.aws?.region ?? DEFAULT_REGION
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
         const service = opts.service ?? mainService
+        const instanceId = run.resourceId
+
+        // A retained Run is a *stopped* (not terminated) instance — its EBS
+        // volume survives, so `retainedUntil` is set. Resume it (start, wait for
+        // the instance + SSM agent) before entering; re-park (stop) on detach so
+        // "retained" stays the only resting state. A non-RUNNING Run without
+        // retainedUntil is gone (terminated — e.g. a Spot Run).
+        const retained = run.retainedUntil !== undefined
+        if (!retained && run.status !== "RUNNING") {
+          return yield* Effect.fail(
+            new UserError({
+              message: `Run ${runId} has ended and was not retained.`,
+              hint: "Cloud Runs are retained only when launched on-demand (Spot Runs self-terminate).",
+            }),
+          )
+        }
+        if (retained) {
+          yield* ec2.startInstances(region, [instanceId])
+          yield* ec2.waitForInstance(region, instanceId, "running")
+          yield* ssm.waitForAgent({ region, instanceId })
+        }
+
+        // Re-park when the session ends (retained only — never stop a live Run).
+        const stopInstance = ec2
+          .stopInstances(region, [instanceId])
+          .pipe(Effect.catchAll(() => Effect.void))
 
         if (opts.host) {
-          yield* ssm.startHostShell({ region, instanceId: run.resourceId })
+          const shell = ssm.startHostShell({ region, instanceId })
+          yield* retained ? shell.pipe(Effect.ensuring(stopInstance)) : shell
           return
         }
 
-        const cmd = [
-          "set -e",
-          `cd ${VM_AFK_DIR}`,
-          `if [ -f ${VM_COMPOSE_PATH} ]; then`,
-          `  docker compose -f ${VM_COMPOSE_PATH} exec ${service} bash 2>/dev/null \\`,
-          `    || docker compose -f ${VM_COMPOSE_PATH} exec ${service} sh`,
-          `else`,
-          `  docker exec -it agent bash 2>/dev/null || docker exec -it agent sh`,
-          `fi`,
-        ].join("; ")
+        // Locate the service container by its compose service label (name
+        // fallback for the no-compose Run). Using the label avoids
+        // `docker compose exec`, which re-interpolates compose.yml and warns on
+        // the unset AFK_ENV_FILE.
+        const findCid = (svc: string) =>
+          `C=$(docker ps -aqf "label=com.docker.compose.service=${svc}" | head -n1); ` +
+          `[ -n "$C" ] || C=$(docker ps -aqf "name=^${svc}$" | head -n1); ` +
+          `if [ -z "$C" ]; then echo "service ${svc} not found" >&2; exit 1; fi; `
 
-        yield* ssm.startInteractiveCommand({
+        let cmd: string
+        if (retained && service === mainService) {
+          // The main service's process has exited; `exec` (or `docker start`,
+          // which would re-run the command) is wrong. Bring the sidecars back so
+          // the post-mortem shell can reach them, then commit the main
+          // container's final filesystem and run a shell from it on host
+          // networking, bypassing the baked entrypoint (--entrypoint).
+          const img = `afk-postmortem-${runId.slice(0, 8)}`
+          cmd =
+            `if [ -f ${VM_COMPOSE_PATH} ]; then ` +
+            `for s in $(docker compose -f ${VM_COMPOSE_PATH} config --services 2>/dev/null); do ` +
+            `if [ "$s" != "${mainService}" ]; then docker compose -f ${VM_COMPOSE_PATH} start "$s" >/dev/null 2>&1 || true; fi; done; fi; ` +
+            findCid(mainService) +
+            `docker commit "$C" ${img} >/dev/null && ` +
+            `{ docker run -it --rm --network host --entrypoint bash ${img} 2>/dev/null || ` +
+            `docker run -it --rm --network host --entrypoint sh ${img}; }; ` +
+            `docker image rm ${img} >/dev/null 2>&1 || true`
+        } else {
+          // Live main service, or a sidecar (live, or stopped on a retained Run):
+          // start the container if stopped (no-op when running) and `exec` in.
+          cmd =
+            findCid(service) +
+            `docker start "$C" >/dev/null 2>&1 || true; ` +
+            `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
+        }
+
+        const session = ssm.startInteractiveCommand({
           region,
-          instanceId: run.resourceId,
+          instanceId,
           command: cmd,
         })
+        yield* retained ? session.pipe(Effect.ensuring(stopInstance)) : session
       })
 
     const callerPrincipal = Effect.gen(function* () {

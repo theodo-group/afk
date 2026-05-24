@@ -26,9 +26,6 @@ import {
   wireToRun,
 } from "./CloudflareRunPlan.ts"
 
-/** Where the golden bootstrap writes the compose file inside the Container. */
-const CONTAINER_COMPOSE_PATH = "/etc/afk/compose.yml"
-
 /**
  * Cloudflare implementation of the abstract Compute tag. Every operation is
  * an HTTPS/WSS call to the launcher Worker; no CF-side state lives in the
@@ -234,16 +231,19 @@ export const CloudflareComputeLive = Layer.effect(
         const args = ["containers", "ssh", instanceId]
         if (!opts.host) {
           // Default/`--service`: drop into a service container rather than the
-          // outer host. Mirror the AWS attach fallback (compose exec → docker
-          // exec, bash → sh). `--host` skips this and lands on the host shell.
+          // outer host. Locate it by its compose service label (name fallback
+          // for the no-compose Run) and `docker exec` in — this avoids
+          // `docker compose exec`, which would re-interpolate compose.yml and
+          // warn on the unset AFK_ENV_FILE. `--host` skips this for the host.
           // LIVE-VERIFY: whether `wrangler containers ssh <id> -- <cmd>`
           // allocates a TTY for the trailing command (needed for a usable
           // shell). See IMPROVEMENTS.md #11.
           const service = opts.service ?? mainService
           const inner =
-            `docker compose -f ${CONTAINER_COMPOSE_PATH} exec ${service} bash 2>/dev/null ` +
-            `|| docker compose -f ${CONTAINER_COMPOSE_PATH} exec ${service} sh 2>/dev/null ` +
-            `|| docker exec -it ${service} bash 2>/dev/null || docker exec -it ${service} sh`
+            `C=$(docker ps -qf "label=com.docker.compose.service=${service}" | head -n1); ` +
+            `[ -n "$C" ] || C=$(docker ps -qf "name=^${service}$" | head -n1); ` +
+            `if [ -z "$C" ]; then echo "service ${service} is not running" >&2; exit 1; fi; ` +
+            `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
           args.push("--", "sh", "-lc", inner)
         }
 

@@ -26,7 +26,7 @@ After a [[run]] ends, a [[backend]] may **retain** its compute primitive instead
 
 Resuming revives only the compute primitive, never the workload — the Run has already ended, so resume re-animates the host so attach has something to enter; it does not re-run the developer's command. A retained Run is reclaimed explicitly by `afk kill`, or automatically once it is older than the configured **retention period** (default 7 days) — so retained is a bounded grace window, not permanent storage.
 
-Realized on the [[backend|Local Backend]] first; the other Backends reclaim immediately for now.
+Realized on the [[backend|Local Backend]] (every Run) and the **AWS** Backend (on-demand Runs only — a one-time Spot instance cannot be stopped without losing its disk, so Spot Runs self-terminate as before). Cloudflare reclaims immediately: its Container instances are ephemeral, so a restarted one is a clean slate rather than the preserved post-mortem state, which is the opposite of what retention promises.
 
 Not to be confused with a suspended or paused Run (there is no such state — a Run that has ended has ended) or with `afk kill` (which reclaims, the opposite of retain).
 
@@ -40,12 +40,13 @@ Backends:
 
 - **AWS EC2** — shipped. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
 - **Cloudflare Containers** — shipped. Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. Runs `dockerd` rootless inside the Container to host the workload. Compose Contract honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
-- **GCP (Compute Engine)**, **Azure (Virtual Machines)** — anticipated future cloud Backends. Each is expected to follow the same one-VM-per-Run shape as AWS.
+- **GCP (Compute Engine)** — planned, AWS-shaped. Each Run is one Compute Engine instance booted from the project's [[golden-image]] (a custom image), configured via the startup-script, and self-deleted on exit (the instance's service account is scoped to delete only afk-managed VMs), with GCE's native `max_run_duration` as the timeout backstop. Full Compose Contract supported (host Docker daemon). [[owner|Owner]] is the authenticated gcloud account; attach rides Identity-Aware Proxy TCP tunnelling + OS Login so instances need no inbound SSH. A minimal Cloud Function (on Cloud Scheduler) reconciles orphaned history rows only — it does not reclaim VMs.
+- **Azure (Virtual Machines)** — anticipated future cloud Backend, expected to follow the same one-VM-per-Run shape as AWS.
 - **Local** — a peer Backend that mirrors the Cloudflare shape with the Cloudflare Container instance swapped for a Docker container on the developer's own machine. Each Run is one outer container running rootless `dockerd`, booted from a local [[golden-image]], hosting the `docker compose` stack inside it — so it honors the same Compose addenda and rootless constraints as Cloudflare. Fully self-contained: it makes no cloud API calls and needs no cloud credentials (secrets, history, and the Run index all live on the developer's machine). Selectable both as the persisted Backend (`afk init --provider local`) and per-command via `--local`.
 
 ## Owner
 
-The developer principal that launched a Run. The form of the principal is [[backend]]-specific — an IAM userid on AWS, a Cloudflare Access service-token client-id on Cloudflare — but the role is the same: it scopes what the developer can see, attach to, or terminate. The Owner is recorded on the underlying compute primitive (an `afk:owner` EC2 tag on AWS, a metadata field on the launcher Worker's [[run-registry]] on Cloudflare). A developer is normally only permitted to act on Runs whose Owner matches their own principal; team-wide views (`afk ls --all`) are a separate, broader permission.
+The developer principal that launched a Run. The form of the principal is [[backend]]-specific — an IAM userid on AWS, a Cloudflare Access service-token client-id on Cloudflare, the authenticated gcloud account (user or service-account email) on GCP — but the role is the same: it scopes what the developer can see, attach to, or terminate. The Owner is recorded on the underlying compute primitive (an `afk:owner` EC2 tag on AWS, a metadata field on the launcher Worker's [[run-registry]] on Cloudflare, an `afk-owner` label on the Compute Engine instance on GCP). A developer is normally only permitted to act on Runs whose Owner matches their own principal; team-wide views (`afk ls --all`) are a separate, broader permission.
 
 ## Dockerfile Contract
 
@@ -66,6 +67,7 @@ The concrete artifact type is Backend-specific:
 - On **AWS EC2**, the Golden Image is an **AMI** (a VM disk image) containing Amazon Linux + Docker + the pre-pulled images in `/var/lib/docker`.
 - On **Cloudflare Containers**, the Golden Image is a **Container image** (pushed to CF managed registry) containing rootless `dockerd` + the pre-pulled images baked into `/var/afk/cache/`.
 - On **Local**, the Golden Image is a **Container image** of the same shape as Cloudflare's (rootless `dockerd` + pre-pulled cache), built into the developer's own Docker daemon rather than pushed to a registry. It is the boot artifact for the outer dind container that backs each local Run.
+- On **GCP (Compute Engine)**, the Golden Image is a **custom image** (a VM disk image, the AMI analog) containing the OS + Docker + the pre-pulled images, built by snapshotting a short-lived builder instance's disk after it pre-pulls the list.
 
 Despite the artifact difference, the role is identical: it's the layer below the dev's per-build agent image, providing the runtime engine + sidecar cache. Run-time behavior (cloning source, running the workload, shipping logs, self-terminating) is injected fresh per Run, not baked into the Golden Image.
 
@@ -82,3 +84,5 @@ A developer-declared file (or glob of files) produced _inside the [[run]]'s main
 afk is agent-agnostic and therefore knows nothing about the artifact's shape or meaning: the developer names the path(s) in `afk.config.json`, and afk treats the contents as an opaque blob. Collection is scoped to the **main service** only — never sidecars — which is what distinguishes a Session Artifact from general file exfiltration out of an arbitrary container.
 
 Distinct from **logs**: logs are the per-service stdout/stderr stream tailed live by `afk logs`; a Session Artifact is a file collected once, at Run end, from the agent's own on-disk state. A Run with no declared Session Artifacts collects nothing — the feature is opt-in.
+
+The single collection point — the Run command's graceful exit — also bounds what is captured, on every [[backend]]: a Session Artifact is the artifact of *the Run's own execution*, not of any later [[attach]] session. Running a fresh agent inside an `afk attach` shell and then exiting happens outside that one collection moment, so it is never captured. Attach is for observing and intervening on a Run; reconstructing an attach session is outside the Session Artifact's scope.
