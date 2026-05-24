@@ -47,30 +47,35 @@ export const AwsTeamLive = Layer.effect(
     const iam = yield* Iam
     const sts = yield* Sts
 
-    const lsAws = Effect.gen(function* () {
-      const users = yield* iam.listUsersByPathPrefix("/afk/")
-      const userMembers: TeamMember[] = users.map((u) => ({
-        name: u.userName,
-        kind: "iam-user",
-        arn: u.arn,
-        createdAt: u.createDate,
-      }))
-      const trustedMembers: TeamMember[] = yield* iam.getRole(AFK_DEVELOPER_ROLE).pipe(
-        Effect.map((r) => {
-          const principals = principalSet(r.assumeRolePolicy as AssumeRolePolicy)
-          // Filter out the same-account "root" self-trust if present
-          return [...principals]
-            .filter((p) => !p.endsWith(":root"))
-            .map<TeamMember>((arn) => ({
-              name: arn.split("/").pop() ?? arn,
-              kind: "trusted-principal",
-              arn,
-            }))
-        }),
-        Effect.catchAll(() => Effect.succeed([] as TeamMember[])),
-      )
-      return [...userMembers, ...trustedMembers]
-    })
+    const userMembers = iam.listUsersByPathPrefix("/afk/").pipe(
+      Effect.map((users) =>
+        users.map<TeamMember>((u) => ({
+          name: u.userName,
+          kind: "iam-user",
+          arn: u.arn,
+          createdAt: u.createDate,
+        })),
+      ),
+    )
+
+    const trustedMembers = iam.getRole(AFK_DEVELOPER_ROLE).pipe(
+      Effect.map((r) => {
+        const principals = principalSet(r.assumeRolePolicy as AssumeRolePolicy)
+        // Filter out the same-account "root" self-trust if present
+        return [...principals]
+          .filter((p) => !p.endsWith(":root"))
+          .map<TeamMember>((arn) => ({
+            name: arn.split("/").pop() ?? arn,
+            kind: "trusted-principal",
+            arn,
+          }))
+      }),
+      Effect.catchAll(() => Effect.succeed<ReadonlyArray<TeamMember>>([])),
+    )
+
+    const lsAws = Effect.all([userMembers, trustedMembers]).pipe(
+      Effect.map((groups) => groups.flat()),
+    )
 
     const addAws = ({
       name,
