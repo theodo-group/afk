@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import { RunHistory, type HistoryRow } from "../../services/backend/RunHistory.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { CloudflareError, UserError } from "../../infra/Errors.ts"
@@ -45,7 +45,15 @@ export const CloudflareRunHistoryLive = Layer.effect(
         Effect.gen(function* () {
           const base = yield* resolveWorkerUrl
           const params = new URLSearchParams()
-          if (since) params.set("since", since)
+          if (since) {
+            // worker /history takes a duration; serialize the neutral instant to seconds-ago
+            const now = yield* DateTime.now
+            const seconds = Math.max(
+              1,
+              Math.round((DateTime.toEpochMillis(now) - DateTime.toEpochMillis(since)) / 1000),
+            )
+            params.set("since", `${seconds}s`)
+          }
           if (owner === undefined) params.set("all", "true")
           if (branch) params.set("branch", branch)
           if (limit !== undefined) params.set("limit", String(limit))
