@@ -283,6 +283,8 @@ export const CloudflareComputeLive = Layer.effect(
           secretNames: plan.secrets,
           ...(cf.composeContent !== undefined ? { compose: cf.composeContent } : {}),
           instanceTier: cf.instanceTier,
+          // So the container can POST its completion callback (logs + exit) back.
+          workerUrl: cf.workerUrl,
         }
         const resp = yield* httpJson<{
           runId: string
