@@ -133,7 +133,9 @@ export class RunDO extends DurableObject<Env> {
     const runEnvLines: string[] = []
     for (const e of body.env) runEnvLines.push(`${e.name}=${e.value}`)
     for (const s of body.secretNames) {
-      const v = (this.env as unknown as Record<string, unknown>)[s.secretName]
+      // Workers Secrets are stored by the /secrets route under an `AFK_SECRET_`
+      // prefix; resolve with the same prefix (s.secretName is the bare name).
+      const v = (this.env as unknown as Record<string, unknown>)[`AFK_SECRET_${s.secretName}`]
       if (typeof v === "string") runEnvLines.push(`${s.name}=${v}`)
     }
     const runEnvB64 = utf8ToBase64(runEnvLines.join("\n") + "\n")
