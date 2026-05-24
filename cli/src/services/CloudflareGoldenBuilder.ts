@@ -150,7 +150,10 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
   if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
     mkdir -p /etc/afk
     printf '%s' "\$AFK_COMPOSE_YML" > /etc/afk/compose.yml
+    # Export the vars the compose file interpolates: \${AFK_COMMAND} and
+    # \${AFK_ENV_FILE} (the env_file: path), plus source the env for the rest.
     export AFK_COMMAND
+    export AFK_ENV_FILE="\$ENV_FILE"
     set -a; . "\$ENV_FILE"; set +a
     timeout "\$TIMEOUT" docker compose -f /etc/afk/compose.yml \\
       up --exit-code-from "\${AFK_MAIN_SERVICE:-agent}" --abort-on-container-exit \\
