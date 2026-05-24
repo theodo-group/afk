@@ -67,7 +67,8 @@ export const BuildServiceLive = Layer.effect(
         Effect.gen(function* () {
           const { config, projectRoot, sourceRepoName } = yield* cfg.load
 
-          // Hard rules: clean tree + branch pushed.
+          // Clean tree + a ref that resolves on origin together guarantee the
+          // cloud build is exactly what's on origin — no dirty or unpushed state.
           const clean = yield* git.isClean
           if (!clean) {
             return yield* Effect.fail(
@@ -101,18 +102,15 @@ export const BuildServiceLive = Layer.effect(
           const repoName = `${ECR_REPO_PREFIX}/${sourceRepoName}`
           const tag = `${branch}-${sha.slice(0, 12)}`
 
-          // Ensure repo + auth, resolve registry URI.
           yield* registry.ensureRepoAndAuth(repoName)
           const registryHost = yield* registry.registryUri
           const image = `${registryHost}/${repoName}:${tag}`
 
-          // Skip if image already exists.
           const exists = yield* registry.imageExists(repoName, tag)
           if (exists) {
             return { image, tag, sha, branch, skipped: true }
           }
 
-          // Locate user Dockerfile.
           const userDockerfile = resolve(projectRoot, "afk.Dockerfile")
           if (!existsSync(userDockerfile)) {
             return yield* Effect.fail(
@@ -123,7 +121,6 @@ export const BuildServiceLive = Layer.effect(
             )
           }
 
-          // Materialize wrapper Dockerfile.
           const buildDir = resolve(projectRoot, ".afk", "build")
           mkdirSync(buildDir, { recursive: true })
           copyFileSync(ENTRYPOINT_SOURCE, resolve(buildDir, "entrypoint.sh"))
@@ -141,7 +138,6 @@ export const BuildServiceLive = Layer.effect(
             ].join("\n"),
           )
 
-          // Cache-from sourced from prior tags in the same registry.
           const prevTags = yield* registry.listLatestTagsByPrefix(
             repoName,
             `${branch}-`,

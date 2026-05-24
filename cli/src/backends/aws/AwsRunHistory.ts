@@ -141,7 +141,6 @@ export const AwsRunHistoryLive = Layer.effect(
               .filter((x): x is HistoryRow => x !== null)
               .filter((row) => !branch || row.branch === branch)
           }
-          // Full scan path (no owner).
           const items = yield* ddb.scan({
             region: r,
             table: TABLE_NAME,

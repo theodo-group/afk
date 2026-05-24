@@ -1,6 +1,6 @@
 import { Args, Command } from "@effect/cli"
 import { Effect } from "effect"
-import { SecretService } from "../../services/SecretService.ts"
+import { SecretStore } from "../../services/backend/SecretStore.ts"
 import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
 
@@ -9,7 +9,7 @@ const value = Args.text({ name: "value" }).pipe(Args.optional)
 
 export const put = Command.make("put", { name, value }, ({ name, value }) =>
   Effect.gen(function* () {
-    const secrets = yield* SecretService
+    const secrets = yield* SecretStore
     const out = yield* Output
 
     let plain: string

@@ -7,7 +7,7 @@ import { Sts } from "../../adapters/aws/Sts.ts"
 import { Ssm } from "../../adapters/aws/Ssm.ts"
 import { Logs } from "../../adapters/aws/Logs.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
-import { ImageService } from "../../services/ImageService.ts"
+import { GoldenImageStore } from "../../services/backend/GoldenImage.ts"
 import { RunHistory } from "../../services/backend/RunHistory.ts"
 import {
   Compute,
@@ -29,7 +29,6 @@ import {
   DEFAULT_INSTANCE_TYPE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
-  DEFAULT_TIMEOUT_HOURS,
   LOG_GROUP_PREFIX,
   LOG_RETENTION_DAYS,
   TAG_BRANCH,
@@ -45,7 +44,7 @@ import {
 } from "../../constants.ts"
 import type { Run, RunStatus } from "../../schema/Run.ts"
 import { buildUserData } from "../../services/UserData.ts"
-import { lintCompose, substituteImage } from "../../services/Compose.ts"
+import { assembleRunPlan } from "../../services/RunPlan.ts"
 
 const mapEc2State = (s: string): RunStatus => {
   switch (s) {
@@ -122,7 +121,7 @@ export const AwsComputeLive = Layer.effect(
     const ssm = yield* Ssm
     const logs = yield* Logs
     const cfg = yield* ConfigService
-    const images = yield* ImageService
+    const golden = yield* GoldenImageStore
     const history = yield* RunHistory
 
     const resolveRegion = cfg.load.pipe(
@@ -184,8 +183,8 @@ export const AwsComputeLive = Layer.effect(
         const identity = yield* sts.callerIdentity
         const region = config.aws?.region ?? DEFAULT_REGION
 
-        const golden = yield* images.findLatestGolden(region)
-        if (!golden) {
+        const latestGolden = yield* golden.findLatest
+        if (!latestGolden) {
           return yield* Effect.fail(
             new UserError({
               message: `No Golden Image found in ${region}.`,
@@ -214,62 +213,45 @@ export const AwsComputeLive = Layer.effect(
           )
         }
 
-        const timeoutHours =
-          input.timeoutHours ?? config.defaultTimeoutHours ?? DEFAULT_TIMEOUT_HOURS
-        const timeoutSeconds = Math.floor(timeoutHours * 3600)
-
         // The orchestrator (RunService) has already done the image build.
         const built = input.built
+        const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
 
         const composePath = resolve(projectRoot, COMPOSE_FILE)
-        const composePresent = existsSync(composePath)
-        const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
-        let composeContent: string | undefined
-        if (composePresent) {
-          const raw = yield* Effect.try({
-            try: () => readFileSync(composePath, "utf8"),
-            catch: (cause) =>
-              new ConfigError({
-                path: composePath,
-                message: `cannot read: ${String(cause)}`,
-              }),
-          })
-          const lint = yield* Effect.try({
-            try: () => lintCompose({ content: raw, mainService, backend: "aws" }),
-            catch: (e) =>
-              e instanceof UserError
-                ? e
-                : new UserError({
-                    message: `afk.compose.yml: ${String(e)}`,
-                  }),
-          })
-          for (const w of lint.warnings) {
-            console.warn(`warning: ${w}`)
-          }
-          composeContent = substituteImage(lint.content, built.image)
-        }
-
-        const logGroup = `${LOG_GROUP_PREFIX}/${sourceRepoName}`
-        yield* logs.ensureLogGroup(region, logGroup, LOG_RETENTION_DAYS)
+        const composeRaw = existsSync(composePath)
+          ? yield* Effect.try({
+              try: () => readFileSync(composePath, "utf8"),
+              catch: (cause) =>
+                new ConfigError({
+                  path: composePath,
+                  message: `cannot read: ${String(cause)}`,
+                }),
+            })
+          : undefined
 
         const runId = randomUUID()
         const startedAt = new Date().toISOString()
 
-        const env: Array<{ name: string; value: string }> = envEntries
-          .filter((e) => e.kind === "plain")
-          .map((e) => ({ name: e.name, value: (e as { value: string }).value }))
-        env.push({ name: "AFK_GIT_URL", value: config.gitUrl })
-        env.push({ name: "AFK_GIT_SHA", value: built.sha })
-        env.push({ name: "AFK_GIT_REF", value: input.ref ?? built.branch })
-        env.push({ name: "AFK_RUN_ID", value: runId })
-        env.push({ name: "AFK_TIMEOUT_SECONDS", value: String(timeoutSeconds) })
+        const assembled = assembleRunPlan({
+          config,
+          envEntries,
+          built,
+          ref: input.ref,
+          timeoutHours: input.timeoutHours,
+          mainService,
+          backend: "aws",
+          composeContent: composeRaw,
+          runId,
+        })
+        if (assembled.composeError) {
+          return yield* Effect.fail(new UserError({ message: assembled.composeError }))
+        }
+        for (const w of assembled.warnings) console.warn(`warning: ${w}`)
+        const { timeoutHours, timeoutSeconds, env, secrets, composeContent, composeUsed } =
+          assembled
 
-        const secrets = envEntries
-          .filter((e) => e.kind === "secret")
-          .map((e) => ({
-            name: e.name,
-            secretName: (e as { secretName: string }).secretName,
-          }))
+        const logGroup = `${LOG_GROUP_PREFIX}/${sourceRepoName}`
+        yield* logs.ensureLogGroup(region, logGroup, LOG_RETENTION_DAYS)
 
         const vpcId = yield* ec2.findVpcIdByName(region, AFK_VPC_NAME)
         const subnetIds = yield* ec2.findSubnetIdsByVpcId(region, vpcId)
@@ -326,7 +308,7 @@ export const AwsComputeLive = Layer.effect(
         const backendPlan: AwsBackendPlan = {
           region,
           accountId: identity.Account,
-          amiId: golden.imageId,
+          amiId: latestGolden.id,
           instanceType,
           spot,
           subnetIds,
@@ -343,7 +325,7 @@ export const AwsComputeLive = Layer.effect(
           image: built.image,
           branch: built.branch,
           sha: built.sha,
-          composeUsed: composePresent,
+          composeUsed,
           mainService,
           timeoutHours,
           timeoutSeconds,
@@ -416,12 +398,6 @@ export const AwsComputeLive = Layer.effect(
         return result
       })
 
-    const start = (input: StartInput) =>
-      Effect.gen(function* () {
-        const plan = yield* prepare(input)
-        return yield* launch(plan)
-      })
-
     const kill = (runId: string) =>
       Effect.gen(function* () {
         const run = yield* findByRunId(runId)
@@ -479,7 +455,6 @@ export const AwsComputeLive = Layer.effect(
       backendName: "aws",
       prepare,
       launch,
-      start,
       listMine,
       listAll,
       findByRunId,

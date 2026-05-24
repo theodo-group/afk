@@ -21,9 +21,7 @@ export const logs = Command.make(
   ({ runId, follow, service, since }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
-      // Dispatch through the active backend's LogStore (CloudWatch on AWS,
-      // Workers Logs / `wrangler tail` on Cloudflare) rather than a fixed
-      // provider adapter.
+      // LogStore is the active backend's tailer, not a fixed provider adapter.
       const logStore = yield* LogStore
       const cfg = yield* ConfigService
 

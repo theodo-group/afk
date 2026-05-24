@@ -17,28 +17,90 @@ export interface RunResult {
 export class Subprocess extends Context.Tag("Subprocess")<
   Subprocess,
   {
-    /** Run a command, capturing stdout/stderr. Fails on non-zero exit. */
     readonly run: (
       command: string,
       args: ReadonlyArray<string>,
       options?: RunOptions,
     ) => Effect.Effect<RunResult, SubprocessError>
 
-    /** Run a command and parse stdout as JSON. Fails on non-zero exit or bad JSON. */
     readonly runJson: <T = unknown>(
       command: string,
       args: ReadonlyArray<string>,
       options?: RunOptions,
     ) => Effect.Effect<T, SubprocessError | ParseError>
 
-    /** Run a command attached to the user's TTY (for interactive sessions). Fails on non-zero exit. */
+    /** Inherits stdio so the child owns the TTY (interactive shells). */
     readonly runInteractive: (
+      command: string,
+      args: ReadonlyArray<string>,
+      options?: RunOptions,
+    ) => Effect.Effect<void, SubprocessError>
+
+    /**
+     * Long-lived inherited-stdio process (log follows, attaches) that is killed
+     * when the surrounding Effect is interrupted — e.g. when a streamer stops
+     * its tail because the Run reached a terminal state, or on Ctrl-C. Unlike
+     * `runInteractive` (which leaks the child past interruption), `stream`
+     * registers a finalizer that terminates the child.
+     */
+    readonly stream: (
       command: string,
       args: ReadonlyArray<string>,
       options?: RunOptions,
     ) => Effect.Effect<void, SubprocessError>
   }
 >() {}
+
+const stream = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options: RunOptions = {},
+): Effect.Effect<void, SubprocessError> =>
+  Effect.async<void, SubprocessError>((resume) => {
+    const proc = Bun.spawn([command, ...args], {
+      cwd: options.cwd,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    })
+    proc.exited.then(
+      (code) =>
+        // 130/143 = SIGINT/SIGTERM: a deliberate stop, not a failure.
+        resume(
+          code === 0 || code === 130 || code === 143
+            ? Effect.void
+            : Effect.fail(
+                new SubprocessError({
+                  command,
+                  args,
+                  exitCode: code,
+                  stdout: "",
+                  stderr: "",
+                }),
+              ),
+        ),
+      (cause) =>
+        resume(
+          Effect.fail(
+            new SubprocessError({
+              command,
+              args,
+              exitCode: -1,
+              stdout: "",
+              stderr: String(cause),
+            }),
+          ),
+        ),
+    )
+    return Effect.sync(() => {
+      try {
+        proc.kill()
+      } catch {
+        /* already gone */
+      }
+    })
+  })
 
 const spawn = (
   command: string,
@@ -113,6 +175,7 @@ export const SubprocessLive = Layer.succeed(
       ),
     runInteractive: (command, args, options) =>
       spawn(command, args, options, false).pipe(Effect.asVoid),
+    stream,
   }),
 )
 

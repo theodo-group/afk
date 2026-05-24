@@ -13,7 +13,6 @@ export class Git extends Context.Tag("Git")<
       gitUrl: string,
       ref: string,
     ) => Effect.Effect<string, GitError | UserError>
-    /** Verify a sha exists on origin for the given URL. */
     readonly remoteHasSha: (
       gitUrl: string,
       sha: string,

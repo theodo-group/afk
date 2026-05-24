@@ -21,10 +21,8 @@ import { DynamoDbLive } from "./adapters/aws/DynamoDb.ts"
 
 import { ConfigServiceLive } from "./services/ConfigService.ts"
 import { BuildServiceLive } from "./services/BuildService.ts"
-import { ImageServiceLive } from "./services/ImageService.ts"
 import { HistoryServiceLive } from "./services/HistoryService.ts"
 import { RunServiceLive } from "./services/RunService.ts"
-import { SecretServiceLive } from "./services/SecretService.ts"
 import { TeamServiceLive } from "./services/TeamService.ts"
 import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
@@ -70,13 +68,15 @@ const quiet = Options.boolean("quiet", { aliases: ["q"] }).pipe(
 //   Subprocess (infra)
 //     └── adapter layer (Git, Docker, AWS SDK clients, Terraform, …)
 //           └── ConfigService
-//                 └── ImageService (AWS-specific Golden Image builder)
-//                       └── Backend layer (AwsBackendLive picks an Aws*Live
-//                            for every abstract service tag — Compute,
-//                            ImageRegistry, SecretStore, LogStore, RunHistory)
-//                            └── BuildService (cross-cutting, uses ImageRegistry)
-//                                  └── facade services (RunService, SecretService,
-//                                       HistoryService) + Bootstrap + Team
+//                 └── Backend layer (AwsBackendLive picks an Aws*Live for every
+//                      abstract service tag — Compute, ImageRegistry,
+//                      SecretStore, LogStore, RunHistory, GoldenImageStore)
+//                      └── BuildService (cross-cutting, uses ImageRegistry)
+//                            └── orchestrating services (RunService,
+//                                 HistoryService) + Bootstrap + Team
+//
+// Developer-facing secret CRUD goes straight to the SecretStore tag the Backend
+// provides — there is no SecretService facade.
 //
 // To add another Backend (e.g. Cloudflare), replace `AwsBackendLive` with
 // `CloudflareBackendLive` (or dispatch at runtime based on `config.backend`).
@@ -98,16 +98,7 @@ const L_adapters = Layer.mergeAll(
 ).pipe(Layer.provideMerge(L_infra))
 
 const L_config = ConfigServiceLive.pipe(Layer.provideMerge(L_adapters))
-const L_image = ImageServiceLive.pipe(Layer.provideMerge(L_config))
 
-/**
- * Pick the Backend aggregate based on `afk.config.json`'s `backend` field.
- *
- * Synchronously walks up from cwd looking for the config file (the same logic
- * ConfigService uses, duplicated here because the Layer must be selected
- * before the Effect runtime is up). Defaults to AWS so `afk init` itself
- * still works in an empty directory.
- */
 /**
  * Load the project's `.env` into `process.env` before anything reads env vars
  * (CLOUDFLARE_API_TOKEN, AFK_CF_CLIENT_ID, AWS_*, …). Walks up from cwd to the
@@ -135,6 +126,14 @@ const loadProjectDotenv = (): void => {
 
 loadProjectDotenv()
 
+/**
+ * Pick the Backend aggregate based on `afk.config.json`'s `backend` field.
+ *
+ * Synchronously walks up from cwd looking for the config file (the same logic
+ * ConfigService uses, duplicated here because the Layer must be selected
+ * before the Effect runtime is up). Defaults to AWS so `afk init` itself
+ * still works in an empty directory.
+ */
 const pickBackendName = (): "aws" | "cloudflare" => {
   let dir = process.cwd()
   while (true) {
@@ -164,13 +163,12 @@ const _backendName = pickBackendName()
 // downstream pipeline is identical from there.
 const L_backend =
   _backendName === "cloudflare"
-    ? CloudflareBackendLive.pipe(Layer.provideMerge(L_image))
-    : AwsBackendLive.pipe(Layer.provideMerge(L_image))
+    ? CloudflareBackendLive.pipe(Layer.provideMerge(L_config))
+    : AwsBackendLive.pipe(Layer.provideMerge(L_config))
 const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_backend))
 const L_run = RunServiceLive.pipe(Layer.provideMerge(L_build))
 const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_run))
 const AppLive = Layer.mergeAll(
-  SecretServiceLive,
   TeamServiceLive,
   BootstrapServiceLive,
 ).pipe(Layer.provideMerge(L_history))

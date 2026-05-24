@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { RunHistory } from "../../services/backend/RunHistory.ts"
-import { CloudflareGoldenBuilder } from "../../services/CloudflareGoldenBuilder.ts"
+import { GoldenImageStore } from "../../services/backend/GoldenImage.ts"
 import {
   Compute,
   type AttachOptions,
@@ -17,13 +17,9 @@ import {
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
-import {
-  COMPOSE_FILE,
-  DEFAULT_MAIN_SERVICE,
-  DEFAULT_TIMEOUT_HOURS,
-} from "../../constants.ts"
+import { COMPOSE_FILE, DEFAULT_MAIN_SERVICE } from "../../constants.ts"
 import type { Run, RunStatus } from "../../schema/Run.ts"
-import { lintCompose, substituteImage } from "../../services/Compose.ts"
+import { assembleRunPlan } from "../../services/RunPlan.ts"
 
 const DEFAULT_INSTANCE_TIER = "standard-1"
 
@@ -132,7 +128,7 @@ export const CloudflareComputeLive = Layer.effect(
   Effect.gen(function* () {
     const cfg = yield* ConfigService
     const history = yield* RunHistory
-    const golden = yield* CloudflareGoldenBuilder
+    const golden = yield* GoldenImageStore
 
     const resolveWorkerUrl = Effect.gen(function* () {
       const { config } = yield* cfg.load
@@ -175,9 +171,6 @@ export const CloudflareComputeLive = Layer.effect(
         }
         const built = input.built
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
-        const timeoutHours =
-          input.timeoutHours ?? config.defaultTimeoutHours ?? DEFAULT_TIMEOUT_HOURS
-        const timeoutSeconds = Math.floor(timeoutHours * 3600)
 
         const tierOverride =
           typeof input.backendOverrides?.instanceType === "string"
@@ -190,51 +183,37 @@ export const CloudflareComputeLive = Layer.effect(
           DEFAULT_INSTANCE_TIER
 
         const composePath = resolve(projectRoot, COMPOSE_FILE)
-        const composePresent = existsSync(composePath)
-        let composeContent: string | undefined
-        if (composePresent) {
-          const raw = yield* Effect.try({
-            try: () => readFileSync(composePath, "utf8"),
-            catch: (cause) =>
-              new ConfigError({
-                path: composePath,
-                message: `cannot read: ${String(cause)}`,
-              }),
-          })
-          const lint = yield* Effect.try({
-            try: () =>
-              lintCompose({ content: raw, mainService, backend: "cloudflare" }),
-            catch: (e) =>
-              e instanceof UserError
-                ? e
-                : new UserError({
-                    message: `afk.compose.yml: ${String(e)}`,
-                  }),
-          })
-          for (const w of lint.warnings) {
-            console.warn(`warning: ${w}`)
-          }
-          composeContent = substituteImage(lint.content, built.image)
-        }
+        const composeRaw = existsSync(composePath)
+          ? yield* Effect.try({
+              try: () => readFileSync(composePath, "utf8"),
+              catch: (cause) =>
+                new ConfigError({
+                  path: composePath,
+                  message: `cannot read: ${String(cause)}`,
+                }),
+            })
+          : undefined
 
         const runId = randomUUID()
         const startedAt = new Date().toISOString()
 
-        const env: Array<{ name: string; value: string }> = envEntries
-          .filter((e) => e.kind === "plain")
-          .map((e) => ({ name: e.name, value: (e as { value: string }).value }))
-        env.push({ name: "AFK_GIT_URL", value: config.gitUrl })
-        env.push({ name: "AFK_GIT_SHA", value: built.sha })
-        env.push({ name: "AFK_GIT_REF", value: input.ref ?? built.branch })
-        env.push({ name: "AFK_RUN_ID", value: runId })
-        env.push({ name: "AFK_TIMEOUT_SECONDS", value: String(timeoutSeconds) })
-
-        const secrets = envEntries
-          .filter((e) => e.kind === "secret")
-          .map((e) => ({
-            name: e.name,
-            secretName: (e as { secretName: string }).secretName,
-          }))
+        const assembled = assembleRunPlan({
+          config,
+          envEntries,
+          built,
+          ref: input.ref,
+          timeoutHours: input.timeoutHours,
+          mainService,
+          backend: "cloudflare",
+          composeContent: composeRaw,
+          runId,
+        })
+        if (assembled.composeError) {
+          return yield* Effect.fail(new UserError({ message: assembled.composeError }))
+        }
+        for (const w of assembled.warnings) console.warn(`warning: ${w}`)
+        const { timeoutHours, timeoutSeconds, env, secrets, composeContent, composeUsed } =
+          assembled
 
         const backendPlan: CloudflareBackendPlan = {
           workerUrl,
@@ -252,7 +231,7 @@ export const CloudflareComputeLive = Layer.effect(
           image: built.image,
           branch: built.branch,
           sha: built.sha,
-          composeUsed: composePresent,
+          composeUsed,
           mainService,
           timeoutHours,
           timeoutSeconds,
@@ -329,12 +308,6 @@ export const CloudflareComputeLive = Layer.effect(
           logChannel: plan.logChannel,
         }
         return result
-      })
-
-    const start = (input: StartInput) =>
-      Effect.gen(function* () {
-        const plan = yield* prepare(input)
-        return yield* launch(plan)
       })
 
     const listMine = (_ownerUserId: string) =>
@@ -478,7 +451,6 @@ export const CloudflareComputeLive = Layer.effect(
       backendName: "cloudflare",
       prepare,
       launch,
-      start,
       listMine,
       listAll,
       findByRunId,
