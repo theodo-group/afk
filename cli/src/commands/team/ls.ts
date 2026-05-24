@@ -1,11 +1,11 @@
 import { Command } from "@effect/cli"
 import { Effect } from "effect"
-import { TeamService } from "../../services/TeamService.ts"
+import { Team } from "../../services/backend/Team.ts"
 import { Output } from "../../infra/Output.ts"
 
 export const ls = Command.make("ls", {}, () =>
   Effect.gen(function* () {
-    const team = yield* TeamService
+    const team = yield* Team
     const out = yield* Output
     const members = yield* team.ls
     yield* out.emit({

@@ -6,6 +6,7 @@ import { CloudflareLogStoreLive } from "./CloudflareLogStore.ts"
 import { CloudflareRunHistoryLive } from "./CloudflareRunHistory.ts"
 import { CloudflareGoldenImageLive } from "./CloudflareGoldenImage.ts"
 import { CloudflareBackendDoctorLive } from "./CloudflareBackendDoctor.ts"
+import { CloudflareTeamLive } from "./CloudflareTeam.ts"
 
 /**
  * Aggregate Layer that wires up every Backend service tag with the Cloudflare
@@ -23,6 +24,7 @@ const Leaves = Layer.mergeAll(
   CloudflareLogStoreLive,
   CloudflareRunHistoryLive,
   CloudflareBackendDoctorLive,
+  CloudflareTeamLive,
 )
 
 const Golden = CloudflareGoldenImageLive.pipe(Layer.provideMerge(Leaves))
