@@ -51,8 +51,6 @@ export const AwsSecretStoreLive = Layer.effect(
           lastModified: p.lastModifiedDate,
         }))
       }),
-
-      referenceFor: (name) => `secret:${name}`,
     })
   }),
 )

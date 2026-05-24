@@ -3,15 +3,7 @@ import { SecretStore } from "../../services/backend/SecretStore.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
 import type { Secret } from "../../schema/Secret.ts"
-
-const authHeaders = (): Record<string, string> => {
-  const id = process.env.AFK_CF_CLIENT_ID
-  const secret = process.env.AFK_CF_CLIENT_SECRET
-  const out: Record<string, string> = { "content-type": "application/json" }
-  if (id) out["CF-Access-Client-Id"] = id
-  if (secret) out["CF-Access-Client-Secret"] = secret
-  return out
-}
+import { cfAuthHeaders } from "./cfAuth.ts"
 
 /**
  * Cloudflare implementation of SecretStore. Proxies to the launcher Worker's
@@ -47,7 +39,7 @@ export const CloudflareSecretStoreLive = Layer.effect(
           try: async () => {
             const res = await fetch(`${base}${path}`, {
               ...init,
-              headers: { ...authHeaders(), ...(init?.headers ?? {}) },
+              headers: { ...cfAuthHeaders(), ...(init?.headers ?? {}) },
             })
             const text = await res.text()
             if (!res.ok) {
@@ -87,8 +79,6 @@ export const CloudflareSecretStoreLive = Layer.effect(
           ssmName: `AFK_SECRET_${name}`,
         }))
       }),
-
-      referenceFor: (name) => `secret:${name}`,
     })
   }),
 )
