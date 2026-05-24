@@ -196,6 +196,10 @@ policy — it resolves the default to `mainService` from config and passes it as
 the `LogStore` tag's `serviceFilter` (`--all` passes none). Backends just honour
 "this service / all".
 
+Run-id is optional: omitted with a TTY, the command prompts (`Prompt.select`)
+from recent `HistoryService` rows so the developer picks a Run instead of
+copying an id; omitted without a TTY it errors rather than hang a pipe.
+
 Both Backends key logs by `<runId>/<service>` so the filter works identically.
 AWS: per-service CloudWatch streams — the compose path injects a per-service
 `logging.options.awslogs-stream: <runId>/<service>` at submit time (the daemon
