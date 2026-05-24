@@ -68,14 +68,39 @@ export const CloudflareLogStoreLive = Layer.effect(
             )
           }
 
-          // Follow: poll until logs appear (the container ships them on exit),
-          // then print incrementally. Ctrl-C to stop.
+          // Follow: the container pushes a growing snapshot every few seconds
+          // (the golden bootstrap's log poller), so poll the same endpoint and
+          // print each delta. Stop once the Run is terminal — `/complete` stores
+          // the authoritative logs before flipping status to STOPPED, so one
+          // final drain after we see STOPPED is race-free. (`afk run` interrupts
+          // this fiber via streamUntilTerminated; a bare `afk logs --follow` on a
+          // finished Run would otherwise poll a static snapshot forever.)
+          const statusUrl = `${workerUrl}/runs/${encodeURIComponent(input.runId)}`
+          const isStopped = Effect.tryPromise({
+            try: async () => {
+              const res = await fetch(statusUrl, { headers: cfAuthHeaders() })
+              if (!res.ok) return false
+              const meta = (await res.json()) as { status?: string }
+              return meta.status === "STOPPED"
+            },
+            catch: (e): CloudflareError =>
+              new CloudflareError({ operation: "GET /runs/:id", message: String(e) }),
+          }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+
           let printed = 0
-          for (;;) {
+          const drain = Effect.gen(function* () {
             const body = yield* fetchOnce()
             if (body.length > printed) {
               yield* Effect.sync(() => process.stdout.write(body.slice(printed)))
               printed = body.length
+            }
+          })
+
+          for (;;) {
+            yield* drain
+            if (yield* isStopped) {
+              yield* drain
+              return
             }
             yield* Effect.sleep("3 seconds")
           }
