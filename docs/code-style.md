@@ -134,6 +134,39 @@ step is independently nameable, instead of a block mutating an accumulator.
 
 [pipelines]: https://effect.website/docs/getting-started/building-pipelines/
 
+**Functional core, imperative shell.** Push pure decision logic *out* of the
+`Effect.gen` that performs the I/O. A service method that gathers effectful
+inputs (config, identity, files, network) and *also* computes the plan inline —
+resolving defaults, validating, assembling records — tangles two concerns and
+leaves the pure part unreachable without standing up the whole Layer. Split them:
+
+- The **core** is a plain function: data in, data out. No `Effect`, no clock, no
+  randomness, no I/O. It returns its result *and its failures* as data — an
+  `Either<T, UserError>`, or a result record with an error field (as
+  `assembleRunPlan` returns `composeError` / `warnings`). The shell translates
+  that into the Effect channel (`yield* Effect.fromEither(…)`, or
+  `Effect.fail`/`console.warn` on the surfaced fields).
+- The **shell** is the `Layer` / `Effect.gen`: it `yield*`s the effectful inputs,
+  calls the core, and performs the side effects the core's result gates. The
+  non-deterministic seeds (`randomUUID()`, `new Date().toISOString()`) are
+  generated in the shell and *injected* into the core, so the core stays
+  deterministic.
+- The reward is a `bun test` seam with **no Layer**: call the core with plain
+  inputs and assert on the returned value. Exemplar: `backends/aws/AwsRunPlan.ts`
+  (`planAwsRun` / `finalizeAwsPlan` / `toRunStarted`) tested by
+  `AwsRunPlan.test.ts`, with `backends/aws/AwsCompute.ts` as the thin shell
+  (gather → core → gated effects → finalize).
+- Don't force it where there is nothing pure to extract. A method that is a
+  genuine chain of dependent effects with no inlined decision logic is already a
+  correct shell — leave it (the same exception as the accumulator-loop rule).
+- When the core's output rides through a neutral opaque seam typed
+  `Record<string, unknown>` (e.g. `PreparedRun.backendPlan`), declare that record
+  as a closed `type` alias, not an `interface`: an interface can be augmented by
+  declaration merging so TS refuses to assign it to the record, forcing an
+  `as unknown as` double-cast; a `type` is closed and assigns directly. The
+  unpack on the consuming side is then a single `as` (an in-process reassertion,
+  not a trust boundary — so no Schema decode is warranted).
+
 **Errors:**
 
 - Every failure is a `Data.TaggedError` in `infra/Errors.ts`, added to the
