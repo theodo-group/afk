@@ -204,3 +204,41 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
  */
 export const substituteImage = (composeContent: string, imageUri: string): string =>
   composeContent.split(AFK_IMAGE_PLACEHOLDER).join(imageUri)
+
+export interface AwsLoggingInput {
+  readonly runId: string
+  readonly region: string
+  readonly logGroup: string
+}
+
+/**
+ * Pin each service's awslogs stream to `<runId>/<service>` on the AWS Backend.
+ * Without this the daemon default streams to `<runId>/{{.Name}}` — the compose
+ * *container* name (`<project>-<service>-N`), which the CLI's `<runId>/<service>`
+ * stream filter never matches. Mirrors the no-compose path's explicit stream.
+ */
+export const injectAwsLogging = (
+  composeContent: string,
+  input: AwsLoggingInput,
+): string => {
+  const doc = parseDocument(composeContent)
+  const services = asMap(asMap(doc.contents)?.get("services"))
+  if (!services) return composeContent
+
+  for (const pair of services.items) {
+    const key = pair.key as Scalar
+    if (!key || typeof key.value !== "string") continue
+    const svc = asMap(services.get(key.value))
+    if (!svc) continue
+    const options = new YAMLMap()
+    options.set("awslogs-region", input.region)
+    options.set("awslogs-group", input.logGroup)
+    options.set("awslogs-create-group", "true")
+    options.set("awslogs-stream", `${input.runId}/${key.value}`)
+    const logging = new YAMLMap()
+    logging.set("driver", "awslogs")
+    logging.set("options", options)
+    svc.set("logging", logging)
+  }
+  return stringify(doc)
+}

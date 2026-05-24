@@ -3,6 +3,7 @@ import {
   VM_AFK_DIR,
   VM_COMPOSE_PATH,
 } from "../constants.ts"
+import { injectAwsLogging } from "./Compose.ts"
 
 export interface UserDataInput {
   readonly runId: string
@@ -86,11 +87,19 @@ export const buildUserData = (input: UserDataInput): string => {
 
   // The compose file the dev wrote (with ${AFK_IMAGE} already substituted by
   // the CLI). ${AFK_COMMAND} is left intact — compose substitutes it at runtime
-  // from the shell env we set just before `docker compose up`.
-  const composeBlock = input.compose
+  // from the shell env we set just before `docker compose up`. Each service's
+  // logs are pinned to the `<runId>/<service>` stream the LogStore filter reads.
+  const composeForVm = input.compose
+    ? injectAwsLogging(input.compose, {
+        runId: input.runId,
+        region: input.region,
+        logGroup,
+      })
+    : undefined
+  const composeBlock = composeForVm
     ? [
         `cat > ${shellQuote(VM_COMPOSE_PATH)} <<'AFK_COMPOSE_EOF'`,
-        input.compose,
+        composeForVm,
         `AFK_COMPOSE_EOF`,
       ].join("\n")
     : ""
@@ -108,12 +117,12 @@ export const buildUserData = (input: UserDataInput): string => {
       ].join("\n")
     : [
         `timeout --preserve-status ${input.timeoutSeconds}s docker run --rm \\`,
-        `  --name agent \\`,
+        `  --name ${shellQuote(input.mainService)} \\`,
         `  --env-file "$AFK_ENV_FILE" \\`,
         `  --log-driver awslogs \\`,
         `  --log-opt awslogs-region=${input.region} \\`,
         `  --log-opt awslogs-group=${shellQuote(logGroup)} \\`,
-        `  --log-opt awslogs-stream=${shellQuote(`${input.runId}/agent`)} \\`,
+        `  --log-opt awslogs-stream=${shellQuote(`${input.runId}/${input.mainService}`)} \\`,
         `  --log-opt awslogs-create-group=true \\`,
         `  ${shellQuote(input.image)} \\`,
         `  sh -c ${shellQuote(cmdShell)}`,

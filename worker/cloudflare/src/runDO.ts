@@ -59,7 +59,7 @@ export class RunDO extends DurableObject<Env> {
       case "POST /complete":
         return this.handleComplete(req)
       case "GET /logs":
-        return this.handleLogs()
+        return this.handleLogs(url)
       case "GET /attach":
         return this.handleAttach(req, url)
       case "GET /logs-stream":
@@ -199,32 +199,49 @@ export class RunDO extends DurableObject<Env> {
   }
 
   /** Completion callback POSTed by the golden bootstrap when the workload ends:
-   * stores captured logs and flips the Run to STOPPED with its exit code. */
+   * stores the per-service log map and flips the Run to STOPPED with its exit
+   * code. Keys are compose service names, values base64 (per-service, like the
+   * AWS per-service awslogs streams). */
   private async handleComplete(req: Request): Promise<Response> {
-    const { exitCode, logB64 } = (await req.json()) as {
+    const { exitCode, services } = (await req.json()) as {
       exitCode?: number
-      logB64?: string
+      services?: Record<string, string>
     }
-    if (typeof logB64 === "string") {
-      let log = ""
-      try {
-        log = new TextDecoder().decode(
-          Uint8Array.from(atob(logB64), (c) => c.charCodeAt(0)),
-        )
-      } catch {
-        log = "(could not decode log)"
+    if (services && typeof services === "object") {
+      const decoded: Record<string, string> = {}
+      for (const [name, b64] of Object.entries(services)) {
+        try {
+          decoded[name] = new TextDecoder().decode(
+            Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)),
+          )
+        } catch {
+          decoded[name] = "(could not decode log)"
+        }
       }
-      await this.ctx.storage.put("log", log)
+      await this.ctx.storage.put("logs", decoded)
     }
     await this.ctx.storage.deleteAlarm()
     await this.markStopped("completed", exitCode)
     return Response.json({ ok: true })
   }
 
-  /** Returns the captured workload logs (set by handleComplete). */
-  private async handleLogs(): Promise<Response> {
-    const log = (await this.ctx.storage.get<string>("log")) ?? ""
-    return new Response(log, { headers: { "content-type": "text/plain" } })
+  /** Returns captured logs (set by handleComplete). `?service=<name>` returns
+   * one service; without it, every service concatenated behind a header. */
+  private async handleLogs(url: URL): Promise<Response> {
+    const logs =
+      (await this.ctx.storage.get<Record<string, string>>("logs")) ?? {}
+    const service = url.searchParams.get("service")
+    if (service !== null) {
+      return new Response(logs[service] ?? "", {
+        headers: { "content-type": "text/plain" },
+      })
+    }
+    const names = Object.keys(logs)
+    const body =
+      names.length === 1
+        ? logs[names[0]!] ?? ""
+        : names.map((n) => `==> ${n} <==\n${logs[n]}`).join("\n")
+    return new Response(body, { headers: { "content-type": "text/plain" } })
   }
 
   private async handleAttach(req: Request, url: URL): Promise<Response> {

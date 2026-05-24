@@ -197,9 +197,10 @@ the `LogStore` tag's `serviceFilter` (`--all` passes none). Backends just honour
 "this service / all".
 
 Both Backends key logs by `<runId>/<service>` so the filter works identically.
-AWS: per-service CloudWatch streams — the compose path injects
-`awslogs-stream: ${AFK_RUN_ID}/<service>` per service at submit time (the default
-`{{.Name}}` is the *container* name, which doesn't match). CF: no log driver, so
+AWS: per-service CloudWatch streams — the compose path injects a per-service
+`logging.options.awslogs-stream: <runId>/<service>` at submit time (the daemon
+default `{{.Name}}` is the *container* name, which doesn't match). CF: no log
+driver, so
 the golden bootstrap captures `docker compose logs` per service and POSTs a
 `{ exitCode, services: { <name>: <b64> } }` map to `/runs/:id/complete`; sidecars
 get a tighter truncation budget than the main service.

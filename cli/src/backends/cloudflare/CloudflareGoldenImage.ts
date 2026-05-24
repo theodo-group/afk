@@ -103,6 +103,13 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
       up --exit-code-from "\${AFK_MAIN_SERVICE:-agent}" --abort-on-container-exit \\
       >>"\$LOG" 2>&1
     RUN_EXIT=\$?
+    # Capture each service's logs to its own file BEFORE teardown removes them,
+    # so the per-service payload below mirrors the AWS per-service awslogs streams.
+    SVCS=\$(docker compose -f /etc/afk/compose.yml config --services 2>/dev/null)
+    for svc in \$SVCS; do
+      docker compose -f /etc/afk/compose.yml logs --no-log-prefix --no-color "\$svc" \\
+        > "/var/afk/svc-\$svc.log" 2>/dev/null || true
+    done
     docker compose -f /etc/afk/compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
   else
     # --network host: child containers share the CF container's network (no
@@ -111,16 +118,34 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
       --env-file "\$ENV_FILE" "\$AFK_IMAGE" sh -c "\$AFK_COMMAND" \\
       >>"\$LOG" 2>&1
     RUN_EXIT=\$?
+    # Single-container Run: its one logical service is the main service.
+    SVCS="\${AFK_MAIN_SERVICE:-agent}"
+    cp "\$LOG" "/var/afk/svc-\${AFK_MAIN_SERVICE:-agent}.log" 2>/dev/null || true
   fi
   cat "\$LOG" 2>/dev/null || true
   echo "afk-golden: workload exited \$RUN_EXIT"
 
-  # Ship logs + exit code back to the launcher Worker (the CF analog of the AWS
-  # awslogs driver). The Worker stores them so \`afk logs\` and \`afk ls\` work.
+  # Ship a per-service log map + exit code to the launcher Worker (the CF analog
+  # of the AWS awslogs driver). The main service gets a larger byte budget than
+  # sidecars, which are diagnostic. The Worker stores the map so \`afk logs\`
+  # (default/--service/--all) and \`afk ls\` work.
   if [ -n "\${AFK_COMPLETE_URL:-}" ]; then
-    LOG_B64=\$(tail -c 131072 "\$LOG" 2>/dev/null | base64 | tr -d '\\n')
+    MAIN_SVC="\${AFK_MAIN_SERVICE:-agent}"
+    {
+      printf '{"exitCode":%s,"services":{' "\$RUN_EXIT"
+      SEP=""
+      for svc in \$SVCS; do
+        f="/var/afk/svc-\$svc.log"
+        [ -f "\$f" ] || continue
+        if [ "\$svc" = "\$MAIN_SVC" ]; then BUDGET=131072; else BUDGET=32768; fi
+        B64=\$(tail -c "\$BUDGET" "\$f" 2>/dev/null | base64 | tr -d '\\n')
+        printf '%s"%s":"%s"' "\$SEP" "\$svc" "\$B64"
+        SEP=","
+      done
+      printf '}}'
+    } > /var/afk/complete.json
     wget -qO- --header="Content-Type: application/json" \\
-      --post-data="{\\"exitCode\\":\$RUN_EXIT,\\"logB64\\":\\"\$LOG_B64\\"}" \\
+      --post-data="\$(cat /var/afk/complete.json)" \\
       "\$AFK_COMPLETE_URL" >/dev/null 2>&1 || true
   fi
   exit "\$RUN_EXIT"

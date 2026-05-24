@@ -56,10 +56,11 @@ app.post("/runs/:id/complete", async (c) => {
   )
 })
 
-// Read a Run's captured logs.
+// Read a Run's captured logs. Forwards `?service=<name>` to the RunDO.
 app.get("/runs/:id/logs", async (c) => {
   const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
-  const r = await stub.fetch(new Request("https://run/logs"))
+  const search = new URL(c.req.url).search
+  const r = await stub.fetch(new Request(`https://run/logs${search}`))
   return new Response(await r.text(), { headers: { "content-type": "text/plain" } })
 })
 

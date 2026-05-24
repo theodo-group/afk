@@ -40,7 +40,10 @@ export const CloudflareLogStoreLive = Layer.effect(
               }),
             )
           }
-          const url = `${workerUrl}/runs/${encodeURIComponent(input.runId)}/logs`
+          const query = input.serviceFilter
+            ? `?service=${encodeURIComponent(input.serviceFilter)}`
+            : ""
+          const url = `${workerUrl}/runs/${encodeURIComponent(input.runId)}/logs${query}`
           const fetchOnce = () =>
             Effect.tryPromise({
               try: async () => {
