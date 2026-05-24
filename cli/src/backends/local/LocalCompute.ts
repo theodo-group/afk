@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { type LocalBackendPlan, planLocalRun } from "./LocalRunPlan.ts"
 import { userInfo } from "node:os"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
@@ -33,7 +34,6 @@ import {
   LOCAL_RUN_MOUNT,
 } from "../../constants.ts"
 import type { Run } from "../../schema/Run.ts"
-import { assembleRunPlan } from "../../services/RunPlan.ts"
 import { ensureDir, runDir, runLogsDir } from "./localPaths.ts"
 import { readSecretValue } from "./localSecrets.ts"
 import { listAfkContainers, mapDockerState, type LocalContainer } from "./localDocker.ts"
@@ -60,12 +60,6 @@ const containerToRun = (c: LocalContainer): Run | null => {
     startedAt: c.labels[LABEL_STARTED_AT] ?? c.startedAt,
     ...(c.finishedAt ? { stoppedAt: c.finishedAt } : {}),
   }
-}
-
-interface LocalBackendPlan {
-  readonly goldenImage: string
-  readonly startedAt: string
-  readonly composeContent?: string
 }
 
 /**
@@ -121,11 +115,8 @@ export const LocalComputeLive = Layer.effect(
           )
         }
 
-        const built = input.built
-        const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
-
         const composePath = resolve(projectRoot, COMPOSE_FILE)
-        const composeRaw = existsSync(composePath)
+        const composeContent = existsSync(composePath)
           ? yield* Effect.try({
               try: () => readFileSync(composePath, "utf8"),
               catch: (cause) =>
@@ -136,56 +127,25 @@ export const LocalComputeLive = Layer.effect(
             })
           : undefined
 
-        const runId = randomUUID()
-        const startedAt = new Date().toISOString()
-
-        const assembled = assembleRunPlan({
+        // Core: pure resolution + validation. Non-deterministic seeds are
+        // generated here in the shell and injected, so the core stays testable.
+        const core = yield* planLocalRun({
           config,
           envEntries,
-          built,
-          ref: input.ref,
-          timeoutHours: input.timeoutHours,
-          mainService,
-          backend: "local",
-          composeContent: composeRaw,
-          runId,
+          sourceRepoName,
+          goldenImageId: latestGolden.id,
+          composeContent,
+          input,
+          runId: randomUUID(),
+          startedAt: new Date().toISOString(),
         })
-        if (assembled.composeError) {
-          return yield* Effect.fail(new UserError({ message: assembled.composeError }))
-        }
-        for (const w of assembled.warnings) console.warn(`warning: ${w}`)
-        const { timeoutHours, timeoutSeconds, env, secrets, composeContent, composeUsed } =
-          assembled
-
-        const backendPlan: LocalBackendPlan = {
-          goldenImage: latestGolden.id,
-          startedAt,
-          ...(composeContent !== undefined ? { composeContent } : {}),
-        }
-
-        const plan: PreparedRun = {
-          runId,
-          command: input.command,
-          image: built.image,
-          branch: built.branch,
-          sha: built.sha,
-          composeUsed,
-          mainService,
-          timeoutHours,
-          timeoutSeconds,
-          owner: LOCAL_OWNER_ID,
-          repoName: sourceRepoName,
-          env,
-          secrets,
-          logChannel: runLogsDir(runId),
-          backendPlan: backendPlan as unknown as Record<string, unknown>,
-        }
-        return plan
+        for (const w of core.warnings) console.warn(`warning: ${w}`)
+        return core.plan
       })
 
     const launch = (plan: PreparedRun) =>
       Effect.gen(function* () {
-        const local = plan.backendPlan as unknown as LocalBackendPlan
+        const local = plan.backendPlan as LocalBackendPlan
         const { config } = yield* cfg.load
         const gitUrl = config.gitUrl
 
