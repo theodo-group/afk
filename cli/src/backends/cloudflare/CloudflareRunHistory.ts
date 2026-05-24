@@ -1,8 +1,6 @@
 import { DateTime, Effect, Layer } from "effect"
 import { RunHistory, type HistoryRow } from "../../services/backend/RunHistory.ts"
-import { ConfigService } from "../../services/ConfigService.ts"
-import { CloudflareError, UserError } from "../../infra/Errors.ts"
-import { cfAuthHeaders } from "./cfAuth.ts"
+import { CfWorker } from "./CfWorker.ts"
 
 /**
  * Cloudflare implementation of RunHistory.
@@ -15,27 +13,13 @@ import { cfAuthHeaders } from "./cfAuth.ts"
 export const CloudflareRunHistoryLive = Layer.effect(
   RunHistory,
   Effect.gen(function* () {
-    const cfg = yield* ConfigService
-
-    const resolveWorkerUrl = Effect.gen(function* () {
-      const { config } = yield* cfg.load
-      const url = config.cloudflare?.workerUrl
-      if (!url) {
-        return yield* Effect.fail(
-          new UserError({
-            message: "cloudflare.workerUrl is not set in afk.config.json.",
-          }),
-        )
-      }
-      return url.replace(/\/$/, "")
-    })
+    const worker = yield* CfWorker
 
     return RunHistory.of({
       recordStart: (_input) => Effect.void,
       recordComplete: (_input) => Effect.void,
       query: ({ since, owner, branch, limit }) =>
         Effect.gen(function* () {
-          const base = yield* resolveWorkerUrl
           const params = new URLSearchParams()
           if (since) {
             // worker /history takes a duration; serialize the neutral instant to seconds-ago
@@ -49,44 +33,23 @@ export const CloudflareRunHistoryLive = Layer.effect(
           if (owner === undefined) params.set("all", "true")
           if (branch) params.set("branch", branch)
           if (limit !== undefined) params.set("limit", String(limit))
-          const url = `${base}/history?${params.toString()}`
-          const out = yield* Effect.tryPromise({
-            try: async () => {
-              const res = await fetch(url, { headers: cfAuthHeaders() })
-              const text = await res.text()
-              if (!res.ok) {
-                throw new CloudflareError({
-                  operation: "GET /history",
-                  status: res.status,
-                  message: text || res.statusText,
-                })
-              }
-              return JSON.parse(text) as {
-                rows: ReadonlyArray<{
-                  run_id: string
-                  owner: string
-                  repo: string
-                  branch?: string
-                  sha?: string
-                  image?: string
-                  resource_id?: string
-                  status: string
-                  started_at: string
-                  stopped_at?: string
-                  exit_code?: number
-                  timeout_hours: number
-                  backend_details?: string
-                }>
-              }
-            },
-            catch: (e): CloudflareError =>
-              e instanceof CloudflareError
-                ? e
-                : new CloudflareError({
-                    operation: "GET /history",
-                    message: String(e),
-                  }),
-          })
+          const out = yield* worker.getJson<{
+            rows: ReadonlyArray<{
+              run_id: string
+              owner: string
+              repo: string
+              branch?: string
+              sha?: string
+              image?: string
+              resource_id?: string
+              status: string
+              started_at: string
+              stopped_at?: string
+              exit_code?: number
+              timeout_hours: number
+              backend_details?: string
+            }>
+          }>("GET /history", `/history?${params.toString()}`)
 
           const rows = out.rows.map<HistoryRow>((r) => {
             let backendDetails: Record<string, string> | undefined
