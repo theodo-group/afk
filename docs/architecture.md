@@ -44,7 +44,7 @@ cli/src/
 ├── services/           Backend-neutral business logic.
 │   ├── backend/          Interface tags only — NO implementations.
 │   │   └── Compute.ts, ImageRegistry.ts, SecretStore.ts, LogStore.ts,
-│   │       RunHistory.ts, GoldenImage.ts, BackendDoctor.ts
+│   │       RunHistory.ts, GoldenImage.ts, BackendDoctor.ts, Team.ts
 │   ├── RunService.ts      Orchestrator: build image, delegate to Compute, stream logs.
 │   └── BuildService, ConfigService, HistoryService, TeamService, BootstrapService,
 │       Compose, RunPlan, GoldenImageVersion, Pricing, UserData
@@ -118,13 +118,14 @@ the leaves are provided *into* it and re-exported for other services):
 const Leaves = Layer.mergeAll(
   AwsImageRegistryLive, AwsSecretStoreLive, AwsLogStoreLive,
   AwsRunHistoryLive, AwsGoldenImageLive, AwsBackendDoctorLive,
+  AwsTeamLive,
 )
 export const AwsBackendLive = AwsComputeLive.pipe(Layer.provideMerge(Leaves))
 ```
 
-**Adding a Backend:** implement the seven `services/backend/` tags (Compute,
+**Adding a Backend:** implement the eight `services/backend/` tags (Compute,
 ImageRegistry, SecretStore, LogStore, RunHistory, GoldenImageStore,
-BackendDoctor) under `backends/<new>/`, write `<New>BackendLive` in its
+BackendDoctor, Team) under `backends/<new>/`, write `<New>BackendLive` in its
 `index.ts`, add one branch to `cli.ts`. No command changes.
 
 ## Layer composition in `cli.ts`

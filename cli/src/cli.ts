@@ -23,7 +23,6 @@ import { ConfigServiceLive } from "./services/ConfigService.ts"
 import { BuildServiceLive } from "./services/BuildService.ts"
 import { HistoryServiceLive } from "./services/HistoryService.ts"
 import { RunServiceLive } from "./services/RunService.ts"
-import { TeamServiceLive } from "./services/TeamService.ts"
 import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
 import { existsSync, readFileSync } from "node:fs"
@@ -73,7 +72,7 @@ const quiet = Options.boolean("quiet", { aliases: ["q"] }).pipe(
 //                      SecretStore, LogStore, RunHistory, GoldenImageStore)
 //                      └── BuildService (cross-cutting, uses ImageRegistry)
 //                            └── orchestrating services (RunService,
-//                                 HistoryService) + Bootstrap + Team
+//                                 HistoryService) + Bootstrap
 //
 // Developer-facing secret CRUD goes straight to the SecretStore tag the Backend
 // provides — there is no SecretService facade.
@@ -168,10 +167,7 @@ const L_backend =
 const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_backend))
 const L_run = RunServiceLive.pipe(Layer.provideMerge(L_build))
 const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_run))
-const AppLive = Layer.mergeAll(
-  TeamServiceLive,
-  BootstrapServiceLive,
-).pipe(Layer.provideMerge(L_history))
+const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(L_history))
 
 // ---------- Root command ----------
 const rootCommand = Command.make(

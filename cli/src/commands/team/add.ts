@@ -1,6 +1,6 @@
 import { Args, Command, Options } from "@effect/cli"
 import { Effect } from "effect"
-import { TeamService } from "../../services/TeamService.ts"
+import { Team } from "../../services/backend/Team.ts"
 import { Output } from "../../infra/Output.ts"
 
 const name = Args.text({ name: "name" })
@@ -13,7 +13,7 @@ const principal = Options.text("principal").pipe(
 
 export const add = Command.make("add", { name, principal }, ({ name, principal }) =>
   Effect.gen(function* () {
-    const team = yield* TeamService
+    const team = yield* Team
     const out = yield* Output
     const result = yield* team.add({
       name,
