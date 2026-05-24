@@ -6,9 +6,9 @@ The `afk` CLI is one Bun/TypeScript program built on [Effect](https://effect.web
 
 ## The one idea
 
-The CLI surface is **identical across cloud providers** — `afk run`, `afk attach`,
-`afk ls`, `afk kill` mean the same thing on AWS EC2 or Cloudflare Containers.
-One rule buys this:
+The CLI surface is **identical across Backends** — `afk run`, `afk attach`,
+`afk ls`, `afk kill` mean the same thing on AWS EC2, Cloudflare Containers, or
+your local Docker daemon. One rule buys this:
 
 > **Commands and orchestrating services depend only on Backend-neutral
 > interface tags. Provider code lives behind those tags and is chosen once, at
@@ -47,8 +47,8 @@ cli/src/
 │   │       RunHistory.ts, GoldenImage.ts, BackendDoctor.ts, Team.ts,
 │   │       Provisioner.ts
 │   ├── RunService.ts      Orchestrator: build image, delegate to Compute, stream logs.
-│   └── BuildService, ConfigService, HistoryService, TeamService, BootstrapService,
-│       Compose, RunPlan, GoldenImageVersion, Pricing, UserData
+│   └── BuildService, ConfigService, HistoryService, BootstrapService,
+│       Compose, RunPlan, GoldenImageVersion, Pricing, SinceWindow, UserData
 │
 ├── backends/           Provider implementations of services/backend/.
 │   ├── aws/              AwsCompute, AwsImageRegistry, … + index.ts aggregate
@@ -245,6 +245,8 @@ These do not use Effect and follow their own conventions:
 
 ## Tests
 
-None yet. They will run under `bun test` (`*.test.ts`). Because everything is
-layer-composed, the testing seam is to provide a tag with a fake `Layer.succeed`
-and exercise the service above it.
+Run under `bun test` (`*.test.ts`, beside the code they cover —
+`services/SinceWindow.test.ts`, `backends/aws/AwsNetworkPlacement.test.ts`).
+Coverage is still thin and grows from the pure helpers outward. Because
+everything is layer-composed, the testing seam for anything effectful is to
+provide a tag with a fake `Layer.succeed` and exercise the service above it.
