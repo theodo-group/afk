@@ -236,9 +236,12 @@ const program = Effect.gen(function* () {
       ? LogLevel.Debug
       : LogLevel.Info
 
+  // OutputLive is provided *outside* AppLive: backend layers (e.g. the
+  // Provisioner) stream progress through the Output tag, so AppLive carries an
+  // Output requirement that this outer provide satisfies.
   yield* cli(argv).pipe(
-    Effect.provide(OutputLive),
     Effect.provide(AppLive),
+    Effect.provide(OutputLive),
     Effect.provide(BunContext.layer),
     Effect.provide(consoleLogger),
     Logger.withMinimumLogLevel(level),
