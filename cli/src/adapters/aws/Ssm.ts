@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
+import { awsError, makeAwsCli } from "./awsCli.ts"
 
 export interface SsmParameter {
   readonly name: string
@@ -16,13 +17,6 @@ export interface CommandInvocation {
   readonly stdout: string
   readonly stderr: string
 }
-
-const awsError =
-  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-    new AwsError({
-      operation: op,
-      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-    })
 
 export class Ssm extends Context.Tag("Ssm")<
   Ssm,
@@ -89,6 +83,7 @@ export const SsmLive = Layer.effect(
   Ssm,
   Effect.gen(function* () {
     const sub = yield* Subprocess
+    const aws = makeAwsCli(sub)
 
     const sendShellCommand = (input: {
       readonly region: string
@@ -96,8 +91,8 @@ export const SsmLive = Layer.effect(
       readonly commands: ReadonlyArray<string>
       readonly timeoutSeconds?: number
     }) =>
-      sub
-        .runJson<{ Command: { CommandId: string } }>("aws", [
+      aws
+        .json<{ Command: { CommandId: string } }>("ssm:SendCommand", [
           "ssm",
           "send-command",
           "--region",
@@ -110,13 +105,8 @@ export const SsmLive = Layer.effect(
           JSON.stringify({ commands: input.commands }),
           "--timeout-seconds",
           String(input.timeoutSeconds ?? 1800),
-          "--output",
-          "json",
         ])
-        .pipe(
-          Effect.map((r) => ({ commandId: r.Command.CommandId })),
-          Effect.mapError(awsError("ssm:SendCommand")),
-        )
+        .pipe(Effect.map((r) => ({ commandId: r.Command.CommandId })))
 
     const waitForCommand = (input: {
       readonly region: string
@@ -129,13 +119,14 @@ export const SsmLive = Layer.effect(
         const pollMs = input.pollIntervalMs ?? 3000
         const maxMs = input.maxWaitMs ?? 30 * 60 * 1000
         const deadline = Date.now() + maxMs
+        // biome-ignore lint/plugin/noloops: deadline-bounded poll of SSM — each pass depends on the previous invocation result (code-style.md exception)
         while (true) {
-          const r = yield* sub
-            .runJson<{
+          const r = yield* aws
+            .json<{
               Status: string
               StandardOutputContent?: string
               StandardErrorContent?: string
-            }>("aws", [
+            }>("ssm:GetCommandInvocation", [
               "ssm",
               "get-command-invocation",
               "--region",
@@ -144,11 +135,8 @@ export const SsmLive = Layer.effect(
               input.commandId,
               "--instance-id",
               input.instanceId,
-              "--output",
-              "json",
             ])
             .pipe(
-              Effect.mapError(awsError("ssm:GetCommandInvocation")),
               // get-command-invocation 404s briefly after send-command; retry
               Effect.catchAll(() =>
                 Effect.succeed({
@@ -184,55 +172,42 @@ export const SsmLive = Layer.effect(
 
     return Ssm.of({
       putSecret: (region, name, value) =>
-        sub
-          .run("aws", [
-            "ssm",
-            "put-parameter",
-            "--region",
-            region,
-            "--name",
-            name,
-            "--value",
-            value,
-            "--type",
-            "SecureString",
-            "--overwrite",
-            "--output",
-            "json",
-          ])
-          .pipe(Effect.asVoid, Effect.mapError(awsError("ssm:PutParameter"))),
+        aws.run("ssm:PutParameter", [
+          "ssm",
+          "put-parameter",
+          "--region",
+          region,
+          "--name",
+          name,
+          "--value",
+          value,
+          "--type",
+          "SecureString",
+          "--overwrite",
+        ]),
       deleteParameter: (region, name) =>
-        sub
-          .run("aws", [
-            "ssm",
-            "delete-parameter",
-            "--region",
-            region,
-            "--name",
-            name,
-            "--output",
-            "json",
-          ])
-          .pipe(
-            Effect.asVoid,
-            Effect.mapError(awsError("ssm:DeleteParameter")),
-          ),
+        aws.run("ssm:DeleteParameter", [
+          "ssm",
+          "delete-parameter",
+          "--region",
+          region,
+          "--name",
+          name,
+        ]),
       listByPrefix: (region, prefix) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             Parameters: ReadonlyArray<{
               Name: string
               LastModifiedDate?: string
             }>
-          }>("aws", [
+          }>("ssm:DescribeParameters", [
             "ssm",
             "describe-parameters",
             "--region",
             region,
             "--parameter-filters",
             `Key=Name,Option=BeginsWith,Values=${prefix}`,
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.map((r) =>
@@ -241,7 +216,6 @@ export const SsmLive = Layer.effect(
                 lastModifiedDate: p.LastModifiedDate,
               })),
             ),
-            Effect.mapError(awsError("ssm:DescribeParameters")),
           ),
       getParameterArn: (name, region, account) =>
         `arn:aws:ssm:${region}:${account}:parameter${name.startsWith("/") ? name : `/${name}`}`,

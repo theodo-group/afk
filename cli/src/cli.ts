@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 import { Command, Options } from "@effect/cli"
 import { Effect, Layer, Logger, LogLevel } from "effect"
+import { FetchHttpClient } from "@effect/platform"
 import { BunContext, BunRuntime } from "@effect/platform-bun"
 
 import { SubprocessLive } from "./infra/Subprocess.ts"
-import { makeOutputLive } from "./infra/Output.ts"
+import { renderCause } from "./infra/Errors.ts"
+import { makeOutputLive, Output } from "./infra/Output.ts"
 import { consoleLogger } from "./infra/Logger.ts"
 
 import { GitLive } from "./adapters/Git.ts"
@@ -25,14 +27,10 @@ import { HistoryServiceLive } from "./services/HistoryService.ts"
 import { RunServiceLive } from "./services/RunService.ts"
 import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
-import { existsSync, readFileSync } from "node:fs"
-import { resolve } from "node:path"
-import { config as loadDotenv } from "dotenv"
-
 import { AwsBackendLive } from "./backends/aws/index.ts"
 import { CloudflareBackendLive } from "./backends/cloudflare/index.ts"
 import { LocalBackendLive } from "./backends/local/index.ts"
-import { CONFIG_FILE } from "./constants.ts"
+import { loadProjectDotenv, pickBackendName } from "./projectConfig.ts"
 
 import { init } from "./commands/init.ts"
 import { provision } from "./commands/provision.ts"
@@ -44,6 +42,7 @@ import { golden } from "./commands/golden/index.ts"
 import { run } from "./commands/run.ts"
 import { ls } from "./commands/ls.ts"
 import { logs } from "./commands/logs.ts"
+import { sessionArtifact } from "./commands/session-artifact.ts"
 import { attach } from "./commands/attach.ts"
 import { kill } from "./commands/kill.ts"
 import { history } from "./commands/history.ts"
@@ -86,9 +85,9 @@ const local = Options.boolean("local").pipe(
 // To add another Backend (e.g. Cloudflare), replace `AwsBackendLive` with
 // `CloudflareBackendLive` (or dispatch at runtime based on `config.backend`).
 
-const L_infra = SubprocessLive
+const infraLayer = SubprocessLive
 
-const L_adapters = Layer.mergeAll(
+const adaptersLayer = Layer.mergeAll(
   GitLive,
   DockerLive,
   TerraformLive,
@@ -100,94 +99,35 @@ const L_adapters = Layer.mergeAll(
   S3Live,
   Ec2Live,
   DynamoDbLive,
-).pipe(Layer.provideMerge(L_infra))
+).pipe(Layer.provideMerge(infraLayer))
 
-const L_config = ConfigServiceLive.pipe(Layer.provideMerge(L_adapters))
-
-/**
- * Load the project's `.env` into `process.env` before anything reads env vars
- * (CLOUDFLARE_API_TOKEN, AFK_CF_CLIENT_ID, AWS_*, …). Walks up from cwd to the
- * directory holding `afk.config.json` (the project root) and loads the `.env`
- * beside it. dotenv does not override variables already present in the
- * environment, so an explicitly-exported value still wins.
- */
-const loadProjectDotenv = (): void => {
-  let dir = process.cwd()
-  while (true) {
-    if (existsSync(resolve(dir, CONFIG_FILE))) {
-      const envPath = resolve(dir, ".env")
-      if (existsSync(envPath)) loadDotenv({ path: envPath, quiet: true })
-      return
-    }
-    const parent = resolve(dir, "..")
-    if (parent === dir) {
-      // No config found; fall back to a `.env` in the current directory.
-      if (existsSync(resolve(process.cwd(), ".env")))
-        loadDotenv({ quiet: true })
-      return
-    }
-    dir = parent
-  }
-}
+const configLayer = ConfigServiceLive.pipe(Layer.provideMerge(adaptersLayer))
 
 loadProjectDotenv()
 
-/**
- * Pick the Backend aggregate based on `afk.config.json`'s `backend` field.
- *
- * Synchronously walks up from cwd looking for the config file (the same logic
- * ConfigService uses, duplicated here because the Layer must be selected
- * before the Effect runtime is up). Defaults to AWS so `afk init` itself
- * still works in an empty directory.
- *
- * The Local Backend is reachable two ways (CONTEXT.md "Backend"): a persisted
- * `backend: "local"`, or a per-command `--local` override which wins regardless
- * of the persisted backend.
- */
-const pickBackendName = (): "aws" | "cloudflare" | "local" => {
-  if (process.argv.includes("--local")) return "local"
-  let dir = process.cwd()
-  while (true) {
-    const candidate = resolve(dir, CONFIG_FILE)
-    if (existsSync(candidate)) {
-      try {
-        const raw = readFileSync(candidate, "utf8")
-        const parsed = JSON.parse(raw) as { backend?: string }
-        if (parsed.backend === "cloudflare") return "cloudflare"
-        if (parsed.backend === "local") return "local"
-        return "aws"
-      } catch {
-        return "aws"
-      }
-    }
-    const parent = resolve(dir, "..")
-    if (parent === dir) return "aws"
-    dir = parent
-  }
-}
-
-const _backendName = pickBackendName()
+const backendName = pickBackendName()
 
 // Both backend aggregates declare different external deps (AWS adapters vs.
 // Docker + Subprocess), so we can't take a single `pipe(Layer.provideMerge)`
 // expression with a union value — TypeScript can't unify the two RIn shapes.
-// Instead we branch and produce two fully-resolved L_backend layers; the
+// Instead we branch and produce two fully-resolved backend layers; the
 // downstream pipeline is identical from there.
-const L_backend =
-  _backendName === "cloudflare"
-    ? CloudflareBackendLive.pipe(Layer.provideMerge(L_config))
-    : _backendName === "local"
-      ? LocalBackendLive.pipe(Layer.provideMerge(L_config))
-      : AwsBackendLive.pipe(Layer.provideMerge(L_config))
-const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_backend))
-const L_run = RunServiceLive.pipe(Layer.provideMerge(L_build))
-const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_run))
-const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(L_history))
+const backendLayer =
+  backendName === "cloudflare"
+    ? CloudflareBackendLive.pipe(Layer.provideMerge(configLayer))
+    : backendName === "local"
+      ? LocalBackendLive.pipe(Layer.provideMerge(configLayer))
+      : AwsBackendLive.pipe(Layer.provideMerge(configLayer))
+const buildLayer = BuildServiceLive.pipe(Layer.provideMerge(backendLayer))
+const runLayer = RunServiceLive.pipe(Layer.provideMerge(buildLayer))
+const historyLayer = HistoryServiceLive.pipe(Layer.provideMerge(runLayer))
+const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(historyLayer))
 
 // ---------- Root command ----------
 const rootCommand = Command.make("afk", { json, verbose, quiet, local }, () =>
-  Effect.sync(() => {
-    console.log("Run `afk --help` for available commands.")
+  Effect.gen(function* () {
+    const out = yield* Output
+    yield* out.print("Run `afk --help` for available commands.")
   }),
 ).pipe(
   Command.withSubcommands([
@@ -201,6 +141,7 @@ const rootCommand = Command.make("afk", { json, verbose, quiet, local }, () =>
     run,
     ls,
     logs,
+    sessionArtifact,
     attach,
     kill,
     history,
@@ -241,6 +182,7 @@ const program = Effect.gen(function* () {
     Effect.provide(AppLive),
     Effect.provide(OutputLive),
     Effect.provide(BunContext.layer),
+    Effect.provide(FetchHttpClient.layer),
     Effect.provide(consoleLogger),
     Logger.withMinimumLogLevel(level),
   )
@@ -250,31 +192,9 @@ BunRuntime.runMain(
   program.pipe(
     Effect.catchAllCause((cause) =>
       Effect.sync(() => {
-        const failure = (
-          cause as { failureOption?: () => unknown }
-        ).failureOption?.()
-        const message =
-          failure &&
-          typeof failure === "object" &&
-          failure !== null &&
-          "_tag" in failure
-            ? renderAfkError(
-                failure as { _tag: string; message?: string; hint?: string },
-              )
-            : String(cause)
-        console.error(message)
+        console.error(renderCause(cause))
         process.exit(1)
       }),
     ),
   ),
 )
-
-function renderAfkError(err: {
-  _tag: string
-  message?: string
-  hint?: string
-}): string {
-  const head = err.message ?? `${err._tag}`
-  const tail = err.hint ? `\nhint: ${err.hint}` : ""
-  return `error: ${head}${tail}`
-}

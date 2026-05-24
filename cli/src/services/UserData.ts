@@ -22,6 +22,16 @@ export interface UserDataInput {
    * The CLI has already substituted ${AFK_IMAGE}; ${AFK_COMMAND} is interpolated at boot.
    */
   readonly compose?: string
+  /**
+   * Session Artifact base dirs (longest glob-free prefixes of the declared
+   * patterns) to `docker cp` out of the main service at graceful exit. Empty
+   * when the dev declared none — collection is skipped entirely.
+   */
+  readonly sessionArtifactBases: ReadonlyArray<string>
+  /** S3 bucket Session Artifacts are uploaded to. */
+  readonly sessionArtifactBucket: string
+  /** Per-file size cap; matched files larger than this are skipped, not truncated. */
+  readonly sessionArtifactMaxBytes: number
 }
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
@@ -83,10 +93,52 @@ const renderDaemonJson = (
 const renderCommandShellString = (command: ReadonlyArray<string>): string =>
   command.length === 0 ? "" : command.join(" ")
 
+/**
+ * Session Artifact collection block (see CONTEXT.md). Best-effort, run after the
+ * workload exits but before the VM self-terminates: `docker cp` each declared
+ * base dir out of the (just-exited, not-yet-removed) main service container,
+ * drop files over the cap, and upload the staged tree to the per-Run S3 prefix.
+ * Every step is non-fatal — a failure here never changes the Run's exit status.
+ * `containerRefExpr` resolves the main container: its name on the no-compose
+ * path, a `compose ps -q` substitution on the compose path. Returns "" when no
+ * artifacts are declared, so nothing is emitted and `--rm` stays on the run.
+ */
+const renderArtifactCollection = (
+  containerRefExpr: string,
+  input: UserDataInput,
+): string => {
+  if (input.sessionArtifactBases.length === 0) return ""
+  const stage = `${VM_AFK_DIR}/session-artifacts`
+  const prefix = `${input.repoName}/${input.runId}/session-artifacts/`
+  const bases = input.sessionArtifactBases.map(shellQuote).join(" ")
+  return [
+    `# --- Collect Session Artifacts (best-effort) ---`,
+    `AFK_ART_STAGE=${shellQuote(stage)}`,
+    `AFK_CREF=${containerRefExpr}`,
+    `if [ -n "$AFK_CREF" ]; then`,
+    `  mkdir -p "$AFK_ART_STAGE"`,
+    `  for base in ${bases}; do`,
+    `    rel=\${base#/}`,
+    `    parent="$AFK_ART_STAGE/$(dirname "$rel")"`,
+    `    mkdir -p "$parent"`,
+    `    docker cp "$AFK_CREF:$base" "$parent/" 2>/dev/null \\`,
+    `      && echo "afk-userdata: collected session artifact $base" \\`,
+    `      || echo "afk-userdata: no session artifact at $base"`,
+    `  done`,
+    `  find "$AFK_ART_STAGE" -type f -size +${input.sessionArtifactMaxBytes}c -print -delete 2>/dev/null \\`,
+    `    | sed 's#^#afk-userdata: skipped (over cap): #' || true`,
+    `  aws s3 cp --recursive "$AFK_ART_STAGE" ${shellQuote(`s3://${input.sessionArtifactBucket}/${prefix}`)} --region ${shellQuote(input.region)} >/dev/null 2>&1 \\`,
+    `    && echo "afk-userdata: uploaded session artifacts" \\`,
+    `    || echo "afk-userdata: session artifact upload failed (non-fatal)"`,
+    `fi`,
+  ].join("\n")
+}
+
 export const buildUserData = (input: UserDataInput): string => {
   const logGroup = `${LOG_GROUP_PREFIX}/${input.repoName}`
   const daemonJson = renderDaemonJson(logGroup, input.region, input.runId)
   const cmdShell = renderCommandShellString(input.command)
+  const collectArtifacts = input.sessionArtifactBases.length > 0
 
   // The compose file the dev wrote (with ${AFK_IMAGE} already substituted by
   // the CLI). ${AFK_COMMAND} is left intact — compose substitutes it at runtime
@@ -116,10 +168,19 @@ export const buildUserData = (input: UserDataInput): string => {
         `timeout --preserve-status ${input.timeoutSeconds}s docker compose -f ${shellQuote(VM_COMPOSE_PATH)} \\`,
         `  up --exit-code-from ${shellQuote(input.mainService)} --abort-on-container-exit`,
         `RUN_EXIT=$?`,
+        // Collect before `down` removes the (exited) main container.
+        renderArtifactCollection(
+          `$(docker compose -f ${shellQuote(VM_COMPOSE_PATH)} ps -aq ${shellQuote(input.mainService)})`,
+          input,
+        ),
         `docker compose -f ${shellQuote(VM_COMPOSE_PATH)} down -v --remove-orphans || true`,
-      ].join("\n")
+      ]
+        .filter((l) => l !== "")
+        .join("\n")
     : [
-        `timeout --preserve-status ${input.timeoutSeconds}s docker run --rm \\`,
+        // `--rm` is dropped when collecting so the exited container survives for
+        // `docker cp`; we remove it explicitly after collection.
+        `timeout --preserve-status ${input.timeoutSeconds}s docker run ${collectArtifacts ? "" : "--rm "}\\`,
         `  --name ${shellQuote(input.mainService)} \\`,
         `  --env-file "$AFK_ENV_FILE" \\`,
         `  --log-driver awslogs \\`,
@@ -130,7 +191,13 @@ export const buildUserData = (input: UserDataInput): string => {
         `  ${shellQuote(input.image)} \\`,
         `  sh -c ${shellQuote(cmdShell)}`,
         `RUN_EXIT=$?`,
-      ].join("\n")
+        renderArtifactCollection(shellQuote(input.mainService), input),
+        collectArtifacts
+          ? `docker rm -f ${shellQuote(input.mainService)} >/dev/null 2>&1 || true`
+          : "",
+      ]
+        .filter((l) => l !== "")
+        .join("\n")
 
   return [
     "#!/bin/bash",

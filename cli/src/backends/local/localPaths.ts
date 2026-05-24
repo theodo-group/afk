@@ -34,3 +34,9 @@ export const runsDir = (): string => resolve(afkHome(), "runs")
 export const runDir = (runId: string): string => resolve(runsDir(), runId)
 export const runLogsDir = (runId: string): string =>
   resolve(runDir(runId), "logs")
+
+/** Where the bootstrap `docker cp`s the declared Session Artifact base dirs at
+ * graceful exit, and where the store reads them back from. Container-absolute
+ * paths are mirrored under here (leading "/" dropped). */
+export const runSessionArtifactsDir = (runId: string): string =>
+  resolve(runDir(runId), "session-artifacts")

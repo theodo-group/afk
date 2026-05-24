@@ -142,7 +142,7 @@ export const AwsComputeLive = Layer.effect(
           runId: randomUUID(),
           startedAt: new Date().toISOString(),
         })
-        for (const w of core.warnings) console.warn(`warning: ${w}`)
+        yield* Effect.forEach(core.warnings, (w) => Effect.logWarning(w))
 
         // Shell: side effects gated on a valid plan, then pure finalize.
         yield* logs.ensureLogGroup(
@@ -189,11 +189,9 @@ export const AwsComputeLive = Layer.effect(
           })
           .pipe(
             Effect.catchAll((e) =>
-              Effect.sync(() => {
-                console.warn(
-                  `warning: failed to record run in history table: ${(e as { message?: string }).message ?? String(e)}`,
-                )
-              }),
+              Effect.logWarning(
+                `failed to record run in history table: ${(e as { message?: string }).message ?? String(e)}`,
+              ),
             ),
           )
 

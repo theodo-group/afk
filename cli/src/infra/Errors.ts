@@ -1,4 +1,4 @@
-import { Data } from "effect"
+import { Cause, Data, Option } from "effect"
 
 export class UserError extends Data.TaggedError("UserError")<{
   readonly message: string
@@ -67,3 +67,22 @@ export type AfkError =
   | GitError
   | ConfigError
   | CloudflareError
+
+/**
+ * The single render point for a failed program. A tagged failure (an AfkError,
+ * or a @effect/cli ValidationError) becomes `error: <message>` plus an optional
+ * `hint:` line; anything else (a defect, an interrupt) falls back to the cause's
+ * own string. Called by the top-level `catchAllCause` in `cli.ts`, so the
+ * failure channel is `unknown` — the CLI's own errors widen the program's `E`.
+ */
+export const renderCause = (cause: Cause.Cause<unknown>): string => {
+  const failure = Cause.failureOption(cause)
+  if (Option.isNone(failure)) return Cause.pretty(cause)
+  const err = failure.value
+  if (typeof err !== "object" || err === null || !("_tag" in err))
+    return Cause.pretty(cause)
+  const tagged = err as { _tag: string; message?: string; hint?: string }
+  const head = tagged.message ?? tagged._tag
+  const tail = tagged.hint ? `\nhint: ${tagged.hint}` : ""
+  return `error: ${head}${tail}`
+}

@@ -1,18 +1,12 @@
 import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
+import { awsError, makeAwsCli } from "./awsCli.ts"
 
 export interface LogEvent {
   readonly timestamp: number
   readonly message: string
 }
-
-const awsError =
-  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-    new AwsError({
-      operation: op,
-      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-    })
 
 export class Logs extends Context.Tag("Logs")<
   Logs,
@@ -46,13 +40,14 @@ export const LogsLive = Layer.effect(
   Logs,
   Effect.gen(function* () {
     const sub = yield* Subprocess
+    const aws = makeAwsCli(sub)
 
     return Logs.of({
       ensureLogGroup: (region, name, retentionDays) =>
         Effect.gen(function* () {
-          const exists = yield* sub
-            .runJson<{ logGroups: ReadonlyArray<{ logGroupName: string }> }>(
-              "aws",
+          const exists = yield* aws
+            .json<{ logGroups: ReadonlyArray<{ logGroupName: string }> }>(
+              "logs:DescribeLogGroups",
               [
                 "logs",
                 "describe-log-groups",
@@ -60,54 +55,40 @@ export const LogsLive = Layer.effect(
                 region,
                 "--log-group-name-prefix",
                 name,
-                "--output",
-                "json",
               ],
             )
             .pipe(
               Effect.map((r) =>
                 r.logGroups.some((g) => g.logGroupName === name),
               ),
-              Effect.mapError(awsError("logs:DescribeLogGroups")),
             )
           if (!exists) {
-            yield* sub
-              .run("aws", [
-                "logs",
-                "create-log-group",
-                "--region",
-                region,
-                "--log-group-name",
-                name,
-                "--output",
-                "json",
-              ])
-              .pipe(Effect.mapError(awsError("logs:CreateLogGroup")))
-          }
-          yield* sub
-            .run("aws", [
+            yield* aws.run("logs:CreateLogGroup", [
               "logs",
-              "put-retention-policy",
+              "create-log-group",
               "--region",
               region,
               "--log-group-name",
               name,
-              "--retention-in-days",
-              String(retentionDays),
-              "--output",
-              "json",
             ])
-            .pipe(
-              Effect.asVoid,
-              Effect.mapError(awsError("logs:PutRetentionPolicy")),
-            )
+          }
+          yield* aws.run("logs:PutRetentionPolicy", [
+            "logs",
+            "put-retention-policy",
+            "--region",
+            region,
+            "--log-group-name",
+            name,
+            "--retention-in-days",
+            String(retentionDays),
+          ])
         }),
       getEvents: (input) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             events: ReadonlyArray<{ timestamp: number; message: string }>
             nextForwardToken?: string
-          }>("aws", [
+          }>("logs:GetLogEvents", [
             "logs",
             "get-log-events",
             "--region",
@@ -118,8 +99,6 @@ export const LogsLive = Layer.effect(
             input.stream,
             ...(input.startFromHead ? ["--start-from-head"] : []),
             ...(input.nextToken ? ["--next-token", input.nextToken] : []),
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.map((r) => ({
@@ -129,7 +108,6 @@ export const LogsLive = Layer.effect(
               })),
               nextToken: r.nextForwardToken,
             })),
-            Effect.mapError(awsError("logs:GetLogEvents")),
           ),
       tail: (input) =>
         sub

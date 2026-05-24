@@ -64,6 +64,10 @@ export class RunDO extends DurableObject<Env> {
         return this.handleComplete(req)
       case "POST /logs-progress":
         return this.handleLogsProgress(req)
+      case "POST /session-artifact":
+        return this.handleSessionArtifactUpload(req)
+      case "GET /session-artifact":
+        return this.handleSessionArtifactDownload()
       case "GET /logs":
         return this.handleLogs(url)
       case "GET /ssh-target":
@@ -174,6 +178,17 @@ export class RunDO extends DurableObject<Env> {
       // Incremental log push while the workload runs (so `afk logs --follow`
       // streams a live Run instead of waiting for the final callback).
       ...(body.workerUrl ? { AFK_PROGRESS_URL: `${body.workerUrl}/runs/${body.runId}/logs-progress` } : {}),
+      // Session Artifact collection: bases to copy out + where to upload the
+      // gzipped tar. Only set when the dev declared artifacts and we have a URL.
+      ...((body.sessionArtifactBases ?? []).length > 0 && body.workerUrl
+        ? {
+            AFK_ARTIFACT_BASES: (body.sessionArtifactBases ?? []).join(" "),
+            AFK_ARTIFACT_URL: `${body.workerUrl}/runs/${body.runId}/session-artifact`,
+            AFK_ARTIFACT_MAX_BYTES: String(
+              body.sessionArtifactMaxBytes ?? 26_214_400,
+            ),
+          }
+        : {}),
     }
     const container = this.getContainer()
     // NB: the @cloudflare/containers SDK option is `envVars`, NOT `env` —
@@ -247,6 +262,42 @@ export class RunDO extends DurableObject<Env> {
       await this.ctx.storage.put("logs", this.decodeServices(services))
     }
     return Response.json({ ok: true })
+  }
+
+  /** R2 key for this Run's Session Artifact tarball. Keyed by repo + runId,
+   *  mirroring the AWS S3 prefix layout. */
+  private artifactKey(meta: RunMetadata): string {
+    return `${meta.repoName}/${meta.runId}/session-artifacts.tar.gz`
+  }
+
+  /** Session Artifact upload from the golden bootstrap: a base64 gzipped tar of
+   *  the collected base dirs. Authenticated by the per-Run token (like
+   *  /complete), decoded, and stored in R2. Independent of /complete — it never
+   *  touches Run status. */
+  private async handleSessionArtifactUpload(req: Request): Promise<Response> {
+    const denied = await this.checkRunToken(req)
+    if (denied) return denied
+    const state = await this.ctx.storage.get<PersistedState>("state")
+    if (!state) return Response.json({ error: "unknown run" }, { status: 404 })
+    const { tarGzB64 } = (await req.json()) as { tarGzB64?: string }
+    if (!tarGzB64) return Response.json({ ok: true })
+    const bytes = Uint8Array.from(atob(tarGzB64), (c) => c.charCodeAt(0))
+    await this.env.ARTIFACTS.put(this.artifactKey(state.meta), bytes)
+    return Response.json({ ok: true })
+  }
+
+  /** Session Artifact download for `afk session-artifact`. Returns the stored
+   *  tarball base64-encoded as JSON `{ tarGzB64 }`, or `{}` when none was
+   *  collected. (Owner auth is enforced upstream by the launcher, as for logs.) */
+  private async handleSessionArtifactDownload(): Promise<Response> {
+    const state = await this.ctx.storage.get<PersistedState>("state")
+    if (!state) return Response.json({})
+    const obj = await this.env.ARTIFACTS.get(this.artifactKey(state.meta))
+    if (!obj) return Response.json({})
+    const buf = new Uint8Array(await obj.arrayBuffer())
+    let bin = ""
+    for (const b of buf) bin += String.fromCharCode(b)
+    return Response.json({ tarGzB64: btoa(bin) })
   }
 
   /** Authenticate a container callback by the per-Run token. The container has

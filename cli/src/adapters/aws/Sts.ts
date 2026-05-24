@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
+import { makeAwsCli } from "./awsCli.ts"
 
 export interface CallerIdentity {
   readonly Account: string
@@ -19,27 +20,12 @@ export const StsLive = Layer.effect(
   Sts,
   Effect.gen(function* () {
     const sub = yield* Subprocess
+    const aws = makeAwsCli(sub)
     return Sts.of({
-      callerIdentity: sub
-        .runJson<CallerIdentity>("aws", [
-          "sts",
-          "get-caller-identity",
-          "--output",
-          "json",
-        ])
-        .pipe(
-          Effect.mapError((e) =>
-            e._tag === "ParseError"
-              ? new AwsError({
-                  operation: "sts:GetCallerIdentity",
-                  message: String(e.cause),
-                })
-              : new AwsError({
-                  operation: "sts:GetCallerIdentity",
-                  message: e.stderr,
-                }),
-          ),
-        ),
+      callerIdentity: aws.json<CallerIdentity>("sts:GetCallerIdentity", [
+        "sts",
+        "get-caller-identity",
+      ]),
     })
   }),
 )

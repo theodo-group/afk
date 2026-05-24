@@ -1,13 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
-
-const awsError =
-  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-    new AwsError({
-      operation: op,
-      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-    })
+import { makeAwsCli } from "./awsCli.ts"
 
 export class Ecr extends Context.Tag("Ecr")<
   Ecr,
@@ -45,54 +39,39 @@ export const EcrLive = Layer.effect(
   Ecr,
   Effect.gen(function* () {
     const sub = yield* Subprocess
+    const aws = makeAwsCli(sub)
 
     return Ecr.of({
       registryUri: (region) =>
-        sub
-          .runJson<{ Account: string }>("aws", [
+        aws
+          .json<{ Account: string }>("sts:GetCallerIdentity", [
             "sts",
             "get-caller-identity",
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.map((r) => `${r.Account}.dkr.ecr.${region}.amazonaws.com`),
-            Effect.mapError(awsError("sts:GetCallerIdentity")),
           ),
       ensureRepository: (region, repoName, lifecycleDays) =>
         Effect.gen(function* () {
-          const exists = yield* sub
-            .runJson<{
-              repositories: ReadonlyArray<{ repositoryName: string }>
-            }>("aws", [
+          const exists = yield* aws.exists([
+            "ecr",
+            "describe-repositories",
+            "--region",
+            region,
+            "--repository-names",
+            repoName,
+          ])
+          if (!exists) {
+            yield* aws.run("ecr:CreateRepository", [
               "ecr",
-              "describe-repositories",
+              "create-repository",
               "--region",
               region,
-              "--repository-names",
+              "--repository-name",
               repoName,
-              "--output",
-              "json",
+              "--image-scanning-configuration",
+              "scanOnPush=true",
             ])
-            .pipe(
-              Effect.map(() => true),
-              Effect.catchAll(() => Effect.succeed(false)),
-            )
-          if (!exists) {
-            yield* sub
-              .run("aws", [
-                "ecr",
-                "create-repository",
-                "--region",
-                region,
-                "--repository-name",
-                repoName,
-                "--image-scanning-configuration",
-                "scanOnPush=true",
-                "--output",
-                "json",
-              ])
-              .pipe(Effect.mapError(awsError("ecr:CreateRepository")))
             const policy = {
               rules: [
                 {
@@ -108,59 +87,43 @@ export const EcrLive = Layer.effect(
                 },
               ],
             }
-            yield* sub
-              .run("aws", [
-                "ecr",
-                "put-lifecycle-policy",
-                "--region",
-                region,
-                "--repository-name",
-                repoName,
-                "--lifecycle-policy-text",
-                JSON.stringify(policy),
-                "--output",
-                "json",
-              ])
-              .pipe(
-                Effect.asVoid,
-                Effect.mapError(awsError("ecr:PutLifecyclePolicy")),
-              )
+            yield* aws.run("ecr:PutLifecyclePolicy", [
+              "ecr",
+              "put-lifecycle-policy",
+              "--region",
+              region,
+              "--repository-name",
+              repoName,
+              "--lifecycle-policy-text",
+              JSON.stringify(policy),
+            ])
           }
         }),
       imageExists: (region, repoName, tag) =>
-        sub
-          .run("aws", [
-            "ecr",
-            "describe-images",
-            "--region",
-            region,
-            "--repository-name",
-            repoName,
-            "--image-ids",
-            `imageTag=${tag}`,
-            "--output",
-            "json",
-          ])
-          .pipe(
-            Effect.map(() => true),
-            Effect.catchAll(() => Effect.succeed(false)),
-          ),
+        aws.exists([
+          "ecr",
+          "describe-images",
+          "--region",
+          region,
+          "--repository-name",
+          repoName,
+          "--image-ids",
+          `imageTag=${tag}`,
+        ]),
       listLatestTagsByPrefix: (region, repoName, tagPrefix, limit) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             imageDetails: ReadonlyArray<{
               imageTags?: ReadonlyArray<string>
               imagePushedAt?: string
             }>
-          }>("aws", [
+          }>("ecr:DescribeImages", [
             "ecr",
             "describe-images",
             "--region",
             region,
             "--repository-name",
             repoName,
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.map((r) =>
@@ -180,13 +143,15 @@ export const EcrLive = Layer.effect(
             Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<string>)),
           ),
       getLoginPassword: (region) =>
-        sub.run("aws", ["ecr", "get-login-password", "--region", region]).pipe(
-          Effect.map((r) => r.stdout.trim()),
-          Effect.mapError(awsError("ecr:GetAuthorizationToken")),
-        ),
+        aws.text("ecr:GetAuthorizationToken", [
+          "ecr",
+          "get-login-password",
+          "--region",
+          region,
+        ]),
       deleteRepository: (region, repoName) =>
-        sub
-          .run("aws", [
+        aws
+          .run("ecr:DeleteRepository", [
             "ecr",
             "delete-repository",
             "--region",
@@ -194,16 +159,13 @@ export const EcrLive = Layer.effect(
             "--repository-name",
             repoName,
             "--force",
-            "--output",
-            "json",
           ])
           .pipe(
-            Effect.asVoid,
             // Already gone (RepositoryNotFoundException) is success for teardown.
             Effect.catchAll((e) =>
-              (e.stderr ?? "").includes("RepositoryNotFoundException")
+              e.message.includes("RepositoryNotFoundException")
                 ? Effect.void
-                : Effect.fail(awsError("ecr:DeleteRepository")(e)),
+                : Effect.fail(e),
             ),
           ),
     })

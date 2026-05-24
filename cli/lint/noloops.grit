@@ -1,0 +1,8 @@
+language js
+
+`while ($cond) { $body }` where {
+  register_diagnostic(
+    span = $cond,
+    message = "Imperative `while` loop: prefer recursion or an array/Effect pipeline (docs/code-style.md, 'Code reads as a pipeline')."
+  )
+}

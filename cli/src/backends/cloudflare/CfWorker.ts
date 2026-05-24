@@ -1,3 +1,4 @@
+import { HttpClient, HttpClientRequest } from "@effect/platform"
 import { Context, Effect, Layer } from "effect"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { CloudflareError, UserError } from "../../infra/Errors.ts"
@@ -39,6 +40,7 @@ export const CfWorkerLive = Layer.effect(
   CfWorker,
   Effect.gen(function* () {
     const cfg = yield* ConfigService
+    const client = yield* HttpClient.HttpClient
 
     const resolveBase = Effect.gen(function* () {
       const { config } = yield* cfg.load
@@ -54,30 +56,54 @@ export const CfWorkerLive = Layer.effect(
       return url.replace(/\/$/, "")
     })
 
-    const request = (operation: string, path: string, init?: RequestInit) =>
+    const request = (
+      operation: string,
+      method: "GET" | "POST" | "DELETE",
+      path: string,
+      body?: unknown,
+    ) =>
       Effect.gen(function* () {
         const base = yield* resolveBase
-        return yield* Effect.tryPromise({
-          try: async () => {
-            const res = await fetch(`${base}${path}`, {
-              ...init,
-              headers: { ...cfAuthHeaders(), ...(init?.headers ?? {}) },
-            })
-            const text = await res.text()
-            if (!res.ok) {
-              throw new CloudflareError({
-                operation,
-                status: res.status,
-                message: text || res.statusText,
-              })
+        const url = `${base}${path}`
+        const req = (
+          method === "POST"
+            ? HttpClientRequest.post(url)
+            : method === "DELETE"
+              ? HttpClientRequest.del(url)
+              : HttpClientRequest.get(url)
+        ).pipe(
+          HttpClientRequest.setHeaders(cfAuthHeaders()),
+          body !== undefined
+            ? HttpClientRequest.bodyUnsafeJson(body)
+            : (r) => r,
+        )
+
+        // HttpClient.execute needs a Scope to manage the response lifecycle;
+        // we read the body in full here, so the scope closes with this Effect.
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const res = yield* client.execute(req)
+            const text = yield* res.text
+            if (res.status >= 400) {
+              return yield* Effect.fail(
+                new CloudflareError({
+                  operation,
+                  status: res.status,
+                  message: text || `HTTP ${res.status}`,
+                }),
+              )
             }
             return text
-          },
-          catch: (e): CloudflareError =>
+          }),
+        ).pipe(
+          Effect.catchAll((e) =>
             e instanceof CloudflareError
-              ? e
-              : new CloudflareError({ operation, message: String(e) }),
-        })
+              ? Effect.fail(e)
+              : Effect.fail(
+                  new CloudflareError({ operation, message: String(e) }),
+                ),
+          ),
+        )
       })
 
     const asJson = <T>(text: string): T =>
@@ -85,21 +111,22 @@ export const CfWorkerLive = Layer.effect(
 
     return CfWorker.of({
       getJson: <T>(operation: string, path: string) =>
-        request(operation, path).pipe(Effect.map((text) => asJson<T>(text))),
+        request(operation, "GET", path).pipe(
+          Effect.map((text) => asJson<T>(text)),
+        ),
 
       postJson: <T>(operation: string, path: string, body?: unknown) =>
-        request(operation, path, {
-          method: "POST",
-          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        }).pipe(Effect.map((text) => asJson<T>(text))),
+        request(operation, "POST", path, body).pipe(
+          Effect.map((text) => asJson<T>(text)),
+        ),
 
       del: <T>(operation: string, path: string, body?: unknown) =>
-        request(operation, path, {
-          method: "DELETE",
-          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        }).pipe(Effect.map((text) => asJson<T>(text))),
+        request(operation, "DELETE", path, body).pipe(
+          Effect.map((text) => asJson<T>(text)),
+        ),
 
-      getText: (operation: string, path: string) => request(operation, path),
+      getText: (operation: string, path: string) =>
+        request(operation, "GET", path),
     })
   }),
 )

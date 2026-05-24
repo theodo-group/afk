@@ -3,6 +3,7 @@ import { AwsComputeLive } from "./AwsCompute.ts"
 import { AwsImageRegistryLive } from "./AwsImageRegistry.ts"
 import { AwsSecretStoreLive } from "./AwsSecretStore.ts"
 import { AwsLogStoreLive } from "./AwsLogStore.ts"
+import { AwsSessionArtifactStoreLive } from "./AwsSessionArtifactStore.ts"
 import { AwsRunHistoryLive } from "./AwsRunHistory.ts"
 import { AwsGoldenImageLive } from "./AwsGoldenImage.ts"
 import { AwsBackendDoctorLive } from "./AwsBackendDoctor.ts"
@@ -25,6 +26,7 @@ const Leaves = Layer.mergeAll(
   AwsImageRegistryLive,
   AwsSecretStoreLive,
   AwsLogStoreLive,
+  AwsSessionArtifactStoreLive,
   AwsRunHistoryLive,
   AwsGoldenImageLive,
   AwsBackendDoctorLive,

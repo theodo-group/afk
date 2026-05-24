@@ -148,6 +148,7 @@ export const RunServiceLive = Layer.effect(
           process.stderr.write("waiting for the Run to boot…"),
         )
         let status = yield* probeStatus(runId)
+        // biome-ignore lint/plugin/noloops: time-gated poll — each pass depends on the previous probe plus a real sleep (code-style.md exception)
         while (status === "TRANSIENT" || status === "PROVISIONING") {
           yield* Effect.sync(() => process.stderr.write("."))
           yield* Effect.sleep("3 seconds")
@@ -174,6 +175,7 @@ export const RunServiceLive = Layer.effect(
         )
 
         let s: RunStatus | "GONE" | "TRANSIENT" = status
+        // biome-ignore lint/plugin/noloops: time-gated poll — each pass depends on the previous probe plus a real sleep (code-style.md exception)
         while (!(s === "GONE" || (s !== "TRANSIENT" && isTerminal(s)))) {
           yield* Effect.sleep("6 seconds")
           s = yield* probeStatus(runId)

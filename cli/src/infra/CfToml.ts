@@ -1,35 +1,92 @@
 /**
- * Pure helpers for the Cloudflare setup flow: deriving the account id from the
- * API token, and patching concrete resource ids into a rendered
+ * Helpers for the Cloudflare setup flow: deriving the account id from the API
+ * token, and patching concrete resource ids into a rendered
  * `worker/afk/wrangler.toml` (and the workerUrl into `afk.config.json`).
  *
- * These are deliberately fs/string-level and Effect-free so they can be called
- * from BootstrapService (`afk init`), the golden build command, and the
- * `afk provision` command without dragging a service graph around.
+ * The toml/config patchers are deliberately fs/string-level and Effect-free so
+ * `afk init`, the golden build, and `afk provision` can call them without
+ * dragging a service graph around. `deriveAccountId` is the exception: it makes
+ * a network call, so it is an Effect over the `HttpClient` seam.
  */
+import { HttpClient, HttpClientResponse } from "@effect/platform"
+import { Effect, Schema } from "effect"
 import { readFileSync, writeFileSync } from "node:fs"
 
-/** Resolve the account id behind a Cloudflare API token. Picks the first
- * account; throws if the token sees zero or can't be read. */
-export const deriveAccountId = async (apiToken: string): Promise<string> => {
-  const res = await fetch("https://api.cloudflare.com/client/v4/accounts", {
-    headers: { Authorization: `Bearer ${apiToken}` },
-  })
-  const body = (await res.json()) as {
-    success: boolean
-    result?: Array<{ id: string; name: string }>
-    errors?: Array<{ message: string }>
-  }
-  if (!res.ok || !body.success) {
-    const msg = body.errors?.map((e) => e.message).join("; ") ?? res.statusText
-    throw new Error(`could not list Cloudflare accounts: ${msg}`)
-  }
-  const accounts = body.result ?? []
-  if (accounts.length === 0) {
-    throw new Error("API token is not scoped to any Cloudflare account")
-  }
-  return accounts[0]!.id
-}
+import { CloudflareError, UserError } from "./Errors.ts"
+
+const CF_ACCOUNTS_URL = "https://api.cloudflare.com/client/v4/accounts"
+
+const CfAccountsResponse = Schema.Struct({
+  success: Schema.Boolean,
+  result: Schema.optional(
+    Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String })),
+  ),
+  errors: Schema.optional(
+    Schema.Array(Schema.Struct({ message: Schema.String })),
+  ),
+})
+
+/**
+ * Resolve the account id behind a Cloudflare API token, picking the first
+ * account. Fails with `UserError` when the token is scoped to zero accounts
+ * (developer-fixable) and `CloudflareError` for any transport/decode failure.
+ */
+export const deriveAccountId = (
+  apiToken: string,
+): Effect.Effect<string, CloudflareError | UserError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const res = yield* HttpClient.get(CF_ACCOUNTS_URL, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    })
+    const body =
+      yield* HttpClientResponse.schemaBodyJson(CfAccountsResponse)(res)
+    if (!body.success) {
+      const msg =
+        body.errors?.map((e) => e.message).join("; ") ?? `HTTP ${res.status}`
+      return yield* Effect.fail(
+        new CloudflareError({
+          operation: "init:accountId",
+          status: res.status,
+          message: `could not list Cloudflare accounts: ${msg}`,
+        }),
+      )
+    }
+    const first = (body.result ?? [])[0]
+    if (first === undefined) {
+      return yield* Effect.fail(
+        new UserError({
+          message: "API token is not scoped to any Cloudflare account.",
+          hint: "Grant the token access to at least one account, then re-run.",
+        }),
+      )
+    }
+    return first.id
+  }).pipe(
+    Effect.scoped,
+    Effect.catchTags({
+      RequestError: (cause) =>
+        Effect.fail(
+          new CloudflareError({
+            operation: "init:accountId",
+            message: `could not reach the Cloudflare API: ${cause.message}`,
+          }),
+        ),
+      ResponseError: (cause) =>
+        Effect.fail(
+          new CloudflareError({
+            operation: "init:accountId",
+            message: `unexpected Cloudflare API response: ${cause.message}`,
+          }),
+        ),
+      ParseError: (cause) =>
+        Effect.fail(
+          new CloudflareError({
+            operation: "init:accountId",
+            message: `could not parse the Cloudflare accounts response: ${cause.message}`,
+          }),
+        ),
+    }),
+  )
 
 export interface WranglerTomlPatch {
   readonly accountId?: string

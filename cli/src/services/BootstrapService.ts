@@ -1,3 +1,4 @@
+import { HttpClient } from "@effect/platform"
 import { Context, Effect, Layer } from "effect"
 import {
   existsSync,
@@ -95,7 +96,11 @@ export class BootstrapService extends Context.Tag("BootstrapService")<
   {
     readonly init: (
       input: InitInput,
-    ) => Effect.Effect<InitResult, AwsError | CloudflareError | UserError>
+    ) => Effect.Effect<
+      InitResult,
+      AwsError | CloudflareError | UserError,
+      HttpClient.HttpClient
+    >
     readonly destroy: (
       input: DestroyInput,
     ) => Effect.Effect<
@@ -260,7 +265,11 @@ export const BootstrapServiceLive = Layer.effect(
 
     const initCloudflare = (
       input: InitInput,
-    ): Effect.Effect<InitResult, CloudflareError | UserError> =>
+    ): Effect.Effect<
+      InitResult,
+      CloudflareError | UserError,
+      HttpClient.HttpClient
+    > =>
       Effect.gen(function* () {
         const { projectDir } = input
 
@@ -278,14 +287,7 @@ export const BootstrapServiceLive = Layer.effect(
         // Derive the account id from the token so the developer never hand-fills
         // it (used for wrangler.toml's account_id + CF_ACCOUNT_ID and the
         // golden-image registry path).
-        const accountId = yield* Effect.tryPromise({
-          try: () => deriveAccountId(apiToken),
-          catch: (cause) =>
-            new CloudflareError({
-              operation: "init:accountId",
-              message: `could not derive Cloudflare account id: ${String(cause)}`,
-            }),
-        })
+        const accountId = yield* deriveAccountId(apiToken)
 
         const workerDir = resolve(projectDir, "worker", "afk")
         const workerDirCreated = !existsSync(workerDir)
@@ -449,7 +451,7 @@ export const BootstrapServiceLive = Layer.effect(
         )
         actions.push(
           hasTerraform
-            ? `terraform destroy in ${terraformDir} (VPC, IAM, sweeper Lambda, DynamoDB)`
+            ? `terraform destroy in ${terraformDir} (VPC, IAM, sweeper Lambda, DynamoDB, S3 artifacts bucket)`
             : `no terraform/afk dir — skipping terraform destroy`,
         )
         actions.push(
@@ -590,6 +592,7 @@ export const BootstrapServiceLive = Layer.effect(
         const kvTitle = "DEVELOPERS_KV"
         const containerName = "afk-launcher-runcontainer"
         const goldenRepo = "afk-golden"
+        const artifactsBucket = `${workerName}-session-artifacts`
 
         // Run wrangler from the project root so it picks up CLOUDFLARE_API_TOKEN
         // from the inherited env (.env is auto-loaded by the CLI at startup).
@@ -622,6 +625,7 @@ export const BootstrapServiceLive = Layer.effect(
           `wrangler containers delete ${containerName}   # outer Container app + live instances`,
           `wrangler d1 delete ${d1Name}`,
           `wrangler kv namespace delete <${kvTitle} id>`,
+          `wrangler r2 bucket delete ${artifactsBucket}   # Session Artifacts (must be empty)`,
         ]
 
         if (!input.execute) {
@@ -670,6 +674,24 @@ export const BootstrapServiceLive = Layer.effect(
 
         yield* wrangler(["d1", "delete", d1Name])
         done.push(`deleted D1 ${d1Name}`)
+
+        // R2 bucket. `r2 bucket delete` refuses a non-empty bucket and wrangler
+        // has no recursive flag, so this is best-effort: on failure we tell the
+        // developer to empty it manually rather than abort the whole teardown.
+        yield* wrangler(["r2", "bucket", "delete", artifactsBucket]).pipe(
+          Effect.matchEffect({
+            onSuccess: () =>
+              Effect.sync(() =>
+                done.push(`deleted R2 bucket ${artifactsBucket}`),
+              ),
+            onFailure: () =>
+              Effect.sync(() =>
+                done.push(
+                  `R2 bucket ${artifactsBucket} not deleted (empty it, then \`wrangler r2 bucket delete ${artifactsBucket}\`)`,
+                ),
+              ),
+          }),
+        )
 
         const kvs = sliceArray(
           (yield* wrangler(["kv", "namespace", "list"])).stdout,

@@ -11,7 +11,7 @@ afk ls                                                     # see it running
 afk logs <run-id>                                          # tail its output
 ```
 
-That Run executes on your own Docker daemon. Point the same project at a cloud Backend (AWS or Cloudflare) and the *identical* commands launch the work on ephemeral cloud compute instead — see [Quickstart](#quickstart).
+That Run executes on your own Docker daemon. Point the same project at a cloud Backend (AWS or Cloudflare) and the _identical_ commands launch the work on ephemeral cloud compute instead — see [Quickstart](#quickstart).
 
 ---
 
@@ -42,6 +42,7 @@ The per-backend specifics (how the primitive is launched, provisioned, attached 
 A Run's image contains the toolchain and dependencies — **not** the source. The entrypoint clones the repo at the configured ref into `/workspace` (inside the main service's container) before executing the dev's command. On Cloudflare and Local the clone runs the same way, inside the rootless `dind`.
 
 Why this split:
+
 - Image rebuilds only when dependencies change (rare).
 - Code changes (constant) don't trigger a rebuild — `afk run` is fast.
 - The image at a given tag is reproducible from the `afk.Dockerfile` alone.
@@ -114,8 +115,7 @@ afk run bun --version
 afk ls && afk logs <run-id>
 ```
 
-Teardown: `afk destroy` (dry-run) / `afk destroy --yes`. See the
-[AWS backend doc](./docs/backends/aws.md#teardown) for exactly what is removed.
+Teardown: `afk destroy` (dry-run) / `afk destroy --yes`. See the [AWS backend doc](./docs/backends/aws.md#teardown) for exactly what is removed.
 
 ### Quickstart on Cloudflare
 
@@ -187,6 +187,9 @@ afk logs <run-id> [--follow] [--service <name>] [--since <duration>]
                                                # tail logs from the active Backend's log store
                                                #   (per-backend storage detail in the backend docs)
 afk kill <run-id>                              # terminate the Run's compute primitive
+afk session-artifact <run-id> [--out <dir>]    # download the Run's Session Artifact(s) (see contract below)
+                                               #   collected best-effort from the main service at Run end;
+                                               #   Owner-scoped like `afk logs`
 
 afk secrets put <name> [value]                 # write to the active Backend's secret store (prompts if value omitted)
 afk secrets ls                                 # list stored secret names
@@ -268,6 +271,7 @@ The CLI exports three shell variables before invoking `docker compose up` on the
 - `AFK_ENV_FILE` — path to a file containing every value from `.afk.env` plus AFK-injected variables (`AFK_GIT_URL`, `AFK_GIT_REF`, `AFK_RUN_ID`, `AFK_TIMEOUT_SECONDS`, decrypted SSM secrets). The main service must reference it via `env_file:` to receive them.
 
 Restrictions enforced by the CLI at submit time:
+
 - No `restart: always` or `restart: unless-stopped` on the main service (would fight Run-ends-on-exit semantics).
 - `ports:` on any service generates a warning — inbound is unreachable at the network level on every Backend.
 - The main service must reference `${AFK_IMAGE}`.
@@ -282,6 +286,7 @@ Sidecars share the Run's Docker daemon and network. `/workspace` is mounted into
   "backend": "aws",
   "gitUrl": "https://github.com/you/your-repo.git",
   "mainService": "agent",
+  "sessionArtifacts": ["/root/.claude/projects/**/*.jsonl"],
   "defaultInstanceType": "t3.medium",
   "allowedInstanceTypes": [
     "t3.medium", "t3.large", "t3.xlarge",
@@ -305,7 +310,7 @@ Sidecars share the Run's Docker daemon and network. `/workspace` is mounted into
 }
 ```
 
-`backend` and `gitUrl` are required (`backend` is one of `aws`, `cloudflare`, `local`). `mainService` defaults to `agent`. Only the block matching the active `backend` is consulted — `aws:`, `cloudflare:`, and `local:` may coexist, and `afk init --provider <other>` re-runs are non-destructive of the other blocks.
+`backend` and `gitUrl` are required (`backend` is one of `aws`, `cloudflare`, `local`). `mainService` defaults to `agent`. `sessionArtifacts` is optional: a list of container-side path globs, resolved **inside the main service only**, that afk collects (best-effort, at graceful exit) and stores per Run for later `afk session-artifact <run-id>` retrieval — the motivating case being an AI agent's structured `.jsonl` transcript. Files over the size cap are skipped with a warning rather than truncated; a glob matching nothing warns but never changes the Run's exit status. Only the block matching the active `backend` is consulted — `aws:`, `cloudflare:`, and `local:` may coexist, and `afk init --provider <other>` re-runs are non-destructive of the other blocks.
 
 - **Local-specific.** The `local:` block needs only `cachedImages` (the sidecar images baked into the local Golden Image). Everything else the Local Backend uses comes from the Backend-neutral top level (`gitUrl`, `mainService`, `defaultTimeoutHours`).
 
@@ -322,7 +327,7 @@ ANTHROPIC_API_KEY=secret:anthropic-key
 DATABASE_URL=secret:db-url
 ```
 
-Secret *values* are never written here — only `secret:<name>` references. The values themselves are stored separately via `afk secrets put <name> <value>`; see [Secrets](#secrets) for where each Backend keeps them.
+Secret _values_ are never written here — only `secret:<name>` references. The values themselves are stored separately via `afk secrets put <name> <value>`; see [Secrets](#secrets) for where each Backend keeps them.
 
 ---
 
@@ -342,10 +347,7 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 
 ## Backends
 
-The same CLI surface runs on three shipped backends — pick one with
-`afk init --provider <name>`, or use `--local` per command. Each backend's deep
-detail (what it provisions, attach / lifecycle / cost specifics, teardown) lives
-in its own doc:
+The same CLI surface runs on three shipped backends — pick one with `afk init --provider <name>`, or use `--local` per command. Each backend's deep detail (what it provisions, attach / lifecycle / cost specifics, teardown) lives in its own doc:
 
 - **[AWS EC2](./docs/backends/aws.md)** — one EC2 VM per Run, Terraform-provisioned (VPC, IAM, sweeper Lambda, DynamoDB, S3 state). Full Compose Contract. Spot by default.
 - **[Cloudflare Containers](./docs/backends/cloudflare.md)** — one Container instance per Run via a customer-deployed launcher Worker (rootless dind). Requires the Workers Paid plan.
@@ -358,7 +360,7 @@ GCP (Compute Engine) and Azure (Virtual Machines) are anticipated — see [Futur
 ## Secrets
 
 - Secret values are stored in the active Backend's secret store, written by `afk secrets put`.
-- Secret *references* live in `.afk.env` as `secret:<name>`. The reference syntax is canonical across Backends.
+- Secret _references_ live in `.afk.env` as `secret:<name>`. The reference syntax is canonical across Backends.
 - `.afk.env` is gitignored by default. The CLI refuses to start if `.afk.env` is tracked by git.
 
 The Run needs at minimum a `github-token` secret to clone source.
@@ -369,10 +371,7 @@ Where values are stored is backend-specific — **SSM Parameter Store** on AWS, 
 
 ## Attach, lifecycle, state & costs
 
-These are backend-specific — `afk attach` (SSM on AWS, `wrangler containers ssh`
-on Cloudflare, nested `docker exec` on Local), how a Run self-terminates and
-what backstops a wedged one, how `afk ls`/`afk history` read live vs. archived
-state, and per-Run cost — and are documented per backend:
+These are backend-specific — `afk attach` (SSM on AWS, `wrangler containers ssh` on Cloudflare, nested `docker exec` on Local), how a Run self-terminates and what backstops a wedged one, how `afk ls`/`afk history` read live vs. archived state, and per-Run cost — and are documented per backend:
 
 - AWS: [docs/backends/aws.md](./docs/backends/aws.md) (attach, lifecycle, querying, costs)
 - Cloudflare: [docs/backends/cloudflare.md](./docs/backends/cloudflare.md)
@@ -419,20 +418,3 @@ Backend-neutral commands stay identical across all three (see [CLI surface](#cli
 ## Future Backends
 
 The CLI is structured around a `Backend` interface. **AWS EC2**, **Cloudflare Containers**, and **Local** (your own Docker daemon) are shipped. **GCP (Compute Engine)** and **Azure (Virtual Machines)** are anticipated; each is expected to follow the same one-compute-primitive-per-Run shape, with its own image-build pipeline mapped onto `afk golden build` and its own exec primitive mapped onto `afk attach`.
-
----
-
-## Out of scope for v2
-
-- Notifications on Run completion (no SNS/email/Slack).
-- Artifact retrieval beyond logs (agents push their own results — to git, S3, a PR, etc.).
-- Multi-region.
-- HA NAT / private subnets on AWS (single public-subnet AZ topology only).
-- Single-binary distribution (Bun runtime required).
-- Cron / scheduled Runs.
-- Warm-pool of pre-booted compute primitives (cold start is ~60-90s on AWS, sub-5s on Cloudflare — acceptable for multi-minute workloads on either).
-- GPU and bare-metal instance types (deliberately excluded from the default whitelist).
-- GCE / Azure VM Backends (still anticipated).
-- An R2 mirror of Workers Logs on the Cloudflare Backend (explicitly excluded — users who need >7d retention should opt into a Cloudflare Logpush export, which is not AFK-managed).
-
-These are reachable extensions, not architectural changes.

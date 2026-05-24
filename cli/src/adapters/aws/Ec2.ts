@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
+import { makeAwsCli } from "./awsCli.ts"
 
 export interface Tag {
   readonly key: string
@@ -77,13 +78,6 @@ export interface GetParameterInput {
   readonly region: string
   readonly name: string
 }
-
-const awsError =
-  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-    new AwsError({
-      operation: op,
-      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-    })
 
 const parseTags = (
   raw: ReadonlyArray<{ Key?: string; Value?: string }> | undefined,
@@ -170,61 +164,55 @@ export const Ec2Live = Layer.effect(
   Ec2,
   Effect.gen(function* () {
     const sub = yield* Subprocess
+    const aws = makeAwsCli(sub)
 
     const findVpcIdByName = (region: string, vpcName: string) =>
-      sub
-        .runJson<{ Vpcs: ReadonlyArray<{ VpcId: string }> }>("aws", [
+      aws
+        .json<{ Vpcs: ReadonlyArray<{ VpcId: string }> }>("ec2:DescribeVpcs", [
           "ec2",
           "describe-vpcs",
           "--region",
           region,
           "--filters",
           `Name=tag:Name,Values=${vpcName}`,
-          "--output",
-          "json",
         ])
         .pipe(
           Effect.flatMap((r) => {
             const vpc = r.Vpcs[0]
-            if (!vpc)
-              return Effect.fail(
-                new AwsError({
-                  operation: "ec2:DescribeVpcs",
-                  message: `VPC '${vpcName}' not found in ${region}`,
-                }),
-              )
-            return Effect.succeed(vpc.VpcId)
+            return vpc
+              ? Effect.succeed(vpc.VpcId)
+              : Effect.fail(
+                  new AwsError({
+                    operation: "ec2:DescribeVpcs",
+                    message: `VPC '${vpcName}' not found in ${region}`,
+                  }),
+                )
           }),
-          Effect.mapError((e) =>
-            e instanceof AwsError ? e : awsError("ec2:DescribeVpcs")(e),
-          ),
         )
 
     const findSubnetIdsByVpcId = (region: string, vpcId: string) =>
-      sub
-        .runJson<{ Subnets: ReadonlyArray<{ SubnetId: string }> }>("aws", [
-          "ec2",
-          "describe-subnets",
-          "--region",
-          region,
-          "--filters",
-          `Name=vpc-id,Values=${vpcId}`,
-          "--output",
-          "json",
-        ])
-        .pipe(
-          Effect.map((r) => r.Subnets.map((s) => s.SubnetId)),
-          Effect.mapError(awsError("ec2:DescribeSubnets")),
+      aws
+        .json<{ Subnets: ReadonlyArray<{ SubnetId: string }> }>(
+          "ec2:DescribeSubnets",
+          [
+            "ec2",
+            "describe-subnets",
+            "--region",
+            region,
+            "--filters",
+            `Name=vpc-id,Values=${vpcId}`,
+          ],
         )
+        .pipe(Effect.map((r) => r.Subnets.map((s) => s.SubnetId)))
 
     const findSecurityGroupIdByName = (
       region: string,
       vpcId: string,
       sgName: string,
     ) =>
-      sub
-        .runJson<{ SecurityGroups: ReadonlyArray<{ GroupId: string }> }>(
-          "aws",
+      aws
+        .json<{ SecurityGroups: ReadonlyArray<{ GroupId: string }> }>(
+          "ec2:DescribeSecurityGroups",
           [
             "ec2",
             "describe-security-groups",
@@ -233,46 +221,34 @@ export const Ec2Live = Layer.effect(
             "--filters",
             `Name=vpc-id,Values=${vpcId}`,
             `Name=group-name,Values=${sgName}`,
-            "--output",
-            "json",
           ],
         )
         .pipe(
           Effect.flatMap((r) => {
             const sg = r.SecurityGroups[0]
-            if (!sg)
-              return Effect.fail(
-                new AwsError({
-                  operation: "ec2:DescribeSecurityGroups",
-                  message: `security group '${sgName}' not found in VPC '${vpcId}'`,
-                }),
-              )
-            return Effect.succeed(sg.GroupId)
+            return sg
+              ? Effect.succeed(sg.GroupId)
+              : Effect.fail(
+                  new AwsError({
+                    operation: "ec2:DescribeSecurityGroups",
+                    message: `security group '${sgName}' not found in VPC '${vpcId}'`,
+                  }),
+                )
           }),
-          Effect.mapError((e) =>
-            e instanceof AwsError
-              ? e
-              : awsError("ec2:DescribeSecurityGroups")(e),
-          ),
         )
 
     // SSM public parameter that always points at the latest AL2023 x86_64 AMI.
     const findLatestAmazonLinuxAmi = (region: string) =>
-      sub
-        .runJson<{ Parameter: { Value: string } }>("aws", [
+      aws
+        .json<{ Parameter: { Value: string } }>("ssm:GetParameter", [
           "ssm",
           "get-parameter",
           "--region",
           region,
           "--name",
           "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
-          "--output",
-          "json",
         ])
-        .pipe(
-          Effect.map((r) => r.Parameter.Value),
-          Effect.mapError(awsError("ssm:GetParameter")),
-        )
+        .pipe(Effect.map((r) => r.Parameter.Value))
 
     const runInstance = (input: RunInstanceInput) => {
       const tagSpec = [
@@ -311,8 +287,6 @@ export const Ec2Live = Layer.effect(
         "--count",
         "1",
         "--associate-public-ip-address",
-        "--output",
-        "json",
       ]
       if (input.spot) {
         args.push(
@@ -326,26 +300,23 @@ export const Ec2Live = Layer.effect(
           }),
         )
       }
-      return sub
-        .runJson<{ Instances: ReadonlyArray<{ InstanceId: string }> }>(
-          "aws",
+      return aws
+        .json<{ Instances: ReadonlyArray<{ InstanceId: string }> }>(
+          "ec2:RunInstances",
           args,
         )
         .pipe(
           Effect.flatMap((r) => {
             const inst = r.Instances[0]
-            if (!inst)
-              return Effect.fail(
-                new AwsError({
-                  operation: "ec2:RunInstances",
-                  message: "no instance returned",
-                }),
-              )
-            return Effect.succeed({ instanceId: inst.InstanceId })
+            return inst
+              ? Effect.succeed({ instanceId: inst.InstanceId })
+              : Effect.fail(
+                  new AwsError({
+                    operation: "ec2:RunInstances",
+                    message: "no instance returned",
+                  }),
+                )
           }),
-          Effect.mapError((e) =>
-            e instanceof AwsError ? e : awsError("ec2:RunInstances")(e),
-          ),
         )
     }
 
@@ -367,9 +338,8 @@ export const Ec2Live = Layer.effect(
       if (input.instanceIds && input.instanceIds.length > 0) {
         args.push("--instance-ids", ...input.instanceIds)
       }
-      args.push("--output", "json")
-      return sub
-        .runJson<{
+      return aws
+        .json<{
           Reservations: ReadonlyArray<{
             Instances: ReadonlyArray<{
               InstanceId: string
@@ -384,7 +354,7 @@ export const Ec2Live = Layer.effect(
               Tags?: ReadonlyArray<{ Key?: string; Value?: string }>
             }>
           }>
-        }>("aws", args)
+        }>("ec2:DescribeInstances", args)
         .pipe(
           Effect.map((r) =>
             (r.Reservations ?? []).flatMap((res) =>
@@ -402,7 +372,6 @@ export const Ec2Live = Layer.effect(
               })),
             ),
           ),
-          Effect.mapError(awsError("ec2:DescribeInstances")),
         )
     }
 
@@ -412,41 +381,29 @@ export const Ec2Live = Layer.effect(
     ) =>
       instanceIds.length === 0
         ? Effect.void
-        : sub
-            .run("aws", [
-              "ec2",
-              "terminate-instances",
-              "--region",
-              region,
-              "--instance-ids",
-              ...instanceIds,
-              "--output",
-              "json",
-            ])
-            .pipe(
-              Effect.asVoid,
-              Effect.mapError(awsError("ec2:TerminateInstances")),
-            )
+        : aws.run("ec2:TerminateInstances", [
+            "ec2",
+            "terminate-instances",
+            "--region",
+            region,
+            "--instance-ids",
+            ...instanceIds,
+          ])
 
     const waitForInstance = (
       region: string,
       instanceId: string,
       state: "running" | "stopped" | "terminated",
     ) =>
-      sub
-        .run("aws", [
-          "ec2",
-          "wait",
-          `instance-${state}`,
-          "--region",
-          region,
-          "--instance-ids",
-          instanceId,
-        ])
-        .pipe(
-          Effect.asVoid,
-          Effect.mapError(awsError(`ec2:wait instance-${state}`)),
-        )
+      aws.run(`ec2:wait instance-${state}`, [
+        "ec2",
+        "wait",
+        `instance-${state}`,
+        "--region",
+        region,
+        "--instance-ids",
+        instanceId,
+      ])
 
     const describeImages = (input: DescribeImagesInput) => {
       const args: string[] = [
@@ -466,9 +423,8 @@ export const Ec2Live = Layer.effect(
       if (input.imageIds && input.imageIds.length > 0) {
         args.push("--image-ids", ...input.imageIds)
       }
-      args.push("--output", "json")
-      return sub
-        .runJson<{
+      return aws
+        .json<{
           Images: ReadonlyArray<{
             ImageId: string
             Name?: string
@@ -479,7 +435,7 @@ export const Ec2Live = Layer.effect(
               Ebs?: { SnapshotId?: string }
             }>
           }>
-        }>("aws", args)
+        }>("ec2:DescribeImages", args)
         .pipe(
           Effect.map((r) =>
             (r.Images ?? []).map<Ec2Image>((img) => ({
@@ -493,7 +449,6 @@ export const Ec2Live = Layer.effect(
                 .filter((s): s is string => !!s),
             })),
           ),
-          Effect.mapError(awsError("ec2:DescribeImages")),
         )
     }
 
@@ -519,65 +474,50 @@ export const Ec2Live = Layer.effect(
         input.name,
         "--tag-specifications",
         JSON.stringify(tagSpec),
-        "--output",
-        "json",
       ]
       if (input.description) args.push("--description", input.description)
       if (input.noReboot) args.push("--no-reboot")
-      return sub.runJson<{ ImageId: string }>("aws", args).pipe(
-        Effect.map((r) => ({ imageId: r.ImageId })),
-        Effect.mapError(awsError("ec2:CreateImage")),
-      )
+      return aws
+        .json<{ ImageId: string }>("ec2:CreateImage", args)
+        .pipe(Effect.map((r) => ({ imageId: r.ImageId })))
     }
 
     const waitForImage = (region: string, imageId: string) =>
-      sub
-        .run("aws", [
-          "ec2",
-          "wait",
-          "image-available",
-          "--region",
-          region,
-          "--image-ids",
-          imageId,
-        ])
-        .pipe(
-          Effect.asVoid,
-          Effect.mapError(awsError("ec2:wait image-available")),
-        )
+      aws.run("ec2:wait image-available", [
+        "ec2",
+        "wait",
+        "image-available",
+        "--region",
+        region,
+        "--image-ids",
+        imageId,
+      ])
 
     const deregisterImage = (region: string, imageId: string) =>
-      sub
-        .run("aws", [
-          "ec2",
-          "deregister-image",
-          "--region",
-          region,
-          "--image-id",
-          imageId,
-          "--output",
-          "json",
-        ])
-        .pipe(Effect.asVoid, Effect.mapError(awsError("ec2:DeregisterImage")))
+      aws.run("ec2:DeregisterImage", [
+        "ec2",
+        "deregister-image",
+        "--region",
+        region,
+        "--image-id",
+        imageId,
+      ])
 
     const deleteSnapshot = (region: string, snapshotId: string) =>
-      sub
-        .run("aws", [
+      aws
+        .run("ec2:DeleteSnapshot", [
           "ec2",
           "delete-snapshot",
           "--region",
           region,
           "--snapshot-id",
           snapshotId,
-          "--output",
-          "json",
         ])
         .pipe(
-          Effect.asVoid,
           Effect.catchAll((e) =>
-            (e.stderr ?? "").includes("InvalidSnapshot.NotFound")
+            e.message.includes("InvalidSnapshot.NotFound")
               ? Effect.void
-              : Effect.fail(awsError("ec2:DeleteSnapshot")(e)),
+              : Effect.fail(e),
           ),
         )
 

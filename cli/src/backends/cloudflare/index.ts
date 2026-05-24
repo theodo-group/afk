@@ -3,6 +3,7 @@ import { CloudflareComputeLive } from "./CloudflareCompute.ts"
 import { CloudflareImageRegistryLive } from "./CloudflareImageRegistry.ts"
 import { CloudflareSecretStoreLive } from "./CloudflareSecretStore.ts"
 import { CloudflareLogStoreLive } from "./CloudflareLogStore.ts"
+import { CloudflareSessionArtifactStoreLive } from "./CloudflareSessionArtifactStore.ts"
 import { CloudflareRunHistoryLive } from "./CloudflareRunHistory.ts"
 import { CloudflareGoldenImageLive } from "./CloudflareGoldenImage.ts"
 import { CloudflareBackendDoctorLive } from "./CloudflareBackendDoctor.ts"
@@ -28,6 +29,7 @@ const Leaves = Layer.mergeAll(
   CloudflareImageRegistryLive,
   CloudflareSecretStoreLive,
   CloudflareLogStoreLive,
+  CloudflareSessionArtifactStoreLive,
   CloudflareRunHistoryLive,
   CloudflareBackendDoctorLive,
   CloudflareTeamLive,

@@ -71,6 +71,25 @@ export const AfkConfig = Schema.Struct({
   defaultTimeoutHours: Schema.optional(Schema.Number),
 
   /**
+   * Days a finished Run's compute primitive is retained — left stopped but
+   * preserved so `afk attach` can resume it for post-mortem inspection — before
+   * it is reclaimed. Honoured by the Local Backend only (cloud Backends
+   * self-reclaim on exit), so it lives at the neutral top level rather than in a
+   * Backend block. Absent ⇒ DEFAULT_RETENTION_DAYS.
+   */
+  retentionDays: Schema.optional(Schema.Number),
+
+  /**
+   * Session Artifacts (see CONTEXT.md): container-side path globs, resolved
+   * inside the main service only, that afk collects at graceful Run end and
+   * stores for later `afk session-artifact <run-id>` retrieval. Backend-neutral
+   * (the artifact is the agent's, and the main service is a neutral concept), so
+   * it lives at the top level rather than in a Backend block. Opt-in: absent or
+   * empty means nothing is collected.
+   */
+  sessionArtifacts: Schema.optional(Schema.Array(Schema.String)),
+
+  /**
    * Default instance type / tier picked when the dev passes no `--instance-type`
    * override. The value space is Backend-specific (EC2 type names on AWS, CF
    * instance tier names on Cloudflare). For backwards compatibility this also

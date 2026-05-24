@@ -38,7 +38,9 @@ app.use("/*", async (c, next) => {
   // minted at start (validated in the RunDO), not by CF Access.
   if (
     c.req.method === "POST" &&
-    (c.req.path.endsWith("/complete") || c.req.path.endsWith("/logs-progress"))
+    (c.req.path.endsWith("/complete") ||
+      c.req.path.endsWith("/logs-progress") ||
+      c.req.path.endsWith("/session-artifact"))
   ) {
     return next()
   }
@@ -80,6 +82,32 @@ app.post("/runs/:id/logs-progress", async (c) => {
       body: await c.req.text(),
     }),
   )
+})
+
+// Session Artifact upload from the running container (per-Run-token auth, like
+// /complete). The RunDO decodes the base64 tarball and stores it in R2.
+app.post("/runs/:id/session-artifact", async (c) => {
+  const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
+  return stub.fetch(
+    new Request("https://run/session-artifact", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-AFK-Run-Token": c.req.header("X-AFK-Run-Token") ?? "",
+      },
+      body: await c.req.text(),
+    }),
+  )
+})
+
+// Download a Run's Session Artifact tarball (base64 in JSON). CF-Access-authed
+// like the other reads; Owner scoping is enforced CLI-side via findByRunId.
+app.get("/runs/:id/session-artifact", async (c) => {
+  const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
+  const r = await stub.fetch(new Request("https://run/session-artifact"))
+  return new Response(await r.text(), {
+    headers: { "content-type": "application/json" },
+  })
 })
 
 // Read a Run's captured logs. Forwards `?service=<name>` to the RunDO.

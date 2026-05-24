@@ -8,7 +8,11 @@ import type {
 } from "../../services/backend/Compute.ts"
 import { UserError } from "../../infra/Errors.ts"
 import { assembleRunPlan } from "../../services/RunPlan.ts"
-import { DEFAULT_MAIN_SERVICE } from "../../constants.ts"
+import { collectionBases } from "../../services/SessionArtifact.ts"
+import {
+  DEFAULT_MAIN_SERVICE,
+  SESSION_ARTIFACT_MAX_BYTES,
+} from "../../constants.ts"
 
 // ---------------------------------------------------------------------------
 // Functional core for the Cloudflare Backend: pure, no I/O, no clock, no
@@ -84,6 +88,7 @@ export type CloudflareBackendPlan = {
   readonly accountId?: string
   readonly startedAt: string
   readonly composeContent?: string
+  readonly sessionArtifactBases: ReadonlyArray<string>
 }
 
 export interface PlanCloudflareRunInput {
@@ -156,6 +161,7 @@ export const planCloudflareRun = (
       : {}),
     startedAt: i.startedAt,
     ...(composeContent !== undefined ? { composeContent } : {}),
+    sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
   }
 
   const prepared: PreparedRun = {
@@ -196,6 +202,12 @@ export const toStartRequest = (
   secretNames: plan.secrets,
   ...(cf.composeContent !== undefined ? { compose: cf.composeContent } : {}),
   instanceTier: cf.instanceTier,
+  ...(cf.sessionArtifactBases.length > 0
+    ? {
+        sessionArtifactBases: cf.sessionArtifactBases,
+        sessionArtifactMaxBytes: SESSION_ARTIFACT_MAX_BYTES,
+      }
+    : {}),
   // So the container can POST its completion callback (logs + exit) back.
   workerUrl: cf.workerUrl,
 })

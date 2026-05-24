@@ -3,6 +3,7 @@ import { LocalComputeLive } from "./LocalCompute.ts"
 import { LocalImageRegistryLive } from "./LocalImageRegistry.ts"
 import { LocalSecretStoreLive } from "./LocalSecretStore.ts"
 import { LocalLogStoreLive } from "./LocalLogStore.ts"
+import { LocalSessionArtifactStoreLive } from "./LocalSessionArtifactStore.ts"
 import { LocalRunHistoryLive } from "./LocalRunHistory.ts"
 import { LocalGoldenImageLive } from "./LocalGoldenImage.ts"
 import { LocalBackendDoctorLive } from "./LocalBackendDoctor.ts"
@@ -23,6 +24,7 @@ const Leaves = Layer.mergeAll(
   LocalImageRegistryLive,
   LocalSecretStoreLive,
   LocalLogStoreLive,
+  LocalSessionArtifactStoreLive,
   LocalRunHistoryLive,
   LocalGoldenImageLive,
   LocalBackendDoctorLive,

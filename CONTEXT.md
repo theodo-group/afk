@@ -8,7 +8,7 @@ The unit of work in this system. A Run is one ephemeral execution of a developer
 
 A Run has a bounded lifetime: it starts when its entrypoint command begins and ends when that command exits. While alive, a developer may optionally attach to it to observe or intervene; attach is not required for a Run to be useful.
 
-A Run is backed by exactly one **compute primitive** in the active [[backend]]: an EC2 instance on AWS, a Container instance on Cloudflare, etc. The Run's workload executes as one or more containers — on the VM's host Docker daemon on AWS, or inside rootless `dind` on Cloudflare. That compute primitive exists only for the duration of the Run and is reclaimed when it ends. The compute primitive is the implementation; the Run is the concept the developer interacts with through the CLI (`afk run`, `afk attach <run>`, `afk logs <run>`, `afk kill <run>`).
+A Run is backed by exactly one **compute primitive** in the active [[backend]]: an EC2 instance on AWS, a Container instance on Cloudflare, etc. The Run's workload executes as one or more containers — on the VM's host Docker daemon on AWS, or inside rootless `dind` on Cloudflare. When the Run ends its compute primitive is either reclaimed immediately or, on Backends that support [[retention]], held in a retained state until resumed or reclaimed. The compute primitive is the implementation; the Run is the concept the developer interacts with through the CLI (`afk run`, `afk attach <run>`, `afk logs <run>`, `afk kill <run>`).
 
 Not to be confused with: an EC2 instance / Container instance (provider resources), a TodoWrite task (work item inside an agent), or an agent sub-task (delegated work inside Claude).
 
@@ -20,13 +20,24 @@ It is the thing `afk run --dry-run` prints: the developer sees exactly what woul
 
 Not to be confused with the launch itself: a Run Plan describes intent; launching it creates the compute primitive that makes it a live Run.
 
+## Retention
+
+After a [[run]] ends, a [[backend]] may **retain** its compute primitive instead of reclaiming it: the primitive is stopped but preserved, holding the finished workload's state. A **retained** Run does no work — its command has already exited — but can be **resumed**: `afk attach` on a retained Run brings the compute primitive back up and drops the developer into it to inspect the post-mortem state. Resume lasts only for the duration of that attach session — when the developer detaches, the primitive returns to the retained state, so a finished Run's one resting state is always retained. Retention exists so a fast Run can still be inspected after the fact instead of vanishing the instant its command exits.
+
+Resuming revives only the compute primitive, never the workload — the Run has already ended, so resume re-animates the host so attach has something to enter; it does not re-run the developer's command. A retained Run is reclaimed explicitly by `afk kill`, or automatically once it is older than the configured **retention period** (default 7 days) — so retained is a bounded grace window, not permanent storage.
+
+Realized on the [[backend|Local Backend]] first; the other Backends reclaim immediately for now.
+
+Not to be confused with a suspended or paused Run (there is no such state — a Run that has ended has ended) or with `afk kill` (which reclaims, the opposite of retain).
+
 ## Backend
 
 A provider-specific implementation of the operations a Run depends on: launching a container, attaching an interactive shell, streaming logs, terminating. The CLI is written against a Backend interface so the user-facing surface (`afk run`, `afk attach`, …) stays identical across providers.
 
-The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`) is the default for every command. The Local Backend is special among Backends in being reachable through two channels: it can be the persisted Backend (`afk init --provider local`) like any other, *and* a per-command `--local` flag selects it for that invocation only regardless of the persisted Backend.
+The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`) is the default for every command. The Local Backend is special among Backends in being reachable through two channels: it can be the persisted Backend (`afk init --provider local`) like any other, _and_ a per-command `--local` flag selects it for that invocation only regardless of the persisted Backend.
 
 Backends:
+
 - **AWS EC2** — shipped. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
 - **Cloudflare Containers** — shipped. Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. Runs `dockerd` rootless inside the Container to host the workload. Compose Contract honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
 - **GCP (Compute Engine)**, **Azure (Virtual Machines)** — anticipated future cloud Backends. Each is expected to follow the same one-VM-per-Run shape as AWS.
@@ -42,7 +53,7 @@ The set of rules a developer's `afk.Dockerfile` must follow for their image to b
 
 ## Compose Contract
 
-The (optional) rules a developer's `afk.compose.yml` must follow when a Run needs sidecar services (e.g. a Postgres, a Redis the agent talks to). The compose file lives at the repo root and declares a graph of services; one of them — the "main service," named in `afk.config.json` (default: `agent`) — is the agent itself, and its image is the one built from `afk.Dockerfile`. The Run's lifetime is the main service's lifetime; sidecars are torn down when it exits. The compose file is optional: a Run with no sidecars omits it entirely and the agent's image runs directly.
+The (optional) rules a developer's `afk.compose.yml` must follow when a Run needs sidecar services (e.g. a Postgres, a Redis the agent talks to). The compose file lives at the repo root and declares a graph of services; one of them — the "main service," named in `afk.config.json` (default: `agent`) — is the agent itself, and its image is the one built from `afk.Dockerfile`. The Run's lifetime is the main service's lifetime: when it exits the Run ends and its sidecars stop with it. Their containers and volumes are reclaimed with the compute primitive — immediately, or, where [[retention]] applies, preserved until the retained primitive is reclaimed so the whole stack can be inspected post-mortem. The compose file is optional: a Run with no sidecars omits it entirely and the agent's image runs directly.
 
 The compose file is portable across [[backend]]s without dev changes. Some Backends impose structural addenda that the CLI applies automatically at submit time — e.g. on the Cloudflare Backend, every service is augmented with `network_mode: host` and `extra_hosts` cross-mappings so service-name DNS keeps working under rootless `dind`. The only Compose Contract rule that the CLI cannot auto-fix is port collision between sidecars of the same Run, which remains a hard error.
 
@@ -51,6 +62,7 @@ The compose file is portable across [[backend]]s without dev changes. Some Backe
 The per-account, per-[[backend]] **boot artifact** used by every Run. Its sole purpose is to pre-cache the Docker engine plus a developer-specified list of sidecar images (e.g. `postgres:16`, `redis:7`), so per-Run cold-starts don't re-pull them.
 
 The concrete artifact type is Backend-specific:
+
 - On **AWS EC2**, the Golden Image is an **AMI** (a VM disk image) containing Amazon Linux + Docker + the pre-pulled images in `/var/lib/docker`.
 - On **Cloudflare Containers**, the Golden Image is a **Container image** (pushed to CF managed registry) containing rootless `dockerd` + the pre-pulled images baked into `/var/afk/cache/`.
 - On **Local**, the Golden Image is a **Container image** of the same shape as Cloudflare's (rootless `dockerd` + pre-pulled cache), built into the developer's own Docker daemon rather than pushed to a registry. It is the boot artifact for the outer dind container that backs each local Run.
@@ -63,3 +75,10 @@ Golden Images are built explicitly by `afk golden build`, which reads the pre-pu
 
 The git reference a Run executes against — a branch name, tag, or commit sha. Resolved against the project's configured `AFK_GIT_URL` at Run start. Passed via `afk run --ref <ref>`; defaults to the developer's current local branch name. A Run refuses to start if the resolved ref isn't reachable on origin.
 
+## Session Artifact
+
+A developer-declared file (or glob of files) produced _inside the [[run]]'s main service container_ that afk collects when the Run ends and persists for later review — the motivating case being an AI agent's structured session transcript (e.g. Claude Code's `~/.claude/projects/**/*.jsonl`), so a developer can reconstruct what the agent did after the fact.
+
+afk is agent-agnostic and therefore knows nothing about the artifact's shape or meaning: the developer names the path(s) in `afk.config.json`, and afk treats the contents as an opaque blob. Collection is scoped to the **main service** only — never sidecars — which is what distinguishes a Session Artifact from general file exfiltration out of an arbitrary container.
+
+Distinct from **logs**: logs are the per-service stdout/stderr stream tailed live by `afk logs`; a Session Artifact is a file collected once, at Run end, from the agent's own on-disk state. A Run with no declared Session Artifacts collects nothing — the feature is opt-in.

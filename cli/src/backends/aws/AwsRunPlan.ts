@@ -10,11 +10,14 @@ import type {
 import { UserError } from "../../infra/Errors.ts"
 import { assembleRunPlan } from "../../services/RunPlan.ts"
 import { buildUserData } from "../../services/UserData.ts"
+import { collectionBases } from "../../services/SessionArtifact.ts"
 import {
+  AFK_ARTIFACTS_BUCKET_PREFIX,
   DEFAULT_INSTANCE_TYPE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
   LOG_GROUP_PREFIX,
+  SESSION_ARTIFACT_MAX_BYTES,
   TAG_BRANCH,
   TAG_MANAGED,
   TAG_OWNER,
@@ -210,6 +213,9 @@ export const planAwsRun = (
       ssmName: `/afk/secrets/${s.secretName}`,
     })),
     compose: composeContent,
+    sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
+    sessionArtifactBucket: `${AFK_ARTIFACTS_BUCKET_PREFIX}-${identity.Account}-${region}`,
+    sessionArtifactMaxBytes: SESSION_ARTIFACT_MAX_BYTES,
   })
 
   const onDemandOverride =

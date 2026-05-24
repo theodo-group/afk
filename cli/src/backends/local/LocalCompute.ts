@@ -1,11 +1,12 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schedule } from "effect"
 import { randomUUID } from "node:crypto"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { type LocalBackendPlan, planLocalRun } from "./LocalRunPlan.ts"
 import { userInfo } from "node:os"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
+import { collectionBases } from "../../services/SessionArtifact.ts"
 import { GoldenImageStore } from "../../services/backend/GoldenImage.ts"
 import { RunHistory } from "../../services/backend/RunHistory.ts"
 import {
@@ -19,6 +20,7 @@ import { ConfigError, UserError } from "../../infra/Errors.ts"
 import {
   COMPOSE_FILE,
   DEFAULT_MAIN_SERVICE,
+  DEFAULT_RETENTION_DAYS,
   LABEL_BRANCH,
   LABEL_IMAGE,
   LABEL_MAIN_SERVICE,
@@ -35,6 +37,7 @@ import {
 } from "../../constants.ts"
 import type { Run } from "../../schema/Run.ts"
 import { ensureDir, runDir, runLogsDir } from "./localPaths.ts"
+import { isExpired, retainedUntilIso } from "./localRetention.ts"
 import { readSecretValue } from "./localSecrets.ts"
 import {
   listAfkContainers,
@@ -46,13 +49,24 @@ import {
 const toUserError = (op: string) => (e: { message?: string }) =>
   new UserError({ message: `local: ${op} failed: ${e.message ?? String(e)}` })
 
-const containerToRun = (c: LocalContainer): Run | null => {
+const containerToRun = (
+  c: LocalContainer,
+  retentionDays: number,
+): Run | null => {
   const runId = c.labels[LABEL_RUN_ID]
   if (!runId) return null
+  const status = mapDockerState(c.state)
+  // A STOPPED container that still exists is a retained Run: its finishedAt +
+  // retentionDays is when the reaper will reclaim it, and the timestamp's
+  // presence is what marks it resumable via `afk attach`.
+  const retainedUntil =
+    status === "STOPPED" && c.finishedAt
+      ? retainedUntilIso(c.finishedAt, retentionDays)
+      : undefined
   return {
     runId: runId as Run["runId"],
     resourceId: c.id,
-    status: mapDockerState(c.state),
+    status,
     backend: "local",
     owner: c.labels[LABEL_OWNER] ?? LOCAL_OWNER_ID,
     branch: c.labels[LABEL_BRANCH] ?? "",
@@ -63,6 +77,7 @@ const containerToRun = (c: LocalContainer): Run | null => {
     },
     startedAt: c.labels[LABEL_STARTED_AT] ?? c.startedAt,
     ...(c.finishedAt ? { stoppedAt: c.finishedAt } : {}),
+    ...(retainedUntil ? { retainedUntil } : {}),
   }
 }
 
@@ -81,12 +96,51 @@ export const LocalComputeLive = Layer.effect(
     const golden = yield* GoldenImageStore
     const history = yield* RunHistory
 
-    const listAll = listAfkContainers(sub).pipe(
-      Effect.map((cs) =>
-        cs.map(containerToRun).filter((r): r is Run => r !== null),
-      ),
-      Effect.mapError(toUserError("docker ps")),
-    )
+    const listAll = Effect.gen(function* () {
+      const { config } = yield* cfg.load
+      const retentionDays = config.retentionDays ?? DEFAULT_RETENTION_DAYS
+      const cs = yield* listAfkContainers(sub).pipe(
+        Effect.mapError(toUserError("docker ps")),
+      )
+      return cs
+        .map((c) => containerToRun(c, retentionDays))
+        .filter((r): r is Run => r !== null)
+    })
+
+    // Reclaim a Run's compute primitive: remove the outer container *and* its
+    // anonymous inner data-root volume (-v), then drop the per-Run scratch dir.
+    // The -v and the scratch-dir removal are what make reclamation complete —
+    // a plain `docker rm -f` would leak both.
+    const reclaim = (resourceId: string, runId: string | undefined) =>
+      sub.run("docker", ["rm", "-fv", resourceId]).pipe(
+        Effect.mapError(toUserError("docker rm")),
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (runId) rmSync(runDir(runId), { recursive: true, force: true })
+          }),
+        ),
+      )
+
+    // Opportunistic reaper (Local has no resident supervisor): reclaim every
+    // retained Run past its retention window. Best-effort — a reaping failure
+    // must never block the launch it is piggybacked on.
+    const reapExpired = Effect.gen(function* () {
+      const { config } = yield* cfg.load
+      const retentionDays = config.retentionDays ?? DEFAULT_RETENTION_DAYS
+      const now = Date.now()
+      const containers = yield* listAfkContainers(sub)
+      const expired = containers.filter(
+        (c) =>
+          c.state === "exited" &&
+          c.finishedAt !== "" &&
+          isExpired(c.finishedAt, now, retentionDays),
+      )
+      yield* Effect.forEach(
+        expired,
+        (c) => reclaim(c.id, c.labels[LABEL_RUN_ID]),
+        { discard: true },
+      )
+    }).pipe(Effect.catchAll(() => Effect.void))
 
     // Single-principal Backend: ownership scoping is a no-op, so listMine and
     // listAll are identical (see CONTEXT.md "Owner").
@@ -146,12 +200,17 @@ export const LocalComputeLive = Layer.effect(
           runId: randomUUID(),
           startedAt: new Date().toISOString(),
         })
-        for (const w of core.warnings) console.warn(`warning: ${w}`)
+        yield* Effect.forEach(core.warnings, (w) => Effect.logWarning(w))
         return core.plan
       })
 
     const launch = (plan: PreparedRun) =>
       Effect.gen(function* () {
+        // Reap expired retained Runs before adding a new one — the only moment
+        // a local reaper can run (no resident supervisor; `afk ls` stays a pure
+        // read). Best-effort, so a launch never fails on stale-Run cleanup.
+        yield* reapExpired
+
         const local = plan.backendPlan as LocalBackendPlan
         const { config } = yield* cfg.load
         const gitUrl = config.gitUrl
@@ -163,16 +222,20 @@ export const LocalComputeLive = Layer.effect(
         // secret values (self-contained — no in-container fetch). Missing
         // secrets warn rather than fail, mirroring a misconfigured cloud Run.
         const lines: string[] = plan.env.map((e) => `${e.name}=${e.value}`)
+        const missingSecrets: string[] = []
         for (const s of plan.secrets) {
           const value = readSecretValue(gitUrl, s.secretName)
           if (value === undefined) {
-            console.warn(
-              `warning: secret '${s.secretName}' is not in the local store — \`afk secrets put ${s.secretName} <value>\``,
-            )
+            missingSecrets.push(s.secretName)
             continue
           }
           lines.push(`${s.name}=${value}`)
         }
+        yield* Effect.forEach(missingSecrets, (name) =>
+          Effect.logWarning(
+            `secret '${name}' is not in the local store — \`afk secrets put ${name} <value>\``,
+          ),
+        )
         yield* Effect.try({
           try: () =>
             writeFileSync(resolve(dir, "run.env"), lines.join("\n") + "\n", {
@@ -250,6 +313,11 @@ export const LocalComputeLive = Layer.effect(
           `AFK_TIMEOUT_SECONDS=${plan.timeoutSeconds}`,
           "-e",
           `AFK_IMAGE=${plan.image}`,
+          // Session Artifact base dirs (space-separated) for the bootstrap to
+          // docker-cp out of the main service at graceful exit. Empty when the
+          // dev declared none — the bootstrap no-ops on an empty value.
+          "-e",
+          `AFK_ARTIFACT_BASES=${collectionBases(config.sessionArtifacts ?? []).join(" ")}`,
           local.goldenImage,
         ]
 
@@ -292,9 +360,7 @@ export const LocalComputeLive = Layer.effect(
     const kill = (runId: string) =>
       Effect.gen(function* () {
         const run = yield* findByRunId(runId)
-        yield* sub
-          .run("docker", ["rm", "-f", run.resourceId])
-          .pipe(Effect.mapError(toUserError("docker rm")))
+        yield* reclaim(run.resourceId, run.runId)
       })
 
     const attach = (runId: string, opts: AttachOptions) =>
@@ -311,38 +377,88 @@ export const LocalComputeLive = Layer.effect(
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
         const service = opts.service ?? mainService
         const container = run.resourceId
+        const compose = `${LOCAL_RUN_MOUNT}/compose.yml`
 
-        if (opts.host) {
+        // A retained (STOPPED) Run must be resumed before we can enter it: its
+        // outer container is parked. `docker start` re-runs the re-entrant
+        // bootstrap, which — seeing the exit marker — revives the sidecars and
+        // idles; it does NOT re-run the workload. We re-park on detach so
+        // "retained" stays the Run's only resting state.
+        const live = run.status === "RUNNING"
+        const resumed = !live
+        if (resumed) {
+          if (!existsSync(resolve(runDir(runId), "exit"))) {
+            return yield* Effect.fail(
+              new UserError({
+                message: `Run ${runId} did not complete cleanly; cannot resume it.`,
+                hint: "Use `afk attach <run> --host` to inspect the host, or `afk kill <run>`.",
+              }),
+            )
+          }
           yield* sub
-            .runInteractive("docker", ["exec", "-it", container, "sh"])
-            .pipe(Effect.mapError(toUserError("docker exec")))
-          return
+            .run("docker", ["start", container])
+            .pipe(Effect.mapError(toUserError("docker start")))
+          // Wait for the inner rootless dockerd to come back up (the bootstrap
+          // restarts it in resume mode).
+          yield* sub
+            .run("docker", ["exec", container, "docker", "info"])
+            .pipe(
+              Effect.retry(
+                Schedule.spaced("1 seconds").pipe(
+                  Schedule.intersect(Schedule.recurs(60)),
+                ),
+              ),
+              Effect.mapError(toUserError("resume: dockerd not ready")),
+            )
         }
 
-        // Nested: shell into the inner service container via the outer
-        // container's own docker. The exec'd shell must point DOCKER_HOST at the
-        // inner rootless socket (it doesn't inherit the bootstrap's env). compose
-        // path first, then a bare `docker exec` against the service-named
-        // container (the no-compose Run names its single container after the
-        // main service).
-        const compose = `${LOCAL_RUN_MOUNT}/compose.yml`
-        const inner =
-          `export DOCKER_HOST=${LOCAL_INNER_DOCKER_HOST}; ` +
-          `if [ -f ${compose} ]; then ` +
-          `docker compose -f ${compose} exec ${service} bash 2>/dev/null || ` +
-          `docker compose -f ${compose} exec ${service} sh; ` +
-          `else docker exec -it ${service} bash 2>/dev/null || docker exec -it ${service} sh; fi`
+        // Re-park the primitive when the attach session ends (only if we
+        // resumed it — never stop a live Run). Never-failing so it always runs.
+        const stopOuter = sub
+          .run("docker", ["stop", container])
+          .pipe(Effect.catchAll(() => Effect.void))
 
-        yield* sub
-          .runInteractive("docker", [
-            "exec",
-            "-it",
-            container,
-            "sh",
-            "-lc",
-            inner,
-          ])
+        // Pick the drop-in shell. The exec'd shells point DOCKER_HOST at the
+        // inner rootless socket (they don't inherit the bootstrap's env).
+        let args: ReadonlyArray<string>
+        if (opts.host) {
+          // The outer dind host (works once the container is up).
+          args = ["exec", "-it", container, "sh"]
+        } else if (resumed && service === mainService) {
+          // The main service of a retained Run: its process has exited, so
+          // `exec` is impossible. Commit its final filesystem to an image and
+          // run a shell from it on host networking, so it reaches the revived
+          // sidecars (commit-then-run; see CONTEXT.md "Retention").
+          const img = `afk-postmortem-${runId.slice(0, 8)}`
+          const env = `${LOCAL_RUN_MOUNT}/run.env`
+          const inner =
+            `export DOCKER_HOST=${LOCAL_INNER_DOCKER_HOST}; ` +
+            `if [ -f ${compose} ]; then C=$(docker compose -f ${compose} ps -aq ${service}); ` +
+            `else C=$(docker ps -aqf name=^${service}$); fi; ` +
+            `docker commit "$C" ${img} >/dev/null && ` +
+            `docker run -it --rm --network host --env-file ${env} ${img} bash 2>/dev/null || ` +
+            `docker run -it --rm --network host --env-file ${env} ${img} sh; ` +
+            `docker image rm ${img} >/dev/null 2>&1 || true`
+          args = ["exec", "-it", container, "sh", "-lc", inner]
+        } else {
+          // A live main service, or a sidecar (live, or revived on resume): a
+          // plain nested `exec` into the running container. compose path first,
+          // then a bare `docker exec` against the service-named container (the
+          // no-compose Run names its single container after the main service).
+          const inner =
+            `export DOCKER_HOST=${LOCAL_INNER_DOCKER_HOST}; ` +
+            `if [ -f ${compose} ]; then ` +
+            `docker compose -f ${compose} exec ${service} bash 2>/dev/null || ` +
+            `docker compose -f ${compose} exec ${service} sh; ` +
+            `else docker exec -it ${service} bash 2>/dev/null || docker exec -it ${service} sh; fi`
+          args = ["exec", "-it", container, "sh", "-lc", inner]
+        }
+
+        const dropIn = sub
+          .runInteractive("docker", args)
           .pipe(Effect.mapError(toUserError("docker exec")))
+
+        yield* resumed ? dropIn.pipe(Effect.ensuring(stopOuter)) : dropIn
       })
 
     const callerPrincipal = Effect.sync(() => {

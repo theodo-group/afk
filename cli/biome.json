@@ -3,6 +3,11 @@
   "files": {
     "includes": ["src/**/*.ts"]
   },
+  "plugins": [
+    "./lint/noloops.grit",
+    "./lint/no-bun-spawn.grit",
+    "./lint/no-as-any.grit"
+  ],
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -17,6 +22,9 @@
     }
   },
   "linter": {
-    "enabled": false
+    "enabled": true,
+    "rules": {
+      "recommended": false
+    }
   }
 }

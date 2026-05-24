@@ -41,6 +41,18 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
         out.printTable(filtered, [
           { header: "RUN ID", value: (r) => r.runId },
           { header: "STATUS", value: (r) => r.status },
+          {
+            // A retained (STOPPED) Run is still resumable via `afk attach` until
+            // this window closes; blank for Runs that aren't retained.
+            header: "RETAINED",
+            value: (r) => {
+              if (!r.retainedUntil) return "-"
+              const ms = Date.parse(r.retainedUntil) - Date.now()
+              if (ms <= 0) return "expiring"
+              const days = Math.ceil(ms / 86_400_000)
+              return `~${days}d`
+            },
+          },
           { header: "BRANCH", value: (r) => r.branch },
           { header: "SHA", value: (r) => r.sha.slice(0, 12) },
           {

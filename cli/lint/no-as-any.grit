@@ -1,0 +1,8 @@
+language js
+
+`$expr as any` where {
+  register_diagnostic(
+    span = $expr,
+    message = "No `as any` — it discards the `strict` checker. Narrow with a Schema decode, a type guard, or a precise `as` (code-style.md §3, §6)."
+  )
+}

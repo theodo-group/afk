@@ -1,3 +1,4 @@
+import { HttpClient } from "@effect/platform"
 import { Effect, Layer } from "effect"
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -22,15 +23,15 @@ const workerUrlCheck = (url: string | undefined): CheckResult =>
 
 // Reached-but-bad and never-reached are both failures with a clean detail —
 // no merged success/error shape to disambiguate downstream.
-const probeWorkerHealth = (url: string): Effect.Effect<CheckResult> =>
-  Effect.tryPromise({
-    try: () => fetch(`${url.replace(/\/$/, "")}/health`),
-    catch: (cause) => cause,
-  }).pipe(
+const probeWorkerHealth = (
+  url: string,
+): Effect.Effect<CheckResult, never, HttpClient.HttpClient> =>
+  HttpClient.get(`${url.replace(/\/$/, "")}/health`).pipe(
+    Effect.scoped,
     Effect.map((res) =>
       check(
         "launcher Worker /health",
-        res.ok,
+        res.status >= 200 && res.status < 300,
         `HTTP ${res.status}`,
         `unreachable (HTTP ${res.status})`,
       ),
@@ -49,7 +50,7 @@ const probeWorkerHealth = (url: string): Effect.Effect<CheckResult> =>
 
 const maybeWorkerHealth = (
   url: string | undefined,
-): Effect.Effect<ReadonlyArray<CheckResult>> =>
+): Effect.Effect<ReadonlyArray<CheckResult>, never, HttpClient.HttpClient> =>
   isConfiguredWorkerUrl(url)
     ? probeWorkerHealth(url).pipe(Effect.map((row) => [row]))
     : Effect.succeed([])
@@ -76,6 +77,7 @@ export const CloudflareBackendDoctorLive = Layer.effect(
   Effect.gen(function* () {
     const sub = yield* Subprocess
     const cfg = yield* ConfigService
+    const client = yield* HttpClient.HttpClient
 
     // Each group yields ReadonlyArray<CheckResult> so the finale is one flatten.
     const wranglerChecks = sub.run("which", ["wrangler"]).pipe(
@@ -130,7 +132,10 @@ export const CloudflareBackendDoctorLive = Layer.effect(
       wranglerChecks,
       apiTokenChecks,
       configChecks,
-    ]).pipe(Effect.map((groups) => groups.flat()))
+    ]).pipe(
+      Effect.map((groups) => groups.flat()),
+      Effect.provideService(HttpClient.HttpClient, client),
+    )
 
     return BackendDoctor.of({ checks })
   }),

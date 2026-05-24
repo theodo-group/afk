@@ -14,6 +14,8 @@ export interface Env {
   readonly RUN_CONTAINER: DurableObjectNamespace
   readonly DB: D1Database
   readonly DEVELOPERS_KV: KVNamespace
+  /** R2 bucket holding per-Run Session Artifacts (a gzipped tar per Run). */
+  readonly ARTIFACTS: R2Bucket
   /** CF API token used by `afk team add` to provision service tokens. */
   readonly CF_API_TOKEN?: string
   /** CF account ID — surfaced for the API calls that need it explicitly. */
@@ -46,6 +48,14 @@ export interface StartRequest {
   /** Compose file content (already image-substituted, network_mode/extra_hosts auto-injected by the CLI). */
   readonly compose?: string
   readonly instanceTier?: string
+  /**
+   * Session Artifact base dirs (longest glob-free prefixes) the golden bootstrap
+   * `docker cp`s out of the main service at graceful exit, tars, and POSTs to
+   * `/runs/:id/session-artifact`. Empty/absent ⇒ no collection.
+   */
+  readonly sessionArtifactBases?: ReadonlyArray<string>
+  /** Per-file size cap; matched files larger than this are skipped, not truncated. */
+  readonly sessionArtifactMaxBytes?: number
 }
 
 export interface StartResponse {
