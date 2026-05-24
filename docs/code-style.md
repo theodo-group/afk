@@ -99,6 +99,41 @@ export class Subprocess extends Context.Tag("Subprocess")<
 
 Don't mix them in one small operation. Break long pipes one operator per line.
 
+**Prefer pipelines of named steps over accumulator loops.** When a `gen` body's
+job is to *build a value* — assemble a list, run a series of checks, collect
+results — reach for a pipeline before an imperative `gen` that pushes into a
+mutable local. The Effect [building pipelines][pipelines] guide is the rule of
+thumb: decompose the work into small named functions and compose them with
+`pipe`/`map`/`flatMap`, so the body reads as data flowing left-to-right and each
+step is independently nameable, instead of a block mutating an accumulator.
+
+- Lift each unit of work to a named `Effect<T>` value (often a module-level pure
+  function returning the `Effect`), then assemble with `Effect.all` + `Effect.map`
+  for independent steps and `Effect.flatMap` for a genuine data dependency (one
+  step gates the next). The reader scans the names to see *what* runs and opens
+  the one body they care about to see *how*.
+- A `for` loop over `results.push({ … })` inside a `gen` is the smell this
+  replaces — the intent of each step is buried in punctuation and ordering. The
+  exception is a real imperative dependency chain (each `yield*` consumes the
+  previous), where `gen` *is* the readable form.
+- `Effect`s are immutable values: composing them returns new effects, never
+  mutating. That is what makes the small-functions-then-compose shape safe and
+  why it is the default.
+- **Normalise the pieces so the assembly is one flatten.** When the steps
+  produce different shapes — one yields a `T`, another a `ReadonlyArray<T>` —
+  lift *every* contributor to `Effect<ReadonlyArray<T>>` and finish with
+  `Effect.all([…]).pipe(Effect.map((groups) => groups.flat()))`. The mismatched
+  form, `Effect.flatMap((a) => other.pipe(Effect.map((b) => [...a, ...b])))`,
+  reads as nesting and spreads; uniform-then-flatten reads as "gather, flatten."
+  (`backends/cloudflare/CloudflareBackendDoctor.ts`.)
+- **Branch on a loaded result with `Effect.matchEffect`, not `Effect.either` +
+  `_tag`.** `x.pipe(Effect.matchEffect({ onFailure, onSuccess }))` destructures
+  the success value directly in `onSuccess`; the `Effect.either` →
+  `loaded._tag === "Right"` → `loaded.right` form is ceremony that buries the
+  branch (same file).
+
+[pipelines]: https://effect.website/docs/getting-started/building-pipelines/
+
 **Errors:**
 
 - Every failure is a `Data.TaggedError` in `infra/Errors.ts`, added to the
@@ -189,6 +224,6 @@ E.g. `feat(cli): one-command provisioning`,
 - Import a concrete backend (`AwsCompute`) outside `backends/aws/` — depend on
   the tag.
 - `throw`, `console.log` results, or use `Bun.spawn` outside the documented spots.
-- Add an npm dependency without need; `bunfig.toml` pins exact versions
+- Add an npm dependency without need; `cli/bunfig.toml` pins exact versions
   (`exact = true`) — keep it.
 - Reformat unrelated code in a change.
