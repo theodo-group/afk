@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import {
   BackendDoctor,
+  check,
   type CheckResult,
 } from "../../services/backend/BackendDoctor.ts"
 
@@ -15,28 +16,28 @@ export const LocalBackendDoctorLive = Layer.effect(
   Effect.gen(function* () {
     const sub = yield* Subprocess
 
-    const checks = Effect.gen(function* () {
-      const results: CheckResult[] = []
-
-      const info = yield* sub
-        .run("docker", ["info", "--format", "{{.ServerVersion}}"])
-        .pipe(Effect.either)
-      results.push(
-        info._tag === "Right"
-          ? {
-              name: "docker daemon",
-              ok: true,
-              detail: `reachable (engine ${info.right.stdout.trim() || "unknown"})`,
-            }
-          : {
-              name: "docker daemon",
-              ok: false,
-              detail: "could not reach the Docker daemon (`docker info` failed)",
-            },
+    const checks = sub
+      .run("docker", ["info", "--format", "{{.ServerVersion}}"])
+      .pipe(
+        Effect.match({
+          onFailure: (): ReadonlyArray<CheckResult> => [
+            check(
+              "docker daemon",
+              false,
+              "",
+              "could not reach the Docker daemon (`docker info` failed)",
+            ),
+          ],
+          onSuccess: (info): ReadonlyArray<CheckResult> => [
+            check(
+              "docker daemon",
+              true,
+              `reachable (engine ${info.stdout.trim() || "unknown"})`,
+              "",
+            ),
+          ],
+        }),
       )
-
-      return results
-    })
 
     return BackendDoctor.of({ checks })
   }),
