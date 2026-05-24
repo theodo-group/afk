@@ -2,7 +2,7 @@ import { Command, Options } from "@effect/cli"
 import { DateTime, Effect } from "effect"
 import { HistoryService } from "../services/HistoryService.ts"
 import { parseSince } from "../services/SinceWindow.ts"
-import { Sts } from "../adapters/aws/Sts.ts"
+import { Compute } from "../services/backend/Compute.ts"
 import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
 import { DEFAULT_REGION } from "../constants.ts"
@@ -43,7 +43,7 @@ export const history = Command.make(
   ({ all, since, branch, limit }) =>
     Effect.gen(function* () {
       const hist = yield* HistoryService
-      const sts = yield* Sts
+      const compute = yield* Compute
       const cfg = yield* ConfigService
       const out = yield* Output
       const { config } = yield* cfg.load
@@ -51,7 +51,7 @@ export const history = Command.make(
 
       const duration = yield* parseSince(since)
       const sinceInstant = DateTime.subtractDuration(yield* DateTime.now, duration)
-      const owner = all ? undefined : (yield* sts.callerIdentity).UserId
+      const owner = all ? undefined : (yield* compute.callerPrincipal).id
 
       const rows = yield* hist.query({
         owner,

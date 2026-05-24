@@ -33,9 +33,15 @@ const app = new Hono<{ Bindings: Env }>()
 // Caller principal middleware. Falls through for /health.
 app.use("/*", async (c, next) => {
   if (c.req.path === "/health") return next()
-  // The Run's container posts its completion callback here without Access
-  // creds; it's authorized by the unguessable runId in the path.
-  if (c.req.method === "POST" && c.req.path.endsWith("/complete")) return next()
+  // The Run's container posts its completion + incremental-log callbacks here
+  // without Access creds; they're authorized by the per-Run token the RunDO
+  // minted at start (validated in the RunDO), not by CF Access.
+  if (
+    c.req.method === "POST" &&
+    (c.req.path.endsWith("/complete") || c.req.path.endsWith("/logs-progress"))
+  ) {
+    return next()
+  }
   const caller = await authenticate(c.req.raw, c.env)
   if (!caller) return c.json({ error: "unauthorized" }, 401)
   c.set("caller" as never, caller as never)
@@ -44,13 +50,33 @@ app.use("/*", async (c, next) => {
 
 app.get("/health", (c) => c.json({ ok: true }))
 
-// Completion callback from the Run's container (logs + exit code).
+// Completion callback from the Run's container (logs + exit code). The RunDO
+// authenticates it via the per-Run token, forwarded here.
 app.post("/runs/:id/complete", async (c) => {
   const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
   return stub.fetch(
     new Request("https://run/complete", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "X-AFK-Run-Token": c.req.header("X-AFK-Run-Token") ?? "",
+      },
+      body: await c.req.text(),
+    }),
+  )
+})
+
+// Incremental log push from the running container. Same per-Run-token auth as
+// /complete; updates the stored log snapshot without ending the Run.
+app.post("/runs/:id/logs-progress", async (c) => {
+  const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
+  return stub.fetch(
+    new Request("https://run/logs-progress", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-AFK-Run-Token": c.req.header("X-AFK-Run-Token") ?? "",
+      },
       body: await c.req.text(),
     }),
   )

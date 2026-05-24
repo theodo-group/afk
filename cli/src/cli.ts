@@ -31,6 +31,7 @@ import { config as loadDotenv } from "dotenv"
 
 import { AwsBackendLive } from "./backends/aws/index.ts"
 import { CloudflareBackendLive } from "./backends/cloudflare/index.ts"
+import { LocalBackendLive } from "./backends/local/index.ts"
 import { CONFIG_FILE } from "./constants.ts"
 
 import { init } from "./commands/init.ts"
@@ -58,6 +59,11 @@ const verbose = Options.boolean("verbose", { aliases: ["v"] }).pipe(
 )
 const quiet = Options.boolean("quiet", { aliases: ["q"] }).pipe(
   Options.withDescription("errors only"),
+)
+const local = Options.boolean("local").pipe(
+  Options.withDescription(
+    "run this command against the Local Backend (your own Docker daemon), overriding the persisted backend for this invocation",
+  ),
 )
 
 // ---------- Layers ----------
@@ -132,8 +138,13 @@ loadProjectDotenv()
  * ConfigService uses, duplicated here because the Layer must be selected
  * before the Effect runtime is up). Defaults to AWS so `afk init` itself
  * still works in an empty directory.
+ *
+ * The Local Backend is reachable two ways (CONTEXT.md "Backend"): a persisted
+ * `backend: "local"`, or a per-command `--local` override which wins regardless
+ * of the persisted backend.
  */
-const pickBackendName = (): "aws" | "cloudflare" => {
+const pickBackendName = (): "aws" | "cloudflare" | "local" => {
+  if (process.argv.includes("--local")) return "local"
   let dir = process.cwd()
   while (true) {
     const candidate = resolve(dir, CONFIG_FILE)
@@ -142,6 +153,7 @@ const pickBackendName = (): "aws" | "cloudflare" => {
         const raw = readFileSync(candidate, "utf8")
         const parsed = JSON.parse(raw) as { backend?: string }
         if (parsed.backend === "cloudflare") return "cloudflare"
+        if (parsed.backend === "local") return "local"
         return "aws"
       } catch {
         return "aws"
@@ -163,7 +175,9 @@ const _backendName = pickBackendName()
 const L_backend =
   _backendName === "cloudflare"
     ? CloudflareBackendLive.pipe(Layer.provideMerge(L_config))
-    : AwsBackendLive.pipe(Layer.provideMerge(L_config))
+    : _backendName === "local"
+      ? LocalBackendLive.pipe(Layer.provideMerge(L_config))
+      : AwsBackendLive.pipe(Layer.provideMerge(L_config))
 const L_build = BuildServiceLive.pipe(Layer.provideMerge(L_backend))
 const L_run = RunServiceLive.pipe(Layer.provideMerge(L_build))
 const L_history = HistoryServiceLive.pipe(Layer.provideMerge(L_run))
@@ -172,7 +186,7 @@ const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(L_history))
 // ---------- Root command ----------
 const rootCommand = Command.make(
   "afk",
-  { json, verbose, quiet },
+  { json, verbose, quiet, local },
   () =>
     Effect.sync(() => {
       console.log("Run `afk --help` for available commands.")
@@ -203,10 +217,17 @@ const cli = Command.run(rootCommand, {
 })
 
 const program = Effect.gen(function* () {
-  const argv = process.argv
-  const isJson = argv.includes("--json")
-  const isVerbose = argv.includes("--verbose") || argv.includes("-v")
-  const isQuiet = argv.includes("--quiet") || argv.includes("-q")
+  const rawArgv = process.argv
+  const isJson = rawArgv.includes("--json")
+  const isVerbose = rawArgv.includes("--verbose") || rawArgv.includes("-v")
+  const isQuiet = rawArgv.includes("--quiet") || rawArgv.includes("-q")
+
+  // `--local` is consumed before the runtime by pickBackendName() (it selects
+  // the Backend layer), so the @effect/cli parser must never see it. Strip it
+  // here rather than declaring it on every command: that lets `--local` appear
+  // anywhere on the line (`afk run --local <cmd>` as well as `afk --local run`)
+  // without a variadic-args command swallowing it as a literal argument.
+  const argv = rawArgv.filter((a) => a !== "--local")
 
   const OutputLive = makeOutputLive(isJson ? "json" : "table")
   const level = isQuiet

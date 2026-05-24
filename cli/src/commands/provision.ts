@@ -50,6 +50,27 @@ export const provision = Command.make("provision", {}, () =>
     const { config, projectRoot } = yield* cfg.load
     const backend = config.backend ?? "aws"
 
+    // Local: nothing to stand up — the Backend is self-contained. Keep the
+    // command in the uniform init → provision → golden build arc by answering
+    // cleanly rather than erroring or being absent.
+    if (backend === "local") {
+      yield* out.emit({
+        data: { backend: "local", provisioned: false },
+        human: () =>
+          out.print(
+            [
+              `Nothing to provision on the Local Backend.`,
+              ``,
+              `Next:`,
+              `  afk golden build                     # build the local Golden Image`,
+              `  afk secrets put github-token <PAT>   # so Runs can clone source`,
+              `  afk run "<command>"`,
+            ].join("\n"),
+          ),
+      })
+      return
+    }
+
     // AWS: provisioning is the Terraform module `afk init` dropped in. Run it
     // for the developer (init + apply) instead of making them cd + terraform.
     if (backend === "aws") {

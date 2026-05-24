@@ -8,13 +8,14 @@ import { cfAuthHeaders } from "./cfAuth.ts"
  * Cloudflare implementation of LogStore.
  *
  * Both read paths share one source: the launcher Worker's
- * `GET /runs/:id/logs`. The CF Backend has no live log-driver — the container
- * captures `docker compose logs` per service and POSTs them to
- * `/runs/:id/complete` when the workload exits, where the Worker stores them
- * (keyed `<service>`) and serves them back here. So:
+ * `GET /runs/:id/logs`. The CF Backend has no live log-driver — instead the
+ * container's golden bootstrap pushes a growing per-service snapshot to
+ * `POST /runs/:id/logs-progress` every few seconds while the workload runs, and
+ * ships the authoritative copy to `/runs/:id/complete` on exit. The Worker
+ * stores the latest snapshot (keyed `<service>`) and serves it back here. So:
  *  - historical (non-follow): one fetch, print, done.
  *  - `--follow`: poll the same endpoint and print incrementally as the stored
- *    log grows (it appears in full once the Run completes).
+ *    snapshot grows (live, not only at completion).
  *
  * `--since` is not honoured: the stored log is the Run's whole bounded output
  * with no per-line timestamps to window against.

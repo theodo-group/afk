@@ -39,6 +39,20 @@ export const CloudflareBackendConfig = Schema.Struct({
 export type CloudflareBackendConfig = typeof CloudflareBackendConfig.Type
 
 /**
+ * Local-specific config block. Read only when `backend == "local"`.
+ *
+ * The Local Backend is fully self-contained — it makes no cloud calls — so the
+ * only thing it needs from config is the list of sidecar images to bake into
+ * the local Golden Image (the `docker:dind-rootless` boot artifact). Everything
+ * else (gitUrl, mainService, timeout) comes from the Backend-neutral top level.
+ */
+export const LocalBackendConfig = Schema.Struct({
+  /** Images pre-pulled into the local Golden Image by `afk golden build`. */
+  cachedImages: Schema.optional(Schema.Array(Schema.String)),
+})
+export type LocalBackendConfig = typeof LocalBackendConfig.Type
+
+/**
  * Legacy block from the very first config schema. Still parsed for backwards
  * compatibility but the value should migrate into `aws.cachedImages`.
  */
@@ -47,7 +61,7 @@ export const LegacyGoldenConfig = Schema.Struct({
 })
 export type LegacyGoldenConfig = typeof LegacyGoldenConfig.Type
 
-export const BackendName = Schema.Literal("aws", "cloudflare")
+export const BackendName = Schema.Literal("aws", "cloudflare", "local")
 export type BackendName = typeof BackendName.Type
 
 export const AfkConfig = Schema.Struct({
@@ -68,6 +82,7 @@ export const AfkConfig = Schema.Struct({
   golden: Schema.optional(LegacyGoldenConfig), // backwards compat — migrate to aws.cachedImages
   aws: Schema.optional(AwsBackendConfig),
   cloudflare: Schema.optional(CloudflareBackendConfig),
+  local: Schema.optional(LocalBackendConfig),
 })
 export type AfkConfig = typeof AfkConfig.Type
 

@@ -84,8 +84,8 @@ export class RunService extends Context.Tag("RunService")<
       runId: string,
       repoName: string,
     ) => Effect.Effect<void>
-    /** Identifier of the active Backend (`"aws"`, `"cloudflare"`, …). */
-    readonly backendName: "aws" | "cloudflare"
+    /** Identifier of the active Backend (`"aws"`, `"cloudflare"`, `"local"`). */
+    readonly backendName: "aws" | "cloudflare" | "local"
   }
 >() {}
 

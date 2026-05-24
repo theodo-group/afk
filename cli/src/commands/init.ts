@@ -8,9 +8,9 @@ const region = Options.text("region").pipe(
   Options.withDescription("AWS region to bootstrap in (provider=aws only)"),
 )
 
-const provider = Options.choice("provider", ["aws", "cloudflare"]).pipe(
+const provider = Options.choice("provider", ["aws", "cloudflare", "local"]).pipe(
   Options.withDefault("aws"),
-  Options.withDescription("cloud backend to bootstrap"),
+  Options.withDescription("backend to bootstrap (local runs on your own Docker daemon)"),
 )
 
 const status = (created: boolean): string => (created ? "created" : "already present")
@@ -20,7 +20,7 @@ export const init = Command.make("init", { region, provider }, ({ region, provid
     const boot = yield* BootstrapService
     const out = yield* Output
     const result = yield* boot.init({
-      provider: provider as "aws" | "cloudflare",
+      provider: provider as "aws" | "cloudflare" | "local",
       region,
       projectDir: process.cwd(),
     })

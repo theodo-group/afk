@@ -34,6 +34,10 @@ interface PersistedState {
   readonly compose?: string
   readonly env: ReadonlyArray<{ name: string; value: string }>
   readonly command: ReadonlyArray<string>
+  /** Secret the container echoes back on its log/complete callbacks, so the
+   *  Worker can authenticate them without CF Access creds (the container has
+   *  none). Replaces trusting the bare, unguessable runId. */
+  readonly completeToken?: string
 }
 
 /** Container subclass the binding refers to. The class itself only needs to
@@ -58,6 +62,8 @@ export class RunDO extends DurableObject<Env> {
         return this.handleKill()
       case "POST /complete":
         return this.handleComplete(req)
+      case "POST /logs-progress":
+        return this.handleLogsProgress(req)
       case "GET /logs":
         return this.handleLogs(url)
       case "GET /ssh-target":
@@ -112,12 +118,17 @@ export class RunDO extends DurableObject<Env> {
       mainService: body.mainService,
       instanceTier: body.instanceTier ?? "standard-1",
     }
+    // Per-Run callback secret: the container echoes this on /complete and
+    // /logs-progress so the Worker can authenticate those (CF-Access-exempt)
+    // callbacks. Replaces trusting the bare runId in the URL.
+    const completeToken = crypto.randomUUID()
     const persisted: PersistedState = {
       meta,
       secrets: body.secretNames,
       ...(body.compose !== undefined ? { compose: body.compose } : {}),
       env: body.env,
       command: body.command,
+      completeToken,
     }
     await this.ctx.storage.put("state", persisted)
 
@@ -155,9 +166,14 @@ export class RunDO extends DurableObject<Env> {
       AFK_TIMEOUT_SECONDS: String(Math.floor(body.timeoutHours * 3600)),
       ...(cred ? { AFK_REGISTRY_USER: cred.username, AFK_REGISTRY_PASSWORD: cred.password } : {}),
       ...(body.compose !== undefined ? { AFK_COMPOSE_YML: body.compose } : {}),
+      // Per-Run callback secret (echoed on /complete + /logs-progress).
+      AFK_COMPLETE_TOKEN: completeToken,
       // Completion callback: the container ships logs + exit code here when the
       // workload ends, so `afk logs` / `afk ls` work without CF's logs API.
       ...(body.workerUrl ? { AFK_COMPLETE_URL: `${body.workerUrl}/runs/${body.runId}/complete` } : {}),
+      // Incremental log push while the workload runs (so `afk logs --follow`
+      // streams a live Run instead of waiting for the final callback).
+      ...(body.workerUrl ? { AFK_PROGRESS_URL: `${body.workerUrl}/runs/${body.runId}/logs-progress` } : {}),
     }
     const container = this.getContainer()
     // NB: the @cloudflare/containers SDK option is `envVars`, NOT `env` —
@@ -203,26 +219,61 @@ export class RunDO extends DurableObject<Env> {
    * code. Keys are compose service names, values base64 (per-service, like the
    * AWS per-service awslogs streams). */
   private async handleComplete(req: Request): Promise<Response> {
+    const denied = await this.checkRunToken(req)
+    if (denied) return denied
     const { exitCode, services } = (await req.json()) as {
       exitCode?: number
       services?: Record<string, string>
     }
     if (services && typeof services === "object") {
-      const decoded: Record<string, string> = {}
-      for (const [name, b64] of Object.entries(services)) {
-        try {
-          decoded[name] = new TextDecoder().decode(
-            Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)),
-          )
-        } catch {
-          decoded[name] = "(could not decode log)"
-        }
-      }
-      await this.ctx.storage.put("logs", decoded)
+      await this.ctx.storage.put("logs", this.decodeServices(services))
     }
     await this.ctx.storage.deleteAlarm()
     await this.markStopped("completed", exitCode)
     return Response.json({ ok: true })
+  }
+
+  /** Incremental log push from the running container (the golden poller).
+   *  Overwrites the stored per-service snapshot with the latest cumulative
+   *  copy so `afk logs --follow` streams a live Run. Does NOT touch status or
+   *  the alarm — only /complete ends the Run. */
+  private async handleLogsProgress(req: Request): Promise<Response> {
+    const denied = await this.checkRunToken(req)
+    if (denied) return denied
+    const { services } = (await req.json()) as {
+      services?: Record<string, string>
+    }
+    if (services && typeof services === "object") {
+      await this.ctx.storage.put("logs", this.decodeServices(services))
+    }
+    return Response.json({ ok: true })
+  }
+
+  /** Authenticate a container callback by the per-Run token. The container has
+   *  no CF Access creds, so these routes are Access-exempt and gated here. */
+  private async checkRunToken(req: Request): Promise<Response | null> {
+    const state = await this.ctx.storage.get<PersistedState>("state")
+    const expected = state?.completeToken
+    const provided = req.headers.get("X-AFK-Run-Token")
+    if (!expected || !provided || provided !== expected) {
+      return Response.json({ error: "invalid run token" }, { status: 403 })
+    }
+    return null
+  }
+
+  /** Decode a base64 per-service log map (keys are service names). */
+  private decodeServices(services: Record<string, string>): Record<string, string> {
+    const decoded: Record<string, string> = {}
+    for (const [name, b64] of Object.entries(services)) {
+      try {
+        decoded[name] = new TextDecoder().decode(
+          Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)),
+        )
+      } catch {
+        decoded[name] = "(could not decode log)"
+      }
+    }
+    return decoded
   }
 
   /** Returns captured logs (set by handleComplete). `?service=<name>` returns

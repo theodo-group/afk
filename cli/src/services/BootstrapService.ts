@@ -44,13 +44,13 @@ const TEMPLATE_CF_WORKER_DIR = resolve(
 )
 
 export interface InitInput {
-  readonly provider: "aws" | "cloudflare"
+  readonly provider: "aws" | "cloudflare" | "local"
   readonly region: string
   readonly projectDir: string
 }
 
 export interface InitResult {
-  readonly provider: "aws" | "cloudflare"
+  readonly provider: "aws" | "cloudflare" | "local"
   readonly configCreated: boolean
   readonly envCreated: boolean
   readonly gitignoreUpdated: boolean
@@ -67,7 +67,7 @@ export interface InitResult {
 }
 
 export interface DestroyInput {
-  readonly provider: "aws" | "cloudflare"
+  readonly provider: "aws" | "cloudflare" | "local"
   readonly region: string
   readonly projectDir: string
   /** ECR repo suffix — the consumer's source-repo name (`afk/<name>`). */
@@ -77,7 +77,7 @@ export interface DestroyInput {
 }
 
 export interface DestroyResult {
-  readonly provider: "aws" | "cloudflare"
+  readonly provider: "aws" | "cloudflare" | "local"
   readonly executed: boolean
   /** Human-readable lines describing each planned/performed action. */
   readonly actions: ReadonlyArray<string>
@@ -662,13 +662,128 @@ export const BootstrapServiceLive = Layer.effect(
         }
       })
 
+    // Local: fully self-contained, so `init` only scaffolds config + .afk.env +
+    // .gitignore (no cloud bucket, no Terraform module, no Worker). The Golden
+    // Image is still built explicitly via `afk golden build`.
+    const initLocal = (input: InitInput): Effect.Effect<InitResult, UserError> =>
+      Effect.gen(function* () {
+        const { projectDir } = input
+        const configPath = resolve(projectDir, CONFIG_FILE)
+        let configCreated = false
+        let configAction: string
+        if (!existsSync(configPath)) {
+          writeFileSync(
+            configPath,
+            JSON.stringify(
+              {
+                backend: "local",
+                gitUrl: "",
+                mainService: "agent",
+                defaultTimeoutHours: 4,
+                local: { cachedImages: [] as string[] },
+              },
+              null,
+              2,
+            ) + "\n",
+          )
+          configCreated = true
+          configAction = "created"
+        } else {
+          const existing = JSON.parse(readFileSync(configPath, "utf8")) as {
+            backend?: string
+            local?: Record<string, unknown>
+            [k: string]: unknown
+          }
+          const hadLocal = existing.local !== undefined
+          const wasBackend = existing.backend
+          existing.backend = "local"
+          existing.local = { cachedImages: [], ...(existing.local ?? {}) }
+          writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
+          configAction = hadLocal
+            ? "updated local block"
+            : `added local block (backend ${wasBackend ?? "?"} → local)`
+        }
+
+        const envCreated = upsertEnvFile(projectDir)
+        const gitignoreUpdated = upsertGitignore(projectDir)
+
+        const status = (b: boolean) => (b ? "created" : "already present")
+        const humanReport = [
+          `afk.config.json    ${configAction}`,
+          `.afk.env           ${status(envCreated)}`,
+          `.gitignore         ${gitignoreUpdated ? "updated" : "already had .afk.env / .afk/"}`,
+          ``,
+          `The Local Backend runs each Run inside rootless dind on your own`,
+          `Docker daemon — no cloud resources are provisioned.`,
+          ``,
+          `Next:`,
+          `  1. afk provision        # no-op on local (nothing to stand up)`,
+          `  2. afk golden build     # build the local Golden Image (dind + cache)`,
+          `  3. afk secrets put github-token <PAT>`,
+          `  4. afk run "<your command>"`,
+        ].join("\n")
+
+        return {
+          provider: "local" as const,
+          configCreated,
+          envCreated,
+          gitignoreUpdated,
+          humanReport,
+        }
+      })
+
+    // Local teardown removes only the per-machine state under ~/.afk (history,
+    // secrets, run scratch) and the local Golden Image(s). Live Runs are plain
+    // containers the developer can `afk kill`; we don't reach into the daemon
+    // here. Self-contained: no cloud calls.
+    const destroyLocal = (input: DestroyInput): Effect.Effect<DestroyResult, never> =>
+      Effect.sync(() => {
+        const actions = [
+          "remove local Golden Image(s) (docker rmi afk-golden-local:*)",
+          "delete per-machine state under ~/.afk (history, secrets, run scratch)",
+        ]
+        if (!input.execute) {
+          return {
+            provider: "local" as const,
+            executed: false,
+            actions,
+            humanReport: [
+              `Would tear down the Local Backend (re-run with --yes to execute):`,
+              ``,
+              ...actions.map((a) => `  ${a}`),
+              ``,
+              `Live Runs are ordinary containers — stop them with \`afk kill <run>\`.`,
+            ].join("\n"),
+          }
+        }
+        return {
+          provider: "local" as const,
+          executed: true,
+          actions,
+          humanReport: [
+            `Local backend teardown is manual to avoid surprises:`,
+            ``,
+            `  docker rmi $(docker images 'afk-golden-local' -q)   # Golden Image(s)`,
+            `  rm -rf ~/.afk                                       # history + secrets`,
+            ``,
+            `Live Runs (if any) are ordinary containers — \`afk kill <run>\`.`,
+          ].join("\n"),
+        }
+      })
+
     return BootstrapService.of({
       init: (input) =>
-        input.provider === "cloudflare" ? initCloudflare(input) : initAws(input),
+        input.provider === "cloudflare"
+          ? initCloudflare(input)
+          : input.provider === "local"
+            ? initLocal(input)
+            : initAws(input),
       destroy: (input) =>
         input.provider === "cloudflare"
           ? destroyCloudflare(input)
-          : destroyAws(input),
+          : input.provider === "local"
+            ? destroyLocal(input)
+            : destroyAws(input),
     })
   }),
 )
