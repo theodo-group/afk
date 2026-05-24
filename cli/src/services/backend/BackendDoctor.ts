@@ -7,6 +7,16 @@ export interface CheckResult {
   readonly detail: string
 }
 
+/** Smart-constructor for a CheckResult: name + condition + what to say either
+ * way — collapses the repeated `{ name, ok, detail: ok ? … : … }` literal that
+ * every backend's doctor would otherwise spell out. */
+export const check = (
+  name: string,
+  ok: boolean,
+  whenOk: string,
+  whenNot: string,
+): CheckResult => ({ name, ok, detail: ok ? whenOk : whenNot })
+
 /**
  * Backend-neutral health checks specific to the active Backend — the CLI tools,
  * credentials, and endpoints a given provider needs (AWS: `aws`/`terraform`/

@@ -3,6 +3,7 @@ import { Subprocess } from "../../infra/Subprocess.ts"
 import { Sts } from "../../adapters/aws/Sts.ts"
 import {
   BackendDoctor,
+  check,
   type CheckResult,
 } from "../../services/backend/BackendDoctor.ts"
 
@@ -12,44 +13,33 @@ export const AwsBackendDoctorLive = Layer.effect(
     const sub = yield* Subprocess
     const sts = yield* Sts
 
-    const hasBinary = (bin: string) =>
+    const binaryCheck = (bin: string, whenNot: string) =>
       sub.run("which", [bin]).pipe(
         Effect.map(() => true),
         Effect.catchAll(() => Effect.succeed(false)),
+        Effect.map((ok) => check(bin, ok, "found", whenNot)),
       )
 
-    const checks = Effect.gen(function* () {
-      const results: CheckResult[] = []
+    const toolchainChecks = Effect.all([
+      binaryCheck("terraform", "not on PATH"),
+      binaryCheck("aws", "not on PATH"),
+      binaryCheck("session-manager-plugin", "not on PATH (required for `afk attach`)"),
+    ])
 
-      for (const bin of ["terraform", "aws"]) {
-        const has = yield* hasBinary(bin)
-        results.push({ name: bin, ok: has, detail: has ? "found" : "not on PATH" })
-      }
+    const credentialsChecks = sts.callerIdentity.pipe(
+      Effect.match({
+        onFailure: (): ReadonlyArray<CheckResult> => [
+          check("aws credentials", false, "", "could not call sts:GetCallerIdentity"),
+        ],
+        onSuccess: (id): ReadonlyArray<CheckResult> => [
+          check("aws credentials", true, `${id.Arn} (account ${id.Account})`, ""),
+        ],
+      }),
+    )
 
-      const ssmPlugin = yield* hasBinary("session-manager-plugin")
-      results.push({
-        name: "session-manager-plugin",
-        ok: ssmPlugin,
-        detail: ssmPlugin ? "found" : "not on PATH (required for `afk attach`)",
-      })
-
-      const identity = yield* sts.callerIdentity.pipe(Effect.either)
-      results.push(
-        identity._tag === "Right"
-          ? {
-              name: "aws credentials",
-              ok: true,
-              detail: `${identity.right.Arn} (account ${identity.right.Account})`,
-            }
-          : {
-              name: "aws credentials",
-              ok: false,
-              detail: "could not call sts:GetCallerIdentity",
-            },
-      )
-
-      return results
-    })
+    const checks = Effect.all([toolchainChecks, credentialsChecks]).pipe(
+      Effect.map((groups) => groups.flat()),
+    )
 
     return BackendDoctor.of({ checks })
   }),

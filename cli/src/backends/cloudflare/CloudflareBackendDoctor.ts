@@ -5,17 +5,9 @@ import { Subprocess } from "../../infra/Subprocess.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import {
   BackendDoctor,
+  check,
   type CheckResult,
 } from "../../services/backend/BackendDoctor.ts"
-
-// name + condition + what to say either way — collapses the repeated
-// `{ name, ok, detail: ok ? … : … }` literal into one readable call.
-const check = (
-  name: string,
-  ok: boolean,
-  whenOk: string,
-  whenNot: string,
-): CheckResult => ({ name, ok, detail: ok ? whenOk : whenNot })
 
 const isConfiguredWorkerUrl = (url: string | undefined): url is string =>
   typeof url === "string" && url.length > 0 && !url.startsWith("REPLACE_ME")
