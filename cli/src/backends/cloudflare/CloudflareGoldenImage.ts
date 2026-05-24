@@ -304,7 +304,7 @@ export const CloudflareGoldenImageLive = Layer.effect(
       const cachedImages = config.cloudflare?.cachedImages ?? []
       const accountId = yield* requireAccountId
 
-      const version = goldenVersionHash(cachedImages)
+      const version = goldenVersionHash(cachedImages, ENTRYPOINT_SCRIPT)
       const builtAt = new Date().toISOString()
       const imageUri = goldenUri(accountId, version)
 
