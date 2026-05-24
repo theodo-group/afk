@@ -76,6 +76,21 @@ export const CloudflareTeamLive = Layer.effect(
           "POST /team/:name",
           `${base}/team/${encodeURIComponent(name)}`,
           { method: "POST" },
+        ).pipe(
+          // Creating a service token fails with `not_enabled` until the account
+          // has turned on Cloudflare Access — a one-time Zero Trust setup the
+          // raw API blob doesn't explain.
+          Effect.catchTag("CloudflareError", (e): Effect.Effect<never, UserError | CloudflareError> =>
+            e.message.includes("not_enabled")
+              ? Effect.fail(
+                  new UserError({
+                    message:
+                      "Cloudflare Access is not enabled on this account, so service tokens cannot be created.",
+                    hint: "Enable Zero Trust Access (pick a team domain) at https://one.dash.cloudflare.com, then retry `afk team add`.",
+                  }),
+                )
+              : Effect.fail(e),
+          ),
         )) as { name: string; clientId: string; clientSecret: string }
         return {
           member: {

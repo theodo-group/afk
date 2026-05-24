@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { ConfigService } from "../../services/ConfigService.ts"
+import { Subprocess } from "../../infra/Subprocess.ts"
 import { RunHistory } from "../../services/backend/RunHistory.ts"
 import { GoldenImageStore } from "../../services/backend/GoldenImage.ts"
 import {
@@ -20,8 +21,12 @@ import {
 import { COMPOSE_FILE, DEFAULT_MAIN_SERVICE } from "../../constants.ts"
 import type { Run, RunStatus } from "../../schema/Run.ts"
 import { assembleRunPlan } from "../../services/RunPlan.ts"
+import { cfAuthHeaders } from "./cfAuth.ts"
 
 const DEFAULT_INSTANCE_TIER = "standard-1"
+
+/** Where the golden bootstrap writes the compose file inside the Container. */
+const CONTAINER_COMPOSE_PATH = "/etc/afk/compose.yml"
 
 const mapStatus = (s: string): RunStatus => {
   switch (s) {
@@ -80,15 +85,6 @@ const wireToRun = (m: RunMetadataWire): Run => ({
   ...(m.stopReason !== undefined ? { stopReason: m.stopReason } : {}),
 })
 
-const authHeaders = (): Record<string, string> => {
-  const id = process.env.AFK_CF_CLIENT_ID
-  const secret = process.env.AFK_CF_CLIENT_SECRET
-  const out: Record<string, string> = { "content-type": "application/json" }
-  if (id) out["CF-Access-Client-Id"] = id
-  if (secret) out["CF-Access-Client-Secret"] = secret
-  return out
-}
-
 const httpJson = <T>(
   operation: string,
   url: string,
@@ -98,7 +94,7 @@ const httpJson = <T>(
     try: async (): Promise<T> => {
       const res = await fetch(url, {
         ...init,
-        headers: { ...authHeaders(), ...(init?.headers ?? {}) },
+        headers: { ...cfAuthHeaders(), ...(init?.headers ?? {}) },
       })
       const text = await res.text()
       if (!res.ok) {
@@ -127,6 +123,7 @@ export const CloudflareComputeLive = Layer.effect(
   Compute,
   Effect.gen(function* () {
     const cfg = yield* ConfigService
+    const sub = yield* Subprocess
     const history = yield* RunHistory
     const golden = yield* GoldenImageStore
 
@@ -144,11 +141,6 @@ export const CloudflareComputeLive = Layer.effect(
       }
       return url.replace(/\/$/, "")
     })
-
-    const wssUrl = (https: string): string =>
-      https.startsWith("https://")
-        ? "wss://" + https.slice("https://".length)
-        : "ws://" + https.replace(/^http:\/\//, "")
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
@@ -362,84 +354,65 @@ export const CloudflareComputeLive = Layer.effect(
         })
       })
 
+    /**
+     * Interactive shell into a Run via `wrangler containers ssh`.
+     *
+     * Why SSH and not the launcher Worker: the CF Containers SDK's
+     * `container.exec()` is pipe-based (no PTY/resize), so it can't host a real
+     * terminal. `wrangler containers ssh` allocates a proper PTY. The Worker is
+     * still used to resolve runId → instance id (Owner-scoped), but the shell
+     * itself talks to Cloudflare's control plane directly — the only CF command
+     * that does, hence the account-token requirement below.
+     *
+     * Setup the consumer must do once: add an `ssh-ed25519` key under
+     * `[[containers.authorized_keys]]` in worker/afk/wrangler.toml and redeploy
+     * (`afk doctor` flags this). See README "Attach".
+     */
     const attach = (runId: string, opts: AttachOptions) =>
       Effect.gen(function* () {
+        const { config } = yield* cfg.load
         const workerUrl = yield* resolveWorkerUrl
-        const params = new URLSearchParams()
-        if (opts.service) params.set("service", opts.service)
-        if (opts.host) params.set("host", "true")
-        const q = params.toString()
-        const target = `${wssUrl(workerUrl)}/runs/${encodeURIComponent(runId)}/attach${q ? `?${q}` : ""}`
+        const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
 
-        // TODO: verify WS upgrade flow with CF Access (Bun supports custom
-        // headers via the second arg). On non-Access setups the headers are
-        // ignored.
-        yield* Effect.tryPromise({
-          try: () =>
-            new Promise<void>((resolveP, rejectP) => {
-              // Bun exposes a global WebSocket constructor that accepts an
-              // options bag with `headers` (a Bun extension).
-              const WS = (globalThis as unknown as {
-                WebSocket: new (url: string, opts?: { headers?: Record<string, string> }) => WebSocket
-              }).WebSocket
-              const ws = new WS(target, { headers: authHeaders() }) as WebSocket
-              const onResize = () => {
-                try {
-                  ws.send(
-                    JSON.stringify({
-                      type: "resize",
-                      cols: process.stdout.columns ?? 80,
-                      rows: process.stdout.rows ?? 24,
-                    }),
-                  )
-                } catch {
-                  /* ignore */
-                }
-              }
-              ws.onopen = () => {
-                onResize()
-                process.on("SIGWINCH", onResize)
-                process.stdin.setRawMode?.(true)
-                process.stdin.on("data", (chunk) => {
-                  try {
-                    ws.send(chunk)
-                  } catch {
-                    /* ignore */
-                  }
-                })
-              }
-              ws.onmessage = (ev: MessageEvent) => {
-                const data = ev.data as unknown
-                if (typeof data === "string") {
-                  process.stdout.write(data)
-                } else if (data instanceof ArrayBuffer) {
-                  process.stdout.write(Buffer.from(data))
-                } else if (data instanceof Uint8Array) {
-                  process.stdout.write(Buffer.from(data))
-                }
-              }
-              ws.onerror = (ev: Event) => {
-                rejectP(
-                  new CloudflareError({
-                    operation: `WSS attach ${runId}`,
-                    message: (ev as { message?: string }).message ?? "websocket error",
-                  }),
-                )
-              }
-              ws.onclose = () => {
-                process.removeListener("SIGWINCH", onResize)
-                process.stdin.setRawMode?.(false)
-                resolveP()
-              }
+        if ((process.env.CLOUDFLARE_API_TOKEN ?? "").length === 0) {
+          return yield* Effect.fail(
+            new UserError({
+              message: "CLOUDFLARE_API_TOKEN is required for `afk attach` on Cloudflare.",
+              hint: "Attach shells out to `wrangler containers ssh`, which needs account-level auth. Export a token with Workers Containers:Edit and retry.",
             }),
-          catch: (e): CloudflareError =>
-            e instanceof CloudflareError
-              ? e
-              : new CloudflareError({
-                  operation: `WSS attach ${runId}`,
-                  message: String(e),
-                }),
-        })
+          )
+        }
+
+        const { instanceId } = yield* httpJson<{ instanceId: string }>(
+          `GET /runs/${runId}/ssh-target`,
+          `${workerUrl}/runs/${encodeURIComponent(runId)}/ssh-target`,
+        )
+
+        const args = ["containers", "ssh", instanceId]
+        if (!opts.host) {
+          // Default/`--service`: drop into a service container rather than the
+          // outer host. Mirror the AWS attach fallback (compose exec → docker
+          // exec, bash → sh). `--host` skips this and lands on the host shell.
+          // LIVE-VERIFY: whether `wrangler containers ssh <id> -- <cmd>`
+          // allocates a TTY for the trailing command (needed for a usable
+          // shell). See IMPROVEMENTS.md #11.
+          const service = opts.service ?? mainService
+          const inner =
+            `docker compose -f ${CONTAINER_COMPOSE_PATH} exec ${service} bash 2>/dev/null ` +
+            `|| docker compose -f ${CONTAINER_COMPOSE_PATH} exec ${service} sh 2>/dev/null ` +
+            `|| docker exec -it ${service} bash 2>/dev/null || docker exec -it ${service} sh`
+          args.push("--", "sh", "-lc", inner)
+        }
+
+        yield* sub.runInteractive("wrangler", args).pipe(
+          Effect.mapError(
+            (e): CloudflareError =>
+              new CloudflareError({
+                operation: `wrangler containers ssh ${runId}`,
+                message: e.message,
+              }),
+          ),
+        )
       })
 
     const callerPrincipal = Effect.sync(() => ({

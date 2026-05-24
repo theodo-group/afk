@@ -16,16 +16,66 @@ const CF_REGISTRY_HOST = "registry.cloudflare.com"
  * registry.cloudflare.com — it always 401s — so we delegate to wrangler
  * rather than driving `docker push` ourselves.)
  *
- * Existence checks and tag listing call the Distribution v2 HTTP API. The
- * exact auth flow CF uses for that registry is not 100% pinned down at the
- * time of writing — see the TODO markers. When in doubt we return "false" /
- * "[]" so BuildService always rebuilds + pushes (correct, just less efficient).
+ * Existence checks and tag listing reuse the same proven path as the golden
+ * image store: `wrangler containers images list --json`, which performs the
+ * CF managed-registry auth handshake itself.
  */
+
+/** Drop a leading `<accountId>/` prefix; the registry lists repos bare. */
+const bareRepo = (repoName: string): string =>
+  repoName.includes("/") ? repoName.slice(repoName.lastIndexOf("/") + 1) : repoName
+
 export const CloudflareImageRegistryLive = Layer.effect(
   ImageRegistry,
   Effect.gen(function* () {
     const sub = yield* Subprocess
     const cfg = yield* ConfigService
+
+    // List the tags for one repo via `wrangler containers images list --json`.
+    // wrangler prints human banners (telemetry notice, …) to stdout before the
+    // JSON payload, so slice out the top-level array rather than parsing raw.
+    // The registry lists repos by their bare name (no `<accountId>/` prefix).
+    const tagsForRepo = (repoName: string) =>
+      sub
+        .run("wrangler", ["containers", "images", "list", "--json"])
+        .pipe(
+          Effect.mapError(
+            (e) =>
+              new CloudflareError({
+                operation: "registry:list",
+                message: `wrangler containers images list failed: ${e.stderr || String(e)}`,
+              }),
+          ),
+          Effect.flatMap((result) =>
+            Effect.try({
+              try: () => {
+                const start = result.stdout.indexOf("[")
+                const end = result.stdout.lastIndexOf("]")
+                if (start === -1 || end === -1 || end < start) {
+                  throw new Error(
+                    `no JSON array in output: ${result.stdout.slice(0, 200)}`,
+                  )
+                }
+                return JSON.parse(
+                  result.stdout.slice(start, end + 1),
+                ) as ReadonlyArray<{
+                  name: string
+                  tags?: ReadonlyArray<string>
+                }>
+              },
+              catch: (cause) =>
+                new CloudflareError({
+                  operation: "registry:list",
+                  message: `could not parse wrangler images JSON: ${String(cause)}`,
+                }),
+            }),
+          ),
+          Effect.map((repos) => {
+            const target = bareRepo(repoName)
+            const repo = repos.find((r) => r.name === target)
+            return [...(repo?.tags ?? [])]
+          }),
+        )
 
     const accountId = cfg.load.pipe(
       Effect.flatMap((r) => {
@@ -58,14 +108,20 @@ export const CloudflareImageRegistryLive = Layer.effect(
     return ImageRegistry.of({
       registryUri: registryUriEffect,
 
-      // TODO: verify CF registry auth flow at
-      // https://developers.cloudflare.com/containers/platform-details/image-registry/
-      // For now we always report "false" so BuildService rebuilds + pushes.
-      imageExists: (_repoName, _tag) => Effect.succeed(false),
+      imageExists: (repoName, tag) =>
+        tagsForRepo(repoName).pipe(Effect.map((tags) => tags.includes(tag))),
 
-      // TODO: verify CF registry tag listing. Same rationale as imageExists.
-      listLatestTagsByPrefix: (_repoName, _tagPrefix, _limit) =>
-        Effect.succeed([]),
+      // Newest tags matching `<repo>:<tagPrefix>*`. The registry surfaces no
+      // build order, so newest-first ≈ descending tag sort (mirrors golden).
+      listLatestTagsByPrefix: (repoName, tagPrefix, limit) =>
+        tagsForRepo(repoName).pipe(
+          Effect.map((tags) =>
+            tags
+              .filter((t) => t.startsWith(tagPrefix))
+              .sort((a, b) => b.localeCompare(a))
+              .slice(0, limit),
+          ),
+        ),
 
       ensureRepoAndAuth: (_repoName) =>
         Effect.gen(function* () {

@@ -13,7 +13,7 @@ export const ls = Command.make("ls", {}, () =>
       human: () =>
         out.printTable(list, [
           { header: "NAME", value: (s) => s.name },
-          { header: "SSM PATH", value: (s) => s.ssmName },
+          { header: "REFERENCE", value: (s) => s.reference },
           {
             header: "LAST MODIFIED",
             value: (s) => s.lastModified ?? "-",

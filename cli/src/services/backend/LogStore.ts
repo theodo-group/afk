@@ -12,8 +12,9 @@ export interface TailInput {
 
 /**
  * Backend-neutral log tailing. On AWS the implementation shells out to
- * `aws logs tail`; on Cloudflare it queries Workers Logs (and Tail Workers
- * for follow=true).
+ * `aws logs tail`; on Cloudflare it reads the per-Run logs the container ships
+ * to the launcher Worker on exit (`GET /runs/:id/logs`), polling that endpoint
+ * when follow=true.
  */
 export class LogStore extends Context.Tag("LogStore")<
   LogStore,
