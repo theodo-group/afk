@@ -2,7 +2,7 @@ import { Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { Ec2, type Tag as Ec2Tag } from "../../adapters/aws/Ec2.ts"
+import { Ec2 } from "../../adapters/aws/Ec2.ts"
 import { resolveAfkNetworkPlacement } from "./AwsNetworkPlacement.ts"
 import { Sts } from "../../adapters/aws/Sts.ts"
 import { Ssm } from "../../adapters/aws/Ssm.ts"
@@ -14,103 +14,28 @@ import {
   Compute,
   type AttachOptions,
   type PreparedRun,
-  type RunStarted,
   type StartInput,
 } from "../../services/backend/Compute.ts"
-import {
-  AwsError,
-  ConfigError,
-  UserError,
-} from "../../infra/Errors.ts"
+import { ConfigError, UserError } from "../../infra/Errors.ts"
+import type { Run } from "../../schema/Run.ts"
 import {
   AFK_VM_INSTANCE_PROFILE,
   COMPOSE_FILE,
-  DEFAULT_INSTANCE_TYPE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
-  LOG_GROUP_PREFIX,
   LOG_RETENTION_DAYS,
-  TAG_BRANCH,
   TAG_MANAGED,
   TAG_OWNER,
-  TAG_REPO,
-  TAG_RUN_ID,
-  TAG_SHA,
-  TAG_STARTED_AT,
-  TAG_TIMEOUT_HOURS,
   VM_AFK_DIR,
   VM_COMPOSE_PATH,
 } from "../../constants.ts"
-import type { Run, RunStatus } from "../../schema/Run.ts"
-import { buildUserData } from "../../services/UserData.ts"
-import { assembleRunPlan } from "../../services/RunPlan.ts"
-
-const mapEc2State = (s: string): RunStatus => {
-  switch (s) {
-    case "pending":
-      return "PROVISIONING"
-    case "running":
-      return "RUNNING"
-    case "shutting-down":
-    case "stopping":
-      return "STOPPING"
-    case "stopped":
-    case "terminated":
-    default:
-      return "STOPPED"
-  }
-}
-
-const tagsToMap = (tags: ReadonlyArray<Ec2Tag>): Record<string, string> =>
-  Object.fromEntries(tags.map((t) => [t.key, t.value]))
-
-const ec2InstanceToRun = (i: {
-  instanceId: string
-  state: string
-  instanceType: string
-  launchTime?: string
-  imageId: string
-  spotInstanceRequestId?: string
-  stateReason?: string
-  tags: ReadonlyArray<Ec2Tag>
-}): Run | null => {
-  const m = tagsToMap(i.tags)
-  const runId = m[TAG_RUN_ID]
-  const owner = m[TAG_OWNER]
-  if (!runId || !owner) return null
-  const spot = Boolean(i.spotInstanceRequestId)
-  return {
-    runId: runId as Run["runId"],
-    resourceId: i.instanceId,
-    status: mapEc2State(i.state),
-    backend: "aws",
-    owner,
-    branch: m[TAG_BRANCH] ?? "",
-    sha: m[TAG_SHA] ?? "",
-    image: i.imageId,
-    backendDetails: {
-      instanceType: i.instanceType,
-      spot: String(spot),
-    },
-    startedAt: m[TAG_STARTED_AT] ?? i.launchTime,
-    stoppedAt: undefined,
-    stopReason: i.stateReason,
-  }
-}
-
-interface AwsBackendPlan {
-  readonly region: string
-  readonly accountId: string
-  readonly amiId: string
-  readonly instanceType: string
-  readonly spot: boolean
-  readonly subnetIds: ReadonlyArray<string>
-  readonly securityGroupId: string
-  readonly tags: ReadonlyArray<Ec2Tag>
-  readonly userData: string
-  readonly imageWasSkipped: boolean
-  readonly startedAt: string
-}
+import {
+  type AwsBackendPlan,
+  ec2InstanceToRun,
+  finalizeAwsPlan,
+  planAwsRun,
+  toRunStarted,
+} from "./AwsRunPlan.ts"
 
 export const AwsComputeLive = Layer.effect(
   Compute,
@@ -178,46 +103,21 @@ export const AwsComputeLive = Layer.effect(
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
+        // Shell: gather the effectful inputs the core needs.
         const { config, envEntries, projectRoot, sourceRepoName } = yield* cfg.load
         const identity = yield* sts.callerIdentity
-        const region = config.aws?.region ?? DEFAULT_REGION
-
         const latestGolden = yield* golden.findLatest
         if (!latestGolden) {
           return yield* Effect.fail(
             new UserError({
-              message: `No Golden Image found in ${region}.`,
+              message: `No Golden Image found in ${config.aws?.region ?? DEFAULT_REGION}.`,
               hint: "Run `afk golden build` to create one.",
             }),
           )
         }
 
-        const instanceTypeOverride =
-          typeof input.backendOverrides?.instanceType === "string"
-            ? input.backendOverrides.instanceType
-            : undefined
-        const instanceType =
-          instanceTypeOverride ??
-          config.aws?.defaultInstanceType ??
-          config.defaultInstanceType ??
-          DEFAULT_INSTANCE_TYPE
-        const whitelist =
-          config.aws?.allowedInstanceTypes ?? config.allowedInstanceTypes
-        if (whitelist && whitelist.length > 0 && !whitelist.includes(instanceType)) {
-          return yield* Effect.fail(
-            new UserError({
-              message: `Instance type '${instanceType}' is not in allowedInstanceTypes.`,
-              hint: `Pick one of: ${whitelist.join(", ")}`,
-            }),
-          )
-        }
-
-        // The orchestrator (RunService) has already done the image build.
-        const built = input.built
-        const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
-
         const composePath = resolve(projectRoot, COMPOSE_FILE)
-        const composeRaw = existsSync(composePath)
+        const composeContent = existsSync(composePath)
           ? yield* Effect.try({
               try: () => readFileSync(composePath, "utf8"),
               catch: (cause) =>
@@ -228,108 +128,34 @@ export const AwsComputeLive = Layer.effect(
             })
           : undefined
 
-        const runId = randomUUID()
-        const startedAt = new Date().toISOString()
-
-        const assembled = assembleRunPlan({
+        // Core: pure resolution + validation. Non-deterministic seeds are
+        // generated here in the shell and injected, so the core stays testable.
+        const core = yield* planAwsRun({
           config,
           envEntries,
-          built,
-          ref: input.ref,
-          timeoutHours: input.timeoutHours,
-          mainService,
-          backend: "aws",
-          composeContent: composeRaw,
-          runId,
+          sourceRepoName,
+          identity: { Account: identity.Account, UserId: identity.UserId },
+          latestGoldenId: latestGolden.id,
+          composeContent,
+          input,
+          runId: randomUUID(),
+          startedAt: new Date().toISOString(),
         })
-        if (assembled.composeError) {
-          return yield* Effect.fail(new UserError({ message: assembled.composeError }))
-        }
-        for (const w of assembled.warnings) console.warn(`warning: ${w}`)
-        const { timeoutHours, timeoutSeconds, env, secrets, composeContent, composeUsed } =
-          assembled
+        for (const w of core.warnings) console.warn(`warning: ${w}`)
 
-        const logGroup = `${LOG_GROUP_PREFIX}/${sourceRepoName}`
-        yield* logs.ensureLogGroup(region, logGroup, LOG_RETENTION_DAYS)
-
-        const { subnetIds, securityGroupId } = yield* resolveAfkNetworkPlacement(
-          ec2,
-          region,
+        // Shell: side effects gated on a valid plan, then pure finalize.
+        yield* logs.ensureLogGroup(
+          core.region,
+          core.preparedBase.logChannel,
+          LOG_RETENTION_DAYS,
         )
-
-        const userData = buildUserData({
-          runId,
-          region,
-          accountId: identity.Account,
-          repoName: sourceRepoName,
-          mainService,
-          image: built.image,
-          command: input.command,
-          timeoutSeconds,
-          env,
-          // UserData still expects {name, ssmName} for back-compat with the AWS
-          // entrypoint which dereferences via the VM's instance profile.
-          secrets: secrets.map((s) => ({
-            name: s.name,
-            ssmName: `/afk/secrets/${s.secretName}`,
-          })),
-          compose: composeContent,
-        })
-
-        const onDemandOverride =
-          input.backendOverrides?.onDemand === true ||
-          input.backendOverrides?.onDemand === "true"
-        const spot = !onDemandOverride
-
-        const tags: ReadonlyArray<Ec2Tag> = [
-          { key: TAG_OWNER, value: identity.UserId },
-          { key: TAG_RUN_ID, value: runId },
-          { key: TAG_BRANCH, value: built.branch },
-          { key: TAG_SHA, value: built.sha },
-          { key: TAG_MANAGED, value: "true" },
-          { key: TAG_REPO, value: sourceRepoName },
-          { key: TAG_TIMEOUT_HOURS, value: String(timeoutHours) },
-          { key: TAG_STARTED_AT, value: startedAt },
-          { key: "Name", value: `afk-${sourceRepoName}-${runId.slice(0, 8)}` },
-        ]
-
-        const backendPlan: AwsBackendPlan = {
-          region,
-          accountId: identity.Account,
-          amiId: latestGolden.id,
-          instanceType,
-          spot,
-          subnetIds,
-          securityGroupId,
-          tags,
-          userData,
-          imageWasSkipped: built.skipped,
-          startedAt,
-        }
-
-        const plan: PreparedRun = {
-          runId,
-          command: input.command,
-          image: built.image,
-          branch: built.branch,
-          sha: built.sha,
-          composeUsed,
-          mainService,
-          timeoutHours,
-          timeoutSeconds,
-          owner: identity.UserId,
-          repoName: sourceRepoName,
-          env,
-          secrets,
-          logChannel: logGroup,
-          backendPlan: backendPlan as unknown as Record<string, unknown>,
-        }
-        return plan
+        const placement = yield* resolveAfkNetworkPlacement(ec2, core.region)
+        return finalizeAwsPlan(core, placement)
       })
 
     const launch = (plan: PreparedRun) =>
       Effect.gen(function* () {
-        const aws = plan.backendPlan as unknown as AwsBackendPlan
+        const aws = plan.backendPlan as AwsBackendPlan
 
         const { instanceId } = yield* ec2.runInstance({
           region: aws.region,
@@ -369,21 +195,7 @@ export const AwsComputeLive = Layer.effect(
             ),
           )
 
-        const result: RunStarted = {
-          runId: plan.runId,
-          resourceId: instanceId,
-          image: plan.image,
-          branch: plan.branch,
-          sha: plan.sha,
-          composeUsed: plan.composeUsed,
-          backendDetails: {
-            instanceType: aws.instanceType,
-            spot: String(aws.spot),
-            instanceId,
-          },
-          logChannel: plan.logChannel,
-        }
-        return result
+        return toRunStarted(plan, aws, instanceId)
       })
 
     const kill = (runId: string) =>
