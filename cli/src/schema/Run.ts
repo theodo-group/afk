@@ -45,5 +45,12 @@ export const Run = Schema.Struct({
   startedAt: Schema.optional(Schema.String),
   stoppedAt: Schema.optional(Schema.String),
   stopReason: Schema.optional(Schema.String),
+  /**
+   * For a retained (STOPPED) Run: when its compute primitive will be
+   * auto-reclaimed (stoppedAt + retentionDays). Its presence is what marks a
+   * STOPPED Run as still resumable via `afk attach`. Set by the Local Backend
+   * only; absent on Backends that reclaim immediately.
+   */
+  retainedUntil: Schema.optional(Schema.String),
 })
 export type Run = typeof Run.Type

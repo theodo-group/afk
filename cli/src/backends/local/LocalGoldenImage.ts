@@ -8,48 +8,10 @@ import {
   GoldenImageStore,
   type GoldenImage,
 } from "../../services/backend/GoldenImage.ts"
-import { goldenVersionHash } from "../../services/GoldenImageVersion.ts"
 import { DockerError } from "../../infra/Errors.ts"
 import { LOCAL_GOLDEN_REPO } from "../../constants.ts"
 import { LOCAL_BOOTSTRAP } from "./localBootstrap.ts"
-
-/** Sanitize an image ref into a filename-safe token for the OCI archive name. */
-const safeName = (imageRef: string): string =>
-  imageRef.replace(/[^a-zA-Z0-9._-]+/g, "_")
-
-const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
-  const lines: string[] = []
-  lines.push(`# syntax=docker/dockerfile:1.7`)
-  lines.push(`FROM alpine:3.20 AS skopeo-bake`)
-  lines.push(`RUN apk add --no-cache skopeo ca-certificates`)
-  lines.push(`WORKDIR /out`)
-  for (const img of cachedImages) {
-    lines.push(
-      `RUN skopeo copy docker://${img} oci-archive:/out/${safeName(img)}.tar`,
-    )
-  }
-  lines.push(``)
-  lines.push(`FROM docker:28-dind-rootless`)
-  lines.push(`USER root`)
-  lines.push(
-    `RUN mkdir -p /var/afk/cache /var/afk/run && chown -R rootless:rootless /var/afk`,
-  )
-  if (cachedImages.length > 0) {
-    lines.push(`COPY --from=skopeo-bake /out/ /var/afk/cache/`)
-  }
-  lines.push(`COPY bootstrap.sh /var/afk/bootstrap.sh`)
-  lines.push(
-    `RUN chmod +x /var/afk/bootstrap.sh && chown rootless:rootless /var/afk/bootstrap.sh`,
-  )
-  // Run as the rootless user (uid 1000): on a developer's own machine the
-  // container is the isolation boundary and rootless dind avoids needing
-  // --privileged at `docker run`. Mirrors the Cloudflare Golden Image shape.
-  lines.push(`USER rootless`)
-  lines.push(`ENTRYPOINT ["/var/afk/bootstrap.sh"]`)
-  lines.push(`CMD ["sh", "-c", "tail -f /dev/null"]`)
-  lines.push(``)
-  return lines.join("\n")
-}
+import { planLocalGolden } from "./LocalGoldenPlan.ts"
 
 interface DockerImageRow {
   readonly Repository: string
@@ -120,17 +82,17 @@ export const LocalGoldenImageLive = Layer.effect(
 
     const build = Effect.gen(function* () {
       const { config, projectRoot } = yield* cfg.load
-      const cachedImages = config.local?.cachedImages ?? []
-      const version = goldenVersionHash(cachedImages, LOCAL_BOOTSTRAP)
-      const builtAt = new Date().toISOString()
-      const imageRef = `${LOCAL_GOLDEN_REPO}:${version}`
+
+      const plan = planLocalGolden({
+        config,
+        bootstrap: LOCAL_BOOTSTRAP,
+        builtAt: new Date().toISOString(),
+      })
+      const { cachedImages, version, builtAt, imageRef } = plan
 
       const buildDir = resolve(projectRoot, ".afk", "local-golden-build")
       mkdirSync(buildDir, { recursive: true })
-      writeFileSync(
-        resolve(buildDir, "Dockerfile"),
-        dockerfileFor(cachedImages),
-      )
+      writeFileSync(resolve(buildDir, "Dockerfile"), plan.dockerfile)
       writeFileSync(resolve(buildDir, "bootstrap.sh"), LOCAL_BOOTSTRAP, {
         mode: 0o755,
       })

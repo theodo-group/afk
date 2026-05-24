@@ -20,14 +20,10 @@ export class ConfigService extends Context.Tag("ConfigService")<
   }
 >() {}
 
-const findProjectRoot = (start: string): string | null => {
-  let dir = start
-  while (true) {
-    if (existsSync(resolve(dir, CONFIG_FILE))) return dir
-    const parent = resolve(dir, "..")
-    if (parent === dir) return null
-    dir = parent
-  }
+const findProjectRoot = (dir: string): string | null => {
+  if (existsSync(resolve(dir, CONFIG_FILE))) return dir
+  const parent = resolve(dir, "..")
+  return parent === dir ? null : findProjectRoot(parent)
 }
 
 /**

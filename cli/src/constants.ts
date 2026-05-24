@@ -7,6 +7,10 @@ export const AFK_DEVELOPER_POLICY = "afk-developer"
 export const AFK_ADMIN_POLICY = "afk-admin"
 export const AFK_SWEEPER_ROLE = "afk-sweeper-role"
 export const AFK_STATE_BUCKET_PREFIX = "afk-tf-state"
+// Per-account/region S3 bucket Session Artifacts are shipped to on the AWS
+// Backend (Terraform-managed; see terraform/aws/s3.tf). Name derived the same
+// way as the state bucket: `<prefix>-<accountId>-<region>`.
+export const AFK_ARTIFACTS_BUCKET_PREFIX = "afk-artifacts"
 
 export const SSM_SECRET_PREFIX = "/afk/secrets"
 export const SSM_RUNTIME_PREFIX = "/afk/runs"
@@ -16,6 +20,18 @@ export const ECR_LIFECYCLE_DAYS = 7
 
 export const LOG_GROUP_PREFIX = "/afk"
 export const LOG_RETENTION_DAYS = 30
+
+// ---------- Session Artifacts ----------
+//
+// A matched file larger than this is skipped with a warning rather than
+// truncated — partial JSONL is worse than none (see CONTEXT.md "Session
+// Artifact"). Generous default; collection is opt-in regardless.
+export const SESSION_ARTIFACT_MAX_BYTES = 25 * 1024 * 1024
+
+// Subdir/prefix the collected files land under: on Local the per-Run scratch
+// dir (`~/.afk/runs/<id>/<dir>`), on the cloud Backends the per-Run storage
+// prefix. Kept identical across Backends so the retrieval seam is uniform.
+export const SESSION_ARTIFACT_DIR = "session-artifacts"
 
 // Tags applied to every Run's EC2 instance.
 export const TAG_OWNER = "afk:owner"
@@ -44,6 +60,9 @@ export const DEFAULT_ALLOWED_INSTANCE_TYPES = [
 ] as const
 export const DEFAULT_TIMEOUT_HOURS = 4
 export const DEFAULT_MAIN_SERVICE = "agent"
+/** Days a finished Run's compute primitive is retained before reclamation.
+ * Honoured by the Local Backend only; cloud Backends self-reclaim on exit. */
+export const DEFAULT_RETENTION_DAYS = 7
 export const DEFAULT_REGION = "us-east-1"
 
 // Golden image staleness threshold for `afk doctor`.

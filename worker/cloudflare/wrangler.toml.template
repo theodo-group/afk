@@ -71,6 +71,13 @@ database_id = "{{d1_database_id}}"
 binding = "DEVELOPERS_KV"
 id = "{{developers_kv_id}}"
 
+# --- R2 (per-Run Session Artifacts) ---
+# Created by `afk provision` before deploy. Holds one gzipped tar per Run,
+# keyed <repo>/<runId>/session-artifacts.tar.gz.
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "{{worker_name}}-session-artifacts"
+
 # --- Secrets (set via `wrangler secret put` after first deploy) ---
 # CF_API_TOKEN  — needed by `afk team add` to provision service tokens.
 # (Other AFK_SECRET_* values: per-developer secrets set by `afk secrets put`.)

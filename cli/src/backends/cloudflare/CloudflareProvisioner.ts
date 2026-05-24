@@ -35,7 +35,7 @@ export const CloudflareProvisionerLive = Layer.effect(
     const out = yield* Output
 
     const provision = Effect.gen(function* () {
-      const { projectRoot } = yield* cfg.load
+      const { projectRoot, config } = yield* cfg.load
 
       const apiToken = process.env.CLOUDFLARE_API_TOKEN
       if (!apiToken) {
@@ -167,6 +167,22 @@ export const CloudflareProvisionerLive = Layer.effect(
           `could not parse namespace id from:\n${stdout}`,
         tomlPatch: (kvId) => ({ kvId }),
       })
+
+      // R2 bucket for Session Artifacts — must exist before deploy (the
+      // wrangler.toml r2_buckets binding resolves at deploy time). Idempotent:
+      // a re-create on an existing bucket is treated as success.
+      yield* out.print("• ensuring R2 bucket…")
+      const artifactsBucket = `${config.cloudflare?.workerName ?? "afk-launcher"}-session-artifacts`
+      yield* wrangler(["r2", "bucket", "create", artifactsBucket]).pipe(
+        Effect.matchEffect({
+          onSuccess: () =>
+            out.print(`  created R2 bucket (${artifactsBucket})`),
+          onFailure: (e) =>
+            /already|exists|10004/i.test(e.message)
+              ? out.print(`  reusing R2 bucket (${artifactsBucket})`)
+              : Effect.fail(e),
+        }),
+      )
 
       // Migration is CREATE IF NOT EXISTS — safe to re-run.
       yield* out.print("• applying D1 migration…")

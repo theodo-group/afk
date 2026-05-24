@@ -1,0 +1,8 @@
+language js
+
+`Bun.spawn` as $match where {
+  register_diagnostic(
+    span = $match,
+    message = "`Bun.spawn` only belongs in infra/Subprocess.ts — shell out through the Subprocess tag (code-style.md §5)."
+  )
+}

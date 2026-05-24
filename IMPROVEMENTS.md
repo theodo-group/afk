@@ -1,7 +1,6 @@
 # Improvements
 
-Backlog of known gaps in the v2 implementation, ordered by value.
-Bugs found during live testing are folded in where relevant.
+Backlog of known gaps in the v2 implementation, ordered by value. Bugs found during live testing are folded in where relevant.
 
 **Status legend:** ✅ shipped · ⏳ pending · ⏸ deferred
 
@@ -19,35 +18,16 @@ Bugs found during live testing are folded in where relevant.
 
 ## 11. CF attach via `wrangler containers ssh` — live verification ⏳
 
-**Decision (2026-05).** The original WSS path proxied stdio through the launcher
-Worker into `container.exec()`. That was abandoned: the SDK's `exec()` is
-pipe-based (`ContainerExecOptions` has no `tty`, `ExecProcess` has no resize —
-see `workers-types/experimental`), so it cannot host a real terminal. Attach now
-shells out to Cloudflare's `wrangler containers ssh <instance-id>`, which
-allocates a proper PTY. The launcher Worker only resolves runId → instance id
-(Owner-scoped, `GET /runs/:id/ssh-target`); the SSH connection itself runs
-CLI-side and needs local `CLOUDFLARE_API_TOKEN` + an `ssh-ed25519` key in the
-deployed `worker/afk/wrangler.toml`.
+**Decision (2026-05).** The original WSS path proxied stdio through the launcher Worker into `container.exec()`. That was abandoned: the SDK's `exec()` is pipe-based (`ContainerExecOptions` has no `tty`, `ExecProcess` has no resize — see `workers-types/experimental`), so it cannot host a real terminal. Attach now shells out to Cloudflare's `wrangler containers ssh <instance-id>`, which allocates a proper PTY. The launcher Worker only resolves runId → instance id (Owner-scoped, `GET /runs/:id/ssh-target`); the SSH connection itself runs CLI-side and needs local `CLOUDFLARE_API_TOKEN` + an `ssh-ed25519` key in the deployed `worker/afk/wrangler.toml`.
 
-**Live-verify gates (cannot be settled from docs — the public API reference
-404s on the containers section, and nothing is deployed yet):**
-  - `RunDO.resolveInstanceId()` — the CF REST paths (`/containers/applications`,
-    `…/instances`) and *which* instance field carries the Container DO id used
-    for correlation. Three lines are marked `// LIVE-VERIFY` in `runDO.ts`.
-  - Whether `wrangler containers ssh <id> -- <cmd>` allocates a TTY for the
-    trailing command (needed for the `--service`/default service-container path;
-    `--host` gets the plain interactive shell regardless). Marked `// LIVE-VERIFY`
-    in `CloudflareCompute.ts:attach`.
+**Live-verify gates (cannot be settled from docs — the public API reference 404s on the containers section, and nothing is deployed yet):**
 
-**Approach.** Deploy to a real CF account, add an ed25519 key + redeploy, run a
-real `afk run` with sidecars, then exercise `afk attach <run-id>`,
-`afk attach --service postgres <run-id>`, `afk attach --host <run-id>`. Resize
-the terminal mid-session. Confirm the Owner check rejects another developer's
-Run.
+- `RunDO.resolveInstanceId()` — the CF REST paths (`/containers/applications`, `…/instances`) and _which_ instance field carries the Container DO id used for correlation. Three lines are marked `// LIVE-VERIFY` in `runDO.ts`.
+- Whether `wrangler containers ssh <id> -- <cmd>` allocates a TTY for the trailing command (needed for the `--service`/default service-container path; `--host` gets the plain interactive shell regardless). Marked `// LIVE-VERIFY` in `CloudflareCompute.ts:attach`.
 
-**Touches:** `cli/src/backends/cloudflare/CloudflareCompute.ts:attach`,
-`worker/cloudflare/src/runDO.ts` (`handleSshTarget` / `resolveInstanceId`),
-`worker/cloudflare/src/launcher.ts` (`/runs/:id/ssh-target`).
+**Approach.** Deploy to a real CF account, add an ed25519 key + redeploy, run a real `afk run` with sidecars, then exercise `afk attach <run-id>`, `afk attach --service postgres <run-id>`, `afk attach --host <run-id>`. Resize the terminal mid-session. Confirm the Owner check rejects another developer's Run.
+
+**Touches:** `cli/src/backends/cloudflare/CloudflareCompute.ts:attach`, `worker/cloudflare/src/runDO.ts` (`handleSshTarget` / `resolveInstanceId`), `worker/cloudflare/src/launcher.ts` (`/runs/:id/ssh-target`).
 
 ---
 
@@ -65,7 +45,7 @@ Run.
 
 First end-to-end CF deploy against a real account (the verification work #12 anticipated). Remaining setup-gap findings listed for follow-up.
 
-**15.8 `afk doctor` should precheck the Workers Paid / Containers entitlement ⏳.** CF Containers requires the Workers Paid plan; on a Free-plan account every container op fails with a bare `Unauthorized` (the real *"requires the Workers Paid plan"* message is buried in wrangler's log file). `afk doctor` (and `golden build`) should detect this early via `wrangler containers list` and surface the upgrade URL.
+**15.8 `afk doctor` should precheck the Workers Paid / Containers entitlement ⏳.** CF Containers requires the Workers Paid plan; on a Free-plan account every container op fails with a bare `Unauthorized` (the real _"requires the Workers Paid plan"_ message is buried in wrangler's log file). `afk doctor` (and `golden build`) should detect this early via `wrangler containers list` and surface the upgrade URL.
 
 **15.17 `afk logs` options must precede the positional run-id ⏳ (cosmetic).** `afk logs <id> --follow` errors with "Received unknown argument '--follow'"; `afk logs --follow <id>` works. An @effect/cli ordering quirk — surface a clearer error or allow interleaving.
 

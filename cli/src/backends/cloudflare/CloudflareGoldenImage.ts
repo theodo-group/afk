@@ -9,235 +9,19 @@ import {
   GoldenImageStore,
   type GoldenImage,
 } from "../../services/backend/GoldenImage.ts"
-import { goldenVersionHash } from "../../services/GoldenImageVersion.ts"
+import {
+  GOLDEN_REPO,
+  goldenUri,
+  planCloudflareGolden,
+} from "./CloudflareGoldenPlan.ts"
+import { CLOUDFLARE_BOOTSTRAP } from "./cloudflareBootstrap.ts"
 import { patchWranglerToml } from "../../infra/CfToml.ts"
 import { CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
 import { parseWranglerJsonArray } from "./wranglerJson.ts"
 
-const CF_REGISTRY_HOST = "registry.cloudflare.com"
-const GOLDEN_REPO = "afk-golden"
-
-/** Sanitize an image ref into a filename-safe token for the OCI archive name. */
-const safeName = (imageRef: string): string =>
-  imageRef.replace(/[^a-zA-Z0-9._-]+/g, "_")
-
 /** Extract the registry tag from a full golden image id (or accept a bare tag). */
 const tagOf = (id: string): string =>
   id.includes(":") ? id.slice(id.lastIndexOf(":") + 1) : id
-
-const ENTRYPOINT_SCRIPT = `#!/bin/sh
-# afk golden entrypoint — loads skopeo-baked OCI archives into rootless dockerd
-# before handing off to the container's own command. The CF Container runtime
-# invokes this as PID 1.
-set -eu
-
-CACHE_DIR="\${AFK_GOLDEN_CACHE_DIR:-/var/afk/cache}"
-DOCKERD_LOG="\${AFK_DOCKERD_LOG:-/var/log/dockerd.log}"
-
-# Start the Docker engine. On CF Containers (Firecracker microVM) the VM is
-# the isolation boundary, so we run dockerd as ROOT with:
-#   --exec-opt native.cgroupdriver=cgroupfs  (no systemd in the container)
-#   --bridge=none --iptables=false           (CF blocks NAT/netfilter setup)
-# and run workloads with --network host. (Rootless + slirp4netns is not viable
-# here: /dev/net/tun is root-only and netns/netlink ops are denied to non-root.)
-# This combination is verified working on Cloudflare Containers.
-echo "afk-golden: starting dockerd"
-dockerd --bridge=none --iptables=false --exec-opt native.cgroupdriver=cgroupfs \\
-  >"\$DOCKERD_LOG" 2>&1 &
-i=0
-while [ \$i -lt 60 ]; do docker info >/dev/null 2>&1 && break; i=\$((i+1)); sleep 1; done
-if ! docker info >/dev/null 2>&1; then
-  echo "afk-golden: dockerd did not become ready in 60s" >&2
-  tail -n 200 "\$DOCKERD_LOG" >&2 || true
-  exit 1
-fi
-
-# Hydrate the daemon with our baked OCI archives.
-if [ -d "\$CACHE_DIR" ]; then
-  for archive in "\$CACHE_DIR"/*.tar; do
-    [ -e "\$archive" ] || continue
-    echo "afk-golden: loading \$archive"
-    docker load -i "\$archive" || echo "afk-golden: warn: failed to load \$archive" >&2
-  done
-fi
-
-echo "afk-golden: bootstrap complete"
-
-# --- Run the per-Run workload, if one was injected -------------------------
-# The RunDO passes the wrapped agent image + command + (optional) compose +
-# a short-lived registry pull credential + the workload env (base64) via the
-# Container's environment. This is the CF analog of the AWS user_data: golden
-# provides the engine, the workload runs inside it. Absent these (e.g. an
-# \`afk attach --host\` debug boot), we fall back to the container's own CMD.
-if [ -n "\${AFK_IMAGE:-}" ]; then
-  LOG=/var/afk/workload.log
-  : > "\$LOG"
-
-  ENV_FILE=/var/afk/run.env
-  if [ -n "\${AFK_RUN_ENV_B64:-}" ]; then
-    echo "\$AFK_RUN_ENV_B64" | base64 -d > "\$ENV_FILE"
-  else
-    : > "\$ENV_FILE"
-  fi
-  chmod 600 "\$ENV_FILE"
-
-  # Authenticate to the CF managed registry with the minted pull credential.
-  if [ -n "\${AFK_REGISTRY_PASSWORD:-}" ]; then
-    echo "\$AFK_REGISTRY_PASSWORD" | timeout 60 docker login registry.cloudflare.com \\
-      -u "\${AFK_REGISTRY_USER:-v1}" --password-stdin >>"\$LOG" 2>&1
-  fi
-
-  echo "afk-golden: pulling \$AFK_IMAGE" >>"\$LOG"
-  timeout 600 docker pull "\$AFK_IMAGE" >>"\$LOG" 2>&1
-
-  MAIN_SVC="\${AFK_MAIN_SERVICE:-agent}"
-
-  # Materialise the compose graph (if any) and learn the service list up front —
-  # the incremental log poller below starts BEFORE \`docker compose up\`.
-  if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
-    mkdir -p /etc/afk
-    printf '%s' "\$AFK_COMPOSE_YML" > /etc/afk/compose.yml
-    SVCS=\$(docker compose -f /etc/afk/compose.yml config --services 2>/dev/null) || SVCS="\$MAIN_SVC"
-  else
-    SVCS="\$MAIN_SVC"
-  fi
-
-  # Snapshot every service's current logs into /var/afk/svc-<svc>.log. Called
-  # periodically by the poller and once more after teardown.
-  capture_services() {
-    if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
-      for svc in \$SVCS; do
-        docker compose -f /etc/afk/compose.yml logs --no-log-prefix --no-color "\$svc" \\
-          > "/var/afk/svc-\$svc.log" 2>/dev/null || true
-      done
-    else
-      cp "\$LOG" "/var/afk/svc-\$MAIN_SVC.log" 2>/dev/null || true
-    fi
-  }
-
-  # Build the {"<svc>":"<base64>"} object from the captured files. The main
-  # service gets a larger byte budget than the diagnostic sidecars.
-  build_services_json() {
-    printf '{'
-    SEP=""
-    for svc in \$SVCS; do
-      f="/var/afk/svc-\$svc.log"
-      [ -f "\$f" ] || continue
-      if [ "\$svc" = "\$MAIN_SVC" ]; then BUDGET=131072; else BUDGET=32768; fi
-      B64=\$(tail -c "\$BUDGET" "\$f" 2>/dev/null | base64 | tr -d '\\n')
-      printf '%s"%s":"%s"' "\$SEP" "\$svc" "\$B64"
-      SEP=","
-    done
-    printf '}'
-  }
-
-  # POST a JSON body to the launcher, carrying the per-Run token so the Worker
-  # can authenticate the callback (the container has no CF Access creds).
-  post_json() {
-    wget -qO- --header="Content-Type: application/json" \\
-      --header="X-AFK-Run-Token: \${AFK_COMPLETE_TOKEN:-}" \\
-      --post-data="\$2" "\$1" >/dev/null 2>&1 || true
-  }
-
-  # Incremental log push: while the workload runs, ship a growing per-service
-  # snapshot every few seconds so \`afk logs --follow\` streams a live Run rather
-  # than waiting for exit. The final /complete callback ships the authoritative
-  # copy. (The stored snapshot only grows, so the CLI prints byte deltas.)
-  POLLER_PID=""
-  if [ -n "\${AFK_PROGRESS_URL:-}" ]; then
-    (
-      set +e
-      while true; do
-        sleep "\${AFK_LOG_PUSH_INTERVAL:-5}"
-        capture_services
-        post_json "\$AFK_PROGRESS_URL" "\$(printf '{"services":%s}' "\$(build_services_json)")"
-      done
-    ) &
-    POLLER_PID=\$!
-  fi
-
-  TIMEOUT="\${AFK_TIMEOUT_SECONDS:-14400}"
-  set +e
-  if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
-    # Export the vars the compose file interpolates: \${AFK_COMMAND} and
-    # \${AFK_ENV_FILE} (the env_file: path), plus source the env for the rest.
-    export AFK_COMMAND
-    export AFK_ENV_FILE="\$ENV_FILE"
-    set -a; . "\$ENV_FILE"; set +a
-    timeout "\$TIMEOUT" docker compose -f /etc/afk/compose.yml \\
-      up --exit-code-from "\$MAIN_SVC" --abort-on-container-exit \\
-      >>"\$LOG" 2>&1
-    RUN_EXIT=\$?
-  else
-    # --network host: child containers share the CF container's network (no
-    # bridge/NAT is available — see dockerd flags above).
-    timeout "\$TIMEOUT" docker run --rm --network host \\
-      --env-file "\$ENV_FILE" "\$AFK_IMAGE" sh -c "\$AFK_COMMAND" \\
-      >>"\$LOG" 2>&1
-    RUN_EXIT=\$?
-  fi
-
-  # Stop the poller and take a final snapshot BEFORE compose teardown removes
-  # the containers, so the per-service payload is complete.
-  [ -n "\$POLLER_PID" ] && kill "\$POLLER_PID" 2>/dev/null || true
-  capture_services
-  if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
-    docker compose -f /etc/afk/compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
-  fi
-
-  cat "\$LOG" 2>/dev/null || true
-  echo "afk-golden: workload exited \$RUN_EXIT"
-
-  # Authoritative final callback: per-service log map + exit code. The Worker
-  # stores the map (so \`afk logs\` default/--service/--all work) and flips the
-  # Run to STOPPED.
-  if [ -n "\${AFK_COMPLETE_URL:-}" ]; then
-    post_json "\$AFK_COMPLETE_URL" \\
-      "\$(printf '{"exitCode":%s,"services":%s}' "\$RUN_EXIT" "\$(build_services_json)")"
-  fi
-  exit "\$RUN_EXIT"
-fi
-
-echo "afk-golden: no AFK_IMAGE; exec \$@"
-exec "\$@"
-`
-
-const dockerfileFor = (cachedImages: ReadonlyArray<string>): string => {
-  // Each skopeo copy is its own RUN so layer caching is per-image.
-  const bakeSteps = cachedImages.map(
-    (img) =>
-      `RUN skopeo copy --override-os linux docker://${img} oci-archive:/out/${safeName(img)}.tar`,
-  )
-  // COPY the bake output only when there is something to copy.
-  const copyCache =
-    cachedImages.length > 0
-      ? [`COPY --from=skopeo-bake /out/ /var/afk/cache/`]
-      : []
-  return [
-    `# syntax=docker/dockerfile:1.7`,
-    `FROM alpine:3.20 AS skopeo-bake`,
-    `RUN apk add --no-cache skopeo ca-certificates`,
-    `WORKDIR /out`,
-    ...bakeSteps,
-    ``,
-    `FROM docker:28-dind-rootless`,
-    `USER root`,
-    `RUN mkdir -p /var/afk/cache /var/log && chown -R rootless:rootless /var/afk /var/log`,
-    ...copyCache,
-    `COPY bootstrap.sh /var/afk/bootstrap.sh`,
-    `RUN chmod +x /var/afk/bootstrap.sh`,
-    // Run as ROOT (no `USER rootless`). On CF's Firecracker microVM the VM is the
-    // isolation boundary; root is required to run dockerd with a working engine
-    // (open /dev/net/tun, manage cgroups, attach containers to the host network).
-    // Rootless (uid 1000) cannot — /dev/net/tun is root-only and netns ops are
-    // denied. Verified on Cloudflare Containers.
-    `ENTRYPOINT ["/var/afk/bootstrap.sh"]`,
-    // Default CMD just keeps the container alive — the per-Run wrapper
-    // (FROM afk-golden:*) overrides this with the agent's actual command.
-    `CMD ["sh", "-c", "tail -f /dev/null"]`,
-    ``,
-  ].join("\n")
-}
 
 /**
  * Cloudflare implementation of the Golden Image store. The artifact is a
@@ -271,9 +55,6 @@ export const CloudflareGoldenImageLive = Layer.effect(
       }
       return id
     })
-
-    const goldenUri = (accountId: string, tag: string): string =>
-      `${CF_REGISTRY_HOST}/${accountId}/${GOLDEN_REPO}:${tag}`
 
     // List the golden tags via `wrangler containers images list --json`, which
     // performs the CF managed-registry auth handshake itself. The registry
@@ -334,12 +115,15 @@ export const CloudflareGoldenImageLive = Layer.effect(
 
     const build = Effect.gen(function* () {
       const { config, projectRoot } = yield* cfg.load
-      const cachedImages = config.cloudflare?.cachedImages ?? []
       const accountId = yield* requireAccountId
 
-      const version = goldenVersionHash(cachedImages, ENTRYPOINT_SCRIPT)
-      const builtAt = new Date().toISOString()
-      const imageUri = goldenUri(accountId, version)
+      const plan = planCloudflareGolden({
+        config,
+        accountId,
+        bootstrap: CLOUDFLARE_BOOTSTRAP,
+        builtAt: new Date().toISOString(),
+      })
+      const { cachedImages, version, builtAt, imageUri } = plan
 
       // Materialize build context under .afk/cf-golden-build/ (gitignored via
       // the `.afk/` entry that `afk init` adds for us).
@@ -347,13 +131,14 @@ export const CloudflareGoldenImageLive = Layer.effect(
       yield* Effect.try({
         try: () => {
           mkdirSync(buildDir, { recursive: true })
+          writeFileSync(resolve(buildDir, "Dockerfile"), plan.dockerfile)
           writeFileSync(
-            resolve(buildDir, "Dockerfile"),
-            dockerfileFor(cachedImages),
+            resolve(buildDir, "bootstrap.sh"),
+            CLOUDFLARE_BOOTSTRAP,
+            {
+              mode: 0o755,
+            },
           )
-          writeFileSync(resolve(buildDir, "bootstrap.sh"), ENTRYPOINT_SCRIPT, {
-            mode: 0o755,
-          })
         },
         catch: (cause) =>
           new ConfigError({

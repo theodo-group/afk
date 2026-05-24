@@ -57,6 +57,7 @@ const stream = (
   options: RunOptions = {},
 ): Effect.Effect<void, SubprocessError> =>
   Effect.async<void, SubprocessError>((resume) => {
+    // biome-ignore lint/plugin/no-bun-spawn: this file is the single sanctioned home for Bun.spawn (code-style.md §5)
     const proc = Bun.spawn([command, ...args], {
       cwd: options.cwd,
       env: options.env ? { ...process.env, ...options.env } : process.env,
@@ -110,6 +111,7 @@ const spawn = (
 ): Effect.Effect<RunResult, SubprocessError> =>
   Effect.tryPromise({
     try: async () => {
+      // biome-ignore lint/plugin/no-bun-spawn: this file is the single sanctioned home for Bun.spawn (code-style.md §5)
       const proc = Bun.spawn([command, ...args], {
         cwd: options.cwd,
         env: options.env ? { ...process.env, ...options.env } : process.env,

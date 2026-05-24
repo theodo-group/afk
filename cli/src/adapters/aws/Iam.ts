@@ -1,13 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
-
-const awsError =
-  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-    new AwsError({
-      operation: op,
-      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-    })
+import { makeAwsCli } from "./awsCli.ts"
 
 export interface IamUser {
   readonly userName: string
@@ -70,21 +64,20 @@ export const IamLive = Layer.effect(
   Iam,
   Effect.gen(function* () {
     const sub = yield* Subprocess
+    const aws = makeAwsCli(sub)
 
     return Iam.of({
       createUser: (userName) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             User: { UserName: string; Arn: string; CreateDate: string }
-          }>("aws", [
+          }>("iam:CreateUser", [
             "iam",
             "create-user",
             "--user-name",
             userName,
             "--path",
             "/afk/",
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.map((r) => ({
@@ -92,105 +85,79 @@ export const IamLive = Layer.effect(
               arn: r.User.Arn,
               createDate: r.User.CreateDate,
             })),
-            Effect.mapError(awsError("iam:CreateUser")),
           ),
       deleteUser: (userName) =>
-        sub
-          .run("aws", ["iam", "delete-user", "--user-name", userName])
-          .pipe(Effect.asVoid, Effect.mapError(awsError("iam:DeleteUser"))),
+        aws.run("iam:DeleteUser", [
+          "iam",
+          "delete-user",
+          "--user-name",
+          userName,
+        ]),
       attachUserPolicy: (userName, policyArn) =>
-        sub
-          .run("aws", [
-            "iam",
-            "attach-user-policy",
-            "--user-name",
-            userName,
-            "--policy-arn",
-            policyArn,
-          ])
-          .pipe(
-            Effect.asVoid,
-            Effect.mapError(awsError("iam:AttachUserPolicy")),
-          ),
+        aws.run("iam:AttachUserPolicy", [
+          "iam",
+          "attach-user-policy",
+          "--user-name",
+          userName,
+          "--policy-arn",
+          policyArn,
+        ]),
       detachUserPolicy: (userName, policyArn) =>
-        sub
-          .run("aws", [
-            "iam",
-            "detach-user-policy",
-            "--user-name",
-            userName,
-            "--policy-arn",
-            policyArn,
-          ])
-          .pipe(
-            Effect.asVoid,
-            Effect.mapError(awsError("iam:DetachUserPolicy")),
-          ),
+        aws.run("iam:DetachUserPolicy", [
+          "iam",
+          "detach-user-policy",
+          "--user-name",
+          userName,
+          "--policy-arn",
+          policyArn,
+        ]),
       createAccessKey: (userName) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             AccessKey: { AccessKeyId: string; SecretAccessKey: string }
-          }>("aws", [
+          }>("iam:CreateAccessKey", [
             "iam",
             "create-access-key",
             "--user-name",
             userName,
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.map((r) => ({
               accessKeyId: r.AccessKey.AccessKeyId,
               secretAccessKey: r.AccessKey.SecretAccessKey,
             })),
-            Effect.mapError(awsError("iam:CreateAccessKey")),
           ),
       listAccessKeys: (userName) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             AccessKeyMetadata: ReadonlyArray<{ AccessKeyId: string }>
-          }>("aws", [
+          }>("iam:ListAccessKeys", [
             "iam",
             "list-access-keys",
             "--user-name",
             userName,
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.map((r) => r.AccessKeyMetadata.map((k) => k.AccessKeyId)),
-            Effect.mapError(awsError("iam:ListAccessKeys")),
           ),
       deleteAccessKey: (userName, accessKeyId) =>
-        sub
-          .run("aws", [
-            "iam",
-            "delete-access-key",
-            "--user-name",
-            userName,
-            "--access-key-id",
-            accessKeyId,
-          ])
-          .pipe(
-            Effect.asVoid,
-            Effect.mapError(awsError("iam:DeleteAccessKey")),
-          ),
+        aws.run("iam:DeleteAccessKey", [
+          "iam",
+          "delete-access-key",
+          "--user-name",
+          userName,
+          "--access-key-id",
+          accessKeyId,
+        ]),
       listUsersByPathPrefix: (prefix) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             Users: ReadonlyArray<{
               UserName: string
               Arn: string
               CreateDate?: string
             }>
-          }>("aws", [
-            "iam",
-            "list-users",
-            "--path-prefix",
-            prefix,
-            "--output",
-            "json",
-          ])
+          }>("iam:ListUsers", ["iam", "list-users", "--path-prefix", prefix])
           .pipe(
             Effect.map((r) =>
               r.Users.map<IamUser>((u) => ({
@@ -199,81 +166,60 @@ export const IamLive = Layer.effect(
                 createDate: u.CreateDate,
               })),
             ),
-            Effect.mapError(awsError("iam:ListUsers")),
           ),
       tagUser: (userName, tags) =>
-        sub
-          .run("aws", [
-            "iam",
-            "tag-user",
-            "--user-name",
-            userName,
-            "--tags",
-            ...tags.map((t) => `Key=${t.Key},Value=${t.Value}`),
-          ])
-          .pipe(Effect.asVoid, Effect.mapError(awsError("iam:TagUser"))),
+        aws.run("iam:TagUser", [
+          "iam",
+          "tag-user",
+          "--user-name",
+          userName,
+          "--tags",
+          ...tags.map((t) => `Key=${t.Key},Value=${t.Value}`),
+        ]),
       getRole: (roleName) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             Role: { Arn: string; AssumeRolePolicyDocument: unknown }
-          }>("aws", [
-            "iam",
-            "get-role",
-            "--role-name",
-            roleName,
-            "--output",
-            "json",
-          ])
+          }>("iam:GetRole", ["iam", "get-role", "--role-name", roleName])
           .pipe(
             Effect.map((r) => ({
               arn: r.Role.Arn,
               assumeRolePolicy: r.Role.AssumeRolePolicyDocument,
             })),
-            Effect.mapError(awsError("iam:GetRole")),
           ),
       updateAssumeRolePolicy: (roleName, policy) =>
-        sub
-          .run("aws", [
-            "iam",
-            "update-assume-role-policy",
-            "--role-name",
-            roleName,
-            "--policy-document",
-            JSON.stringify(policy),
-          ])
-          .pipe(
-            Effect.asVoid,
-            Effect.mapError(awsError("iam:UpdateAssumeRolePolicy")),
-          ),
+        aws.run("iam:UpdateAssumeRolePolicy", [
+          "iam",
+          "update-assume-role-policy",
+          "--role-name",
+          roleName,
+          "--policy-document",
+          JSON.stringify(policy),
+        ]),
       getPolicyArn: (policyName) =>
-        sub
-          .runJson<{
+        aws
+          .json<{
             Policies: ReadonlyArray<{ PolicyName: string; Arn: string }>
-          }>("aws", [
+          }>("iam:ListPolicies", [
             "iam",
             "list-policies",
             "--scope",
             "Local",
             "--query",
             `Policies[?PolicyName=='${policyName}']`,
-            "--output",
-            "json",
           ])
           .pipe(
             Effect.flatMap((r) => {
               const first = r.Policies[0]
-              if (!first)
-                return Effect.fail(
-                  new AwsError({
-                    operation: "iam:ListPolicies",
-                    message: `policy '${policyName}' not found`,
-                  }),
-                )
-              return Effect.succeed(first.Arn)
+              return first
+                ? Effect.succeed(first.Arn)
+                : Effect.fail(
+                    new AwsError({
+                      operation: "iam:ListPolicies",
+                      message: `policy '${policyName}' not found`,
+                    }),
+                  )
             }),
-            Effect.mapError((e) =>
-              e instanceof AwsError ? e : awsError("iam:ListPolicies")(e),
-            ),
           ),
     })
   }),

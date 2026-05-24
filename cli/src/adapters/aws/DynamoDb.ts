@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
+import { makeAwsCli } from "./awsCli.ts"
 
 /**
  * Thin wrapper over the `aws dynamodb` CLI. We pass DynamoDB JSON
@@ -50,13 +51,6 @@ export interface ScanInput {
   readonly limit?: number
 }
 
-const awsError =
-  (op: string) => (e: { _tag: string; stderr?: string; cause?: unknown }) =>
-    new AwsError({
-      operation: op,
-      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-    })
-
 export class DynamoDb extends Context.Tag("DynamoDb")<
   DynamoDb,
   {
@@ -77,23 +71,20 @@ export const DynamoDbLive = Layer.effect(
   DynamoDb,
   Effect.gen(function* () {
     const sub = yield* Subprocess
+    const aws = makeAwsCli(sub)
 
     return DynamoDb.of({
       putItem: (input) =>
-        sub
-          .run("aws", [
-            "dynamodb",
-            "put-item",
-            "--region",
-            input.region,
-            "--table-name",
-            input.table,
-            "--item",
-            JSON.stringify(input.item),
-            "--output",
-            "json",
-          ])
-          .pipe(Effect.asVoid, Effect.mapError(awsError("dynamodb:PutItem"))),
+        aws.run("dynamodb:PutItem", [
+          "dynamodb",
+          "put-item",
+          "--region",
+          input.region,
+          "--table-name",
+          input.table,
+          "--item",
+          JSON.stringify(input.item),
+        ]),
 
       updateItem: (input) => {
         const args: string[] = [
@@ -120,10 +111,7 @@ export const DynamoDbLive = Layer.effect(
             JSON.stringify(input.expressionAttributeValues),
           )
         }
-        args.push("--output", "json")
-        return sub
-          .run("aws", args)
-          .pipe(Effect.asVoid, Effect.mapError(awsError("dynamodb:UpdateItem")))
+        return aws.run("dynamodb:UpdateItem", args)
       },
 
       query: (input) => {
@@ -152,11 +140,9 @@ export const DynamoDbLive = Layer.effect(
         if (input.scanIndexForward === false)
           args.push("--no-scan-index-forward")
         if (input.limit !== undefined) args.push("--limit", String(input.limit))
-        args.push("--output", "json")
-        return sub.runJson<{ Items: ReadonlyArray<Item> }>("aws", args).pipe(
-          Effect.map((r) => r.Items ?? []),
-          Effect.mapError(awsError("dynamodb:Query")),
-        )
+        return aws
+          .json<{ Items: ReadonlyArray<Item> }>("dynamodb:Query", args)
+          .pipe(Effect.map((r) => r.Items ?? []))
       },
 
       scan: (input) => {
@@ -184,11 +170,9 @@ export const DynamoDbLive = Layer.effect(
           )
         }
         if (input.limit !== undefined) args.push("--limit", String(input.limit))
-        args.push("--output", "json")
-        return sub.runJson<{ Items: ReadonlyArray<Item> }>("aws", args).pipe(
-          Effect.map((r) => r.Items ?? []),
-          Effect.mapError(awsError("dynamodb:Scan")),
-        )
+        return aws
+          .json<{ Items: ReadonlyArray<Item> }>("dynamodb:Scan", args)
+          .pipe(Effect.map((r) => r.Items ?? []))
       },
     })
   }),

@@ -83,6 +83,12 @@ data "aws_iam_policy_document" "vm_instance" {
     ]
     resources = [local.log_group_arn]
   }
+
+  statement {
+    sid       = "UploadSessionArtifacts"
+    actions   = ["s3:PutObject"]
+    resources = ["${local.artifacts_arn}/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "vm_instance" {
@@ -291,7 +297,7 @@ data "aws_iam_policy_document" "developer" {
   }
 
   statement {
-    sid = "StartSessionDocuments"
+    sid     = "StartSessionDocuments"
     actions = ["ssm:StartSession"]
     resources = [
       "arn:aws:ssm:${local.region}::document/AWS-StartInteractiveCommand",
@@ -365,6 +371,22 @@ data "aws_iam_policy_document" "developer" {
       "logs:StartLiveTail",
     ]
     resources = [local.log_group_arn]
+  }
+
+  # --- S3: retrieve Session Artifacts ---
+  # Read-only on the artifacts bucket. Per-Run Owner scoping is enforced by the
+  # CLI (it resolves the Run via history before fetching), mirroring how log
+  # retrieval is gated; the IAM grant itself is bucket-wide read.
+  statement {
+    sid       = "ReadSessionArtifacts"
+    actions   = ["s3:GetObject"]
+    resources = ["${local.artifacts_arn}/*"]
+  }
+
+  statement {
+    sid       = "ListSessionArtifacts"
+    actions   = ["s3:ListBucket"]
+    resources = [local.artifacts_arn]
   }
 
   # --- DynamoDB: read+write the run-history table ---
