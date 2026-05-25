@@ -2,6 +2,7 @@ import { Context, type DateTime, Effect } from "effect"
 import {
   AwsError,
   CloudflareError,
+  GcpError,
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
@@ -61,21 +62,21 @@ export class RunHistory extends Context.Tag("RunHistory")<
       input: RecordStartInput,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
 
     readonly recordComplete: (
       input: RecordCompleteInput,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
 
     readonly query: (
       input: QueryInput,
     ) => Effect.Effect<
       ReadonlyArray<HistoryRow>,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
   }
 >() {}

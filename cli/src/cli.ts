@@ -20,6 +20,14 @@ import { IamLive } from "./adapters/aws/Iam.ts"
 import { S3Live } from "./adapters/aws/S3.ts"
 import { Ec2Live } from "./adapters/aws/Ec2.ts"
 import { DynamoDbLive } from "./adapters/aws/DynamoDb.ts"
+import { GcpAuthLive } from "./adapters/gcp/Auth.ts"
+import { GceLive } from "./adapters/gcp/Gce.ts"
+import { ArtifactRegistryLive } from "./adapters/gcp/ArtifactRegistry.ts"
+import { SecretManagerLive } from "./adapters/gcp/SecretManager.ts"
+import { CloudLoggingLive } from "./adapters/gcp/CloudLogging.ts"
+import { FirestoreLive } from "./adapters/gcp/Firestore.ts"
+import { GcsLive } from "./adapters/gcp/Gcs.ts"
+import { GcpIamLive } from "./adapters/gcp/Iam.ts"
 
 import { ConfigServiceLive } from "./services/ConfigService.ts"
 import { BuildServiceLive } from "./services/BuildService.ts"
@@ -30,6 +38,7 @@ import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 import { AwsBackendLive } from "./backends/aws/index.ts"
 import { CloudflareBackendLive } from "./backends/cloudflare/index.ts"
 import { LocalBackendLive } from "./backends/local/index.ts"
+import { GcpBackendLive } from "./backends/gcp/index.ts"
 import { loadProjectDotenv, pickBackendName } from "./projectConfig.ts"
 
 import { init } from "./commands/init.ts"
@@ -99,6 +108,14 @@ const adaptersLayer = Layer.mergeAll(
   S3Live,
   Ec2Live,
   DynamoDbLive,
+  GcpAuthLive,
+  GceLive,
+  ArtifactRegistryLive,
+  SecretManagerLive,
+  CloudLoggingLive,
+  FirestoreLive,
+  GcsLive,
+  GcpIamLive,
 ).pipe(Layer.provideMerge(infraLayer))
 
 const configLayer = ConfigServiceLive.pipe(Layer.provideMerge(adaptersLayer))
@@ -117,7 +134,9 @@ const backendLayer =
     ? CloudflareBackendLive.pipe(Layer.provideMerge(configLayer))
     : backendName === "local"
       ? LocalBackendLive.pipe(Layer.provideMerge(configLayer))
-      : AwsBackendLive.pipe(Layer.provideMerge(configLayer))
+      : backendName === "gcp"
+        ? GcpBackendLive.pipe(Layer.provideMerge(configLayer))
+        : AwsBackendLive.pipe(Layer.provideMerge(configLayer))
 const buildLayer = BuildServiceLive.pipe(Layer.provideMerge(backendLayer))
 const runLayer = RunServiceLive.pipe(Layer.provideMerge(buildLayer))
 const historyLayer = HistoryServiceLive.pipe(Layer.provideMerge(runLayer))

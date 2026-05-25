@@ -2,7 +2,12 @@ import { Schema } from "effect"
 
 export const TeamMember = Schema.Struct({
   name: Schema.String,
-  kind: Schema.Literal("iam-user", "trusted-principal", "cf-service-token"),
+  kind: Schema.Literal(
+    "iam-user",
+    "trusted-principal",
+    "cf-service-token",
+    "gcp-principal",
+  ),
   arn: Schema.String,
   createdAt: Schema.optional(Schema.String),
 })

@@ -2,6 +2,7 @@ import { Context, Effect } from "effect"
 import {
   AwsError,
   CloudflareError,
+  GcpError,
   ConfigError,
   DockerError,
   UserError,
@@ -47,21 +48,41 @@ export class GoldenImageStore extends Context.Tag("GoldenImageStore")<
   {
     readonly build: Effect.Effect<
       GoldenImageBuilt,
-      AwsError | CloudflareError | DockerError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | DockerError
+      | UserError
+      | ConfigError
     >
     readonly list: Effect.Effect<
       ReadonlyArray<GoldenImage>,
-      AwsError | CloudflareError | DockerError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | DockerError
+      | UserError
+      | ConfigError
     >
     readonly findLatest: Effect.Effect<
       GoldenImage | null,
-      AwsError | CloudflareError | DockerError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | DockerError
+      | UserError
+      | ConfigError
     >
     readonly remove: (
       id: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | DockerError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | DockerError
+      | UserError
+      | ConfigError
     >
   }
 >() {}

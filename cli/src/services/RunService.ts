@@ -12,6 +12,7 @@ import type { Run, RunStatus } from "../schema/Run.ts"
 import {
   AwsError,
   CloudflareError,
+  GcpError,
   ConfigError,
   DockerError,
   GitError,
@@ -51,6 +52,7 @@ export class RunService extends Context.Tag("RunService")<
       PreparedRun,
       | AwsError
       | CloudflareError
+      | GcpError
       | UserError
       | DockerError
       | GitError
@@ -60,7 +62,7 @@ export class RunService extends Context.Tag("RunService")<
       plan: PreparedRun,
     ) => Effect.Effect<
       RunStarted,
-      AwsError | CloudflareError | UserError | ConfigError
+      AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
     readonly start: (
       input: RunRequest,
@@ -68,6 +70,7 @@ export class RunService extends Context.Tag("RunService")<
       RunStarted,
       | AwsError
       | CloudflareError
+      | GcpError
       | UserError
       | DockerError
       | GitError
@@ -77,30 +80,30 @@ export class RunService extends Context.Tag("RunService")<
       ownerUserId: string,
     ) => Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
     readonly listAll: Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
     readonly findByRunId: (
       runId: string,
     ) => Effect.Effect<
       Run,
-      AwsError | CloudflareError | UserError | ConfigError
+      AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
     readonly kill: (
       runId: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | UserError | ConfigError
+      AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
     readonly attach: (
       runId: string,
       opts: AttachOptions,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | UserError | ConfigError
+      AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
     /**
      * Follow a Run's logs to the terminal until it stops, then return. Backend-
@@ -114,8 +117,8 @@ export class RunService extends Context.Tag("RunService")<
       runId: string,
       repoName: string,
     ) => Effect.Effect<void>
-    /** Identifier of the active Backend (`"aws"`, `"cloudflare"`, `"local"`). */
-    readonly backendName: "aws" | "cloudflare" | "local"
+    /** Identifier of the active Backend (`"aws"`, `"cloudflare"`, `"local"`, `"gcp"`). */
+    readonly backendName: "aws" | "cloudflare" | "local" | "gcp"
   }
 >() {}
 

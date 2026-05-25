@@ -42,7 +42,7 @@ export const loadProjectDotenv = (): void => {
  * `backend: "local"`, or a per-command `--local` override which wins regardless
  * of the persisted backend.
  */
-export const pickBackendName = (): "aws" | "cloudflare" | "local" => {
+export const pickBackendName = (): "aws" | "cloudflare" | "local" | "gcp" => {
   if (process.argv.includes("--local")) return "local"
   const root = findProjectRoot()
   if (root === undefined) return "aws"
@@ -54,6 +54,7 @@ export const pickBackendName = (): "aws" | "cloudflare" | "local" => {
     }
     if (parsed.backend === "cloudflare") return "cloudflare"
     if (parsed.backend === "local") return "local"
+    if (parsed.backend === "gcp") return "gcp"
     return "aws"
   } catch {
     return "aws"

@@ -20,7 +20,7 @@ export const RunStatus = Schema.Literal(
 )
 export type RunStatus = typeof RunStatus.Type
 
-export const BackendName = Schema.Literal("aws", "cloudflare", "local")
+export const BackendName = Schema.Literal("aws", "cloudflare", "local", "gcp")
 export type BackendName = typeof BackendName.Type
 
 /**

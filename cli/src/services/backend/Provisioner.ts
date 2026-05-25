@@ -1,6 +1,7 @@
 import { Context, Effect } from "effect"
 import type {
   CloudflareError,
+  GcpError,
   ConfigError,
   SubprocessError,
   UserError,
@@ -31,7 +32,7 @@ export class Provisioner extends Context.Tag("Provisioner")<
   {
     readonly provision: Effect.Effect<
       ProvisionReport,
-      ConfigError | UserError | CloudflareError | SubprocessError
+      ConfigError | UserError | CloudflareError | GcpError | SubprocessError
     >
   }
 >() {}
