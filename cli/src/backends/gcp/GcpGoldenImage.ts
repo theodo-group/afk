@@ -157,6 +157,14 @@ export const GcpGoldenImageLive = Layer.effect(
         )
       yield* waitForBuild
 
+      // Stop the builder before snapshotting its boot disk. GCE rejects
+      // `images create` while the disk is attached to a RUNNING instance, and
+      // stopping fsyncs the filesystem (so the snapshot captures every layer
+      // the pre-pull wrote, not just the dirty page cache contents).
+      yield* gce
+        .stopInstance(project, zone, plan.builderName)
+        .pipe(Effect.tapError(() => cleanup))
+
       yield* gce
         .createImage({
           project,
