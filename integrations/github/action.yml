@@ -1,0 +1,146 @@
+name: "afk run (PR comment trigger)"
+description: >
+  CI-native trigger for `afk run`. On a PR comment that starts with the trigger
+  phrase, launches a Run against the PR's head branch and posts the run id back
+  to the thread. Fire-and-detach: the Run keeps going after this job exits; the
+  workload reports its own completion.
+
+inputs:
+  command:
+    description: >
+      The agent invocation to run (e.g. "claude -p"). The comment text after the
+      trigger phrase is appended as a single trailing argv element (the prompt).
+    required: true
+  trigger-phrase:
+    description: "Comment prefix that fires a Run."
+    required: false
+    default: "@afk"
+  run-args:
+    description: >
+      Extra flags forwarded verbatim to `afk run` (e.g. "--on-demand
+      --instance-type m6i.xlarge --timeout 2").
+    required: false
+    default: ""
+  afk-repo:
+    description: "Git URL of the afk CLI source (it is not published to a registry)."
+    required: true
+  afk-ref:
+    description: "Ref of the afk CLI source to install."
+    required: false
+    default: "main"
+  github-token:
+    description: "Token used to read commenter permission and post the reply comment."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: "composite"
+  steps:
+    # 1. Parse — only a PR comment beginning with the trigger phrase proceeds.
+    - id: parse
+      shell: bash
+      env:
+        GH_EVENT_NAME: ${{ github.event_name }}
+        IS_PR: ${{ github.event.issue.pull_request != '' }}
+        BODY: ${{ github.event.comment.body }}
+        TRIGGER: ${{ inputs.trigger-phrase }}
+      run: |
+        set -euo pipefail
+        if [ "$GH_EVENT_NAME" != "issue_comment" ] || [ "$IS_PR" != "true" ]; then
+          echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+        fi
+        trimmed="${BODY#"${BODY%%[![:space:]]*}"}"   # left-trim
+        case "$trimmed" in
+          "$TRIGGER"*) ;;
+          *) echo "go=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+        esac
+        prompt="${trimmed#"$TRIGGER"}"
+        prompt="${prompt#"${prompt%%[![:space:]]*}"}"  # left-trim again
+        # 'run' verb is optional sugar: "@afk run <prompt>" == "@afk <prompt>".
+        case "$prompt" in run\ *) prompt="${prompt#run }";; run) prompt="";; esac
+        {
+          echo "go=true"
+          echo "prompt<<__AFK_EOF__"
+          printf '%s\n' "$prompt"
+          echo "__AFK_EOF__"
+        } >> "$GITHUB_OUTPUT"
+
+    # 2. Authorize — commenter must have write/maintain/admin on the repo.
+    - id: auth
+      if: steps.parse.outputs.go == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        ACTOR: ${{ github.event.comment.user.login }}
+      run: |
+        set -euo pipefail
+        perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null || echo "none")
+        case "$perm" in
+          admin|write|maintain) echo "go=true"  >> "$GITHUB_OUTPUT" ;;
+          *) echo "::notice::afk: ignoring trigger from '$ACTOR' (permission: $perm)"
+             echo "go=false" >> "$GITHUB_OUTPUT" ;;
+        esac
+
+    # 3. Resolve ref — PR head branch; fork PRs are rejected (head not on origin).
+    - id: ref
+      if: steps.auth.outputs.go == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.issue.number }}
+      run: |
+        set -euo pipefail
+        read -r head_ref head_repo < <(gh api "repos/$REPO/pulls/$PR" \
+          --jq '"\(.head.ref) \(.head.repo.full_name)"')
+        if [ "$head_repo" != "$REPO" ]; then
+          gh pr comment "$PR" --repo "$REPO" --body \
+            "⚠️ afk: fork PRs are not supported — the head commits aren't on origin, which afk requires."
+          echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+        fi
+        echo "head=$head_ref" >> "$GITHUB_OUTPUT"
+        echo "go=true" >> "$GITHUB_OUTPUT"
+
+    # 4. Check out the PR head so afk.config.json / afk.Dockerfile match the Run.
+    - if: steps.ref.outputs.go == 'true'
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ steps.ref.outputs.head }}
+
+    # 5. Install Bun + the afk CLI (cloned, since it is unpublished).
+    - if: steps.ref.outputs.go == 'true'
+      uses: oven-sh/setup-bun@v2
+    - if: steps.ref.outputs.go == 'true'
+      shell: bash
+      env:
+        AFK_REPO: ${{ inputs.afk-repo }}
+        AFK_REF: ${{ inputs.afk-ref }}
+      run: |
+        set -euo pipefail
+        git clone --depth 1 --branch "$AFK_REF" "$AFK_REPO" "$RUNNER_TEMP/afk"
+        (cd "$RUNNER_TEMP/afk/cli" && bun install --frozen-lockfile && bun link)
+        echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+    # 6. Launch (fire-and-detach) and post the run id back to the PR.
+    - id: launch
+      if: steps.ref.outputs.go == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.issue.number }}
+        COMMAND: ${{ inputs.command }}
+        RUN_ARGS: ${{ inputs.run-args }}
+        PROMPT: ${{ steps.parse.outputs.prompt }}
+        HEAD: ${{ steps.ref.outputs.head }}
+      run: |
+        set -euo pipefail
+        # COMMAND and RUN_ARGS are repo-trusted (workflow config); split on words.
+        # PROMPT is untrusted comment text — passed as one quoted argv element.
+        read -r -a cmd_words <<< "$COMMAND"
+        read -r -a arg_words <<< "$RUN_ARGS"
+        out=$(afk run --json --ref "$HEAD" "${arg_words[@]}" "${cmd_words[@]}" "$PROMPT")
+        run_id=$(printf '%s' "$out" | jq -r '.runId')
+        gh pr comment "$PR" --repo "$REPO" --body \
+          "🚀 afk: launched Run \`$run_id\` against \`$HEAD\`. It will report back when done."
