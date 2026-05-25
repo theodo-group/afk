@@ -14,11 +14,7 @@ import {
   type CheckResult,
 } from "../services/backend/BackendDoctor.ts"
 import { Compute } from "../services/backend/Compute.ts"
-import {
-  DOCKERFILE,
-  ENV_FILE,
-  GOLDEN_IMAGE_STALE_DAYS,
-} from "../constants.ts"
+import { DOCKERFILE, ENV_FILE, GOLDEN_IMAGE_STALE_DAYS } from "../constants.ts"
 
 /**
  * Light syntactic check on the consumer's afk.Dockerfile: contracts only —
@@ -32,7 +28,9 @@ const checkDockerfile = (projectRoot: string): CheckResult => {
   if (!existsSync(path)) {
     return check(DOCKERFILE, false, "", `missing — expected at ${path}`)
   }
-  const lines = readFileSync(path, "utf8").split("\n").map((l) => l.trim())
+  const lines = readFileSync(path, "utf8")
+    .split("\n")
+    .map((l) => l.trim())
   const hasFrom = lines.some((l) => /^FROM\b/i.test(l))
   const hasEntrypoint = lines.some((l) => /^ENTRYPOINT\b/i.test(l))
   const copiesWorkspace = lines.some(

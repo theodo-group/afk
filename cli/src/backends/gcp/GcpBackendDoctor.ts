@@ -10,6 +10,12 @@ import {
   check,
   type CheckResult,
 } from "../../services/backend/BackendDoctor.ts"
+import {
+  AFK_SUBNET_NAME,
+  GCP_ARTIFACT_REPO,
+  GCP_DEFAULT_REGION,
+  GCP_VM_SERVICE_ACCOUNT,
+} from "../../constants.ts"
 
 /**
  * Read quota_project_id from the developer's Application Default Credentials.
@@ -124,8 +130,102 @@ export const GcpBackendDoctorLive = Layer.effect(
       ),
     )
 
-    const checks = Effect.all([toolchainChecks, identityChecks, adcCheck]).pipe(
-      Effect.map(([toolchain, identity, adc]) => [...toolchain, ...identity, adc]),
+    // Live placement: confirm the three resources every Run depends on
+    // actually exist under the names the CLI will use. Catches the entire
+    // class of "provisioned, but the CLI looks under a different name"
+    // failure modes (the afk-subnet bug fixed in PR #2 is the canonical
+    // example) before the developer hits them at `afk golden build` or
+    // `afk run` time.
+    const probe = (
+      name: string,
+      args: ReadonlyArray<string>,
+      missing: string,
+    ) =>
+      sub.run("gcloud", args).pipe(
+        Effect.map((): CheckResult => check(name, true, "found", "")),
+        Effect.catchAll(
+          (): Effect.Effect<CheckResult> =>
+            Effect.succeed(check(name, false, "", missing)),
+        ),
+      )
+
+    const placementChecks = Effect.gen(function* () {
+      const loaded = yield* cfg.load.pipe(Effect.either)
+      if (loaded._tag === "Left") {
+        return [
+          check(
+            "live placement",
+            false,
+            "",
+            `could not load afk.config.json: ${loaded.left.message}`,
+          ),
+        ]
+      }
+      const { config } = loaded.right
+      const project = config.gcp?.projectId
+      if (project === undefined || project === "") {
+        return [
+          check(
+            "live placement",
+            true,
+            "(skipped — gcp.projectId not set)",
+            "",
+          ),
+        ]
+      }
+      const region = config.gcp?.region ?? GCP_DEFAULT_REGION
+      return yield* Effect.all([
+        probe(
+          "live subnet",
+          [
+            "compute",
+            "networks",
+            "subnets",
+            "describe",
+            AFK_SUBNET_NAME,
+            `--region=${region}`,
+            `--project=${project}`,
+          ],
+          `subnet '${AFK_SUBNET_NAME}' missing in ${region} — run \`afk provision\``,
+        ),
+        probe(
+          "live vm service account",
+          [
+            "iam",
+            "service-accounts",
+            "describe",
+            `${GCP_VM_SERVICE_ACCOUNT}@${project}.iam.gserviceaccount.com`,
+            `--project=${project}`,
+          ],
+          `service account '${GCP_VM_SERVICE_ACCOUNT}' missing — run \`afk provision\``,
+        ),
+        probe(
+          "live artifact registry",
+          [
+            "artifacts",
+            "repositories",
+            "describe",
+            GCP_ARTIFACT_REPO,
+            `--location=${region}`,
+            `--project=${project}`,
+          ],
+          `Artifact Registry repo '${GCP_ARTIFACT_REPO}' missing in ${region} — run \`afk provision\``,
+        ),
+      ])
+    })
+
+    const checks = Effect.all([
+      toolchainChecks,
+      identityChecks,
+      adcCheck,
+      placementChecks,
+    ]).pipe(
+      Effect.map(([toolchain, identity, adc, placement]) => [
+        ...toolchain,
+        ...identity,
+        adc,
+        ...placement,
+      ]),
     )
 
     return BackendDoctor.of({ checks })

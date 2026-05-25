@@ -25,7 +25,12 @@ import { GCP_DEFAULT_REGION, GCP_DEFAULT_ZONE } from "../../constants.ts"
 const readAdcQuotaProject = (): string | null => {
   const candidates = [
     process.env.GOOGLE_APPLICATION_CREDENTIALS,
-    resolve(homedir(), ".config", "gcloud", "application_default_credentials.json"),
+    resolve(
+      homedir(),
+      ".config",
+      "gcloud",
+      "application_default_credentials.json",
+    ),
   ].filter((p): p is string => typeof p === "string" && p.length > 0)
   for (const path of candidates) {
     if (!existsSync(path)) continue
