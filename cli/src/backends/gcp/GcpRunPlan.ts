@@ -114,6 +114,8 @@ export type GcpBackendPlan = {
   readonly zone: string
   readonly imageFamily: string
   readonly machineType: string
+  /** Spot (`provisioningModel: SPOT`) vs On-Demand (`STANDARD`). */
+  readonly spot: boolean
   readonly serviceAccount: string
   readonly instanceName: string
   readonly maxRunDurationSeconds: number
@@ -173,6 +175,13 @@ export const planGcpRun = (
     machineTypeOverride ??
     config.gcp?.defaultMachineType ??
     GCP_DEFAULT_MACHINE_TYPE
+
+  // Spot is the default (cheaper); `--on-demand` opts up to STANDARD capacity for
+  // interruption-resistance. Both DELETE on exit, so neither is retained.
+  const onDemand =
+    input.backendOverrides?.onDemand === true ||
+    input.backendOverrides?.onDemand === "true"
+  const spot = !onDemand
   const whitelist = config.gcp?.allowedMachineTypes
   if (whitelist && whitelist.length > 0 && !whitelist.includes(machineType)) {
     return Either.left(
@@ -276,6 +285,7 @@ export const planGcpRun = (
       zone,
       imageFamily: i.goldenImageFamily,
       machineType,
+      spot,
       serviceAccount: "",
       instanceName,
       maxRunDurationSeconds: timeoutSeconds,
