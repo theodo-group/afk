@@ -37,7 +37,7 @@ const rowFromFields = (f: Fields): HistoryRow | null => {
     backendDetails: {
       machineType: readSv(f, "machine_type") ?? "",
       zone: readSv(f, "zone") ?? "",
-      preemptible: String(readBv(f, "preemptible") ?? false),
+      spot: String(readBv(f, "spot") ?? false),
     },
   }
 }
@@ -77,7 +77,7 @@ export const GcpRunHistoryLive = Layer.effect(
             zone: sv(input.backendDetails?.zone ?? ""),
             started_at: sv(input.startedAt),
             timeout_hours: iv(input.timeoutHours),
-            preemptible: bv(false),
+            spot: bv(input.backendDetails?.spot === "true"),
           }
           yield* fs.putDoc({
             project: p,

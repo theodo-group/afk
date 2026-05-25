@@ -8,7 +8,7 @@ const ref = Options.text("ref").pipe(Options.optional)
 const instanceType = Options.text("instance-type").pipe(Options.optional)
 const onDemand = Options.boolean("on-demand").pipe(
   Options.withDescription(
-    "use an on-demand instance on AWS (pricier, but retainable; Spot by default)",
+    "use on-demand capacity (pricier, but not preemptible mid-Run; Spot by default)",
   ),
 )
 const timeout = Options.integer("timeout").pipe(

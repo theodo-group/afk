@@ -11,15 +11,15 @@ afk ls                                                     # see it running
 afk logs <run-id>                                          # tail its output
 ```
 
-That Run executes on your own Docker daemon. Point the same project at a cloud Backend (AWS or Cloudflare) and the _identical_ commands launch the work on ephemeral cloud compute instead — see [Quickstart](#quickstart).
+That Run executes on your own Docker daemon. Point the same project at a cloud Backend (AWS, GCP, or Cloudflare) and the _identical_ commands launch the work on ephemeral cloud compute instead — see [Quickstart](#quickstart).
 
 ---
 
 ## Why AFK
 
-Each Run executes on a short-lived **compute primitive** that the developer owns end-to-end — an EC2 VM on the AWS Backend, a Cloudflare Container instance on the Cloudflare Backend. Either way the Run has Docker available (the host daemon on AWS, rootless `dind` on Cloudflare), so `docker compose up` is the same surface across providers — giving the agent first-class access to sidecar services (Postgres, Redis, etc.) without the limitations of serverless container platforms.
+Each Run executes on a short-lived **compute primitive** that the developer owns end-to-end — an EC2 VM on the AWS Backend, a Compute Engine VM on the GCP Backend, a Cloudflare Container instance on the Cloudflare Backend. Either way the Run has Docker available (the host daemon on AWS/GCP, rootless `dind` on Cloudflare), so `docker compose up` is the same surface across providers — giving the agent first-class access to sidecar services (Postgres, Redis, etc.) without the limitations of serverless container platforms.
 
-This repository is the **base layer**: it ships the per-Backend infra (Terraform for AWS, a launcher Worker for Cloudflare), the CLI that drives them, and the contract that consumers must follow in their own repos.
+This repository is the **base layer**: it ships the per-Backend infra (Terraform for AWS and GCP, a launcher Worker for Cloudflare), the CLI that drives them, and the contract that consumers must follow in their own repos.
 
 ---
 
@@ -29,7 +29,7 @@ Every backend follows the same shape. `afk run`:
 
 1. Refuses if the working tree is dirty or the ref isn't pushed to origin.
 2. Builds your `afk.Dockerfile` into an agent image, wrapped with a CLI-owned entrypoint (skipped if the `<branch>-<sha>` image already exists).
-3. Launches **one compute primitive** for the Run — an EC2 VM on AWS, a Container instance on Cloudflare, a local `dind` container on Local — booted from the project's [Golden Image](#concepts).
+3. Launches **one compute primitive** for the Run — an EC2 VM on AWS, a Compute Engine VM on GCP, a Container instance on Cloudflare, a local `dind` container on Local — booted from the project's [Golden Image](#concepts).
 4. That primitive clones your repo at the ref into `/workspace`, then runs your command — under `docker compose up` if you have an `afk.compose.yml`, else `docker run` — inside a wall-clock timeout, shipping each service's logs.
 5. On exit the primitive is reclaimed. The CLI does **not** stay resident; the Run lives on the primitive, so a dead laptop doesn't affect it.
 
@@ -77,6 +77,13 @@ For the **AWS Backend** additionally:
 - `session-manager-plugin` (required for `afk attach`)
 - `npm` (the sweeper Lambda is bundled with esbuild at `terraform apply` time)
 
+For the **GCP Backend** additionally:
+
+- Terraform ≥ 1.10 (GCS native state locking)
+- `gcloud` CLI authenticated (`gcloud auth login`); the active account is the Run's Owner
+- A GCP project with billing enabled, selected via `gcloud config set project <id>`
+- OS Login + IAP TCP forwarding (`roles/iap.tunnelResourceAccessor`, granted by the module) for `afk attach` — no public IP, no SSH
+
 For the **Cloudflare Backend** additionally:
 
 - `wrangler` (Cloudflare's deploy CLI) on PATH
@@ -117,6 +124,27 @@ afk ls && afk logs <run-id>
 
 Teardown: `afk destroy` (dry-run) / `afk destroy --yes`. See the [AWS backend doc](./docs/backends/aws.md#teardown) for exactly what is removed.
 
+### Quickstart on GCP
+
+> **Same one-VM-per-Run shape as AWS** — a Compute Engine instance per Run, booted from a custom-image Golden Image, self-deleted on exit. Differences: attach rides an IAP TCP tunnel (no public IP, no SSH) and the Owner is your authenticated gcloud account. Skim the [GCP backend doc](./docs/backends/gcp.md) for topology and auth before your first deploy.
+
+In a fresh consumer repo (after `gcloud auth login` and `gcloud config set project <id>`):
+
+```sh
+afk init --provider gcp --region us-central1  # resolves the project, creates the GCS state bucket + scaffolds files
+afk provision                                 # terraform apply: APIs, VPC + NAT + IAP firewall, SAs, Firestore, Artifact Registry, reconcile Cloud Function
+afk golden build                              # one-time per project (~5 min): snapshots a builder VM into a custom image
+afk secrets put github-token <PAT>            # a GitHub PAT (Secret Manager) so the VM can clone source
+echo "GITHUB_TOKEN=secret:github-token" >> .afk.env
+
+# Author + push your contract files (same as AWS), then launch.
+git add afk.Dockerfile afk.compose.yml afk.config.json && git commit -m "configure AFK" && git push
+afk run bun --version                         # Spot capacity by default; --on-demand for interruption-resistance
+afk ls && afk logs <run-id>
+```
+
+Teardown: `afk destroy` (dry-run) / `afk destroy --yes`. See the [GCP backend doc](./docs/backends/gcp.md#teardown) for exactly what is removed.
+
 ### Quickstart on Cloudflare
 
 > **Read first:** the CF Backend uses **rootless Docker-in-Docker** inside one Container instance per Run, gated by a customer-deployed **launcher Worker**. Different topology from AWS; same `afk` CLI surface. If this is your first CF deploy, skim the [Cloudflare backend doc](./docs/backends/cloudflare.md) (topology, auth boundaries, limitations) before starting.
@@ -151,13 +179,15 @@ Teardown: `afk destroy --yes` (golden images, launcher Worker + DOs, Container a
 Every command also responds to `afk <command> --help`. The full surface:
 
 ```
-afk init [--provider <aws|cloudflare|local>] [--region <region>]
+afk init [--provider <aws|gcp|cloudflare|local>] [--region <region>]
                                                # one-time setup in a repo (scaffolds config + Backend infra)
-                                               # --provider defaults to aws; --region applies to provider=aws only
+                                               # --provider defaults to aws; --region applies to provider=aws|gcp
+                                               # GCP: resolves the project from active gcloud config, creates the GCS state bucket
                                                # CF: derives accountId from the token and merges the cloudflare config block
                                                # local: writes backend=local + a local config block (no cloud infra)
 afk provision                                  # stand up the active Backend's infra (idempotent)
                                                #   AWS:   terraform init && apply (VPC, IAM, sweeper Lambda, DynamoDB)
+                                               #   GCP:   terraform apply (APIs, VPC+NAT+IAP, SAs, Firestore, Artifact Registry, reconcile Cloud Function)
                                                #   CF:    create D1+KV, migrate, deploy the launcher Worker, set
                                                #          CF_API_TOKEN, write workerUrl (run after `afk golden build`)
                                                #   local: no-op (nothing to stand up)
@@ -166,6 +196,7 @@ afk config                                     # print resolved config (debug)
 
 afk golden build                               # build the Golden Image for the active Backend
                                                #   AWS: an AMI tagged afk:golden=true
+                                               #   GCP: a GCE custom image labelled afk-golden=true
                                                #   CF:  a Container image in the CF managed registry
 afk golden ls                                  # list Golden Images for the active Backend
 afk golden rm <id-or-tag>                      # delete a Golden Image
@@ -173,11 +204,11 @@ afk golden rm <id-or-tag>                      # delete a Golden Image
 afk build [--ref <ref>]                        # explicit container image build + push (afk run also builds if needed)
 afk run <command…>                             # launch a Run
   --ref <branch|sha|tag>                       #   defaults to current local branch
-  --instance-type <type>                       #   AWS only: overrides project default EC2 type
-  --spot                                       #   AWS only: use a Spot instance (cheaper, not retainable; on-demand by default)
+  --instance-type <type>                       #   AWS/GCP: overrides project default EC2 instance type / GCE machine type
+  --on-demand                                  #   AWS/GCP: on-demand capacity (pricier, not preemptible; Spot by default)
   --instance-tier <tier>                       #   CF only: overrides project default CF Containers tier
   --timeout <hours>                            #   overrides default (4h)
-  --detach / -d                                #   default: launch and exit (currently the only mode)
+  --follow / -f                                #   stream logs until the Run ends (default: launch and exit)
 afk ls [--all] [--status <s>]                  # list Runs (yours by default; --all = team-wide if permitted)
 afk attach <run-id> [--service <name>] [--host]
                                                # interactive shell. Default: docker exec into main service.
@@ -212,8 +243,8 @@ afk team rm <name>                             # admin: revoke access
 **Command semantics worth knowing:**
 
 - `afk run "<command>"` and `afk run <command> <args…>` both work. The container's CMD becomes `sh -c "<joined command>"`, so quoting and shell features (`&&`, `|`, `$VARS`) work as you'd expect.
-- The region every AWS command operates on comes from `afk.config.json` → `aws.region`. There is no per-command `--region` flag (apart from `afk init`, which writes the region into the rendered backend.tf and scaffolded config).
-- `aws`, `cloudflare`, and `local` Backends are supported; GCE and Azure VMs are still anticipated. `--local` overrides the persisted backend for one invocation and may appear anywhere on the line.
+- The region a cloud command operates on comes from `afk.config.json` → `aws.region` / `gcp.region` (zone/machine type live in the `gcp` block). There is no per-command `--region` flag (apart from `afk init`, which writes the region into the rendered backend.tf and scaffolded config).
+- `aws`, `gcp`, `cloudflare`, and `local` Backends are supported; Azure VMs are still anticipated. `--local` overrides the persisted backend for one invocation and may appear anywhere on the line.
 
 All AWS calls go through the standard credential chain (`AWS_PROFILE`, env vars, IMDS). Developers act under an IAM role provisioned by the Terraform. All Cloudflare calls go through the launcher Worker, authenticated by a per-developer Cloudflare Access service token (provisioned by `afk team add`) — the CLI never talks to the CF control-plane API directly except during `afk init` / `afk golden build`. The `team` commands require admin permissions on either Backend (a separate IAM policy on AWS; a Worker secret-gated `/team` route on Cloudflare).
 
@@ -337,7 +368,7 @@ Secret _values_ are never written here — only `secret:<name>` references. The 
 See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 
 - **Run** — one ephemeral execution of a developer-defined command, backed by exactly one compute primitive (an EC2 instance on AWS, a Container instance on Cloudflare). The primitive boots, runs the workload, and self-terminates on exit.
-- **Backend** — provider implementation. **AWS EC2**, **Cloudflare Containers**, and **Local** (your own Docker daemon) are shipped; GCP (Compute Engine) and Azure (Virtual Machines) are anticipated.
+- **Backend** — provider implementation. **AWS EC2**, **GCP Compute Engine**, **Cloudflare Containers**, and **Local** (your own Docker daemon) are shipped; Azure (Virtual Machines) is anticipated.
 - **Owner** — the developer principal that launched a Run (AWS IAM userid, or Cloudflare Access service-token client-id). Used for access control.
 - **Dockerfile Contract** — the rules a consumer's `afk.Dockerfile` must follow.
 - **Compose Contract** — the (optional) rules a consumer's `afk.compose.yml` must follow when the Run needs sidecar services.
@@ -348,13 +379,14 @@ See [`CONTEXT.md`](./CONTEXT.md) for the canonical glossary. Quick orientation:
 
 ## Backends
 
-The same CLI surface runs on three shipped backends — pick one with `afk init --provider <name>`, or use `--local` per command. Each backend's deep detail (what it provisions, attach / lifecycle / cost specifics, teardown) lives in its own doc:
+The same CLI surface runs on four shipped backends — pick one with `afk init --provider <name>`, or use `--local` per command. Each backend's deep detail (what it provisions, attach / lifecycle / cost specifics, teardown) lives in its own doc:
 
-- **[AWS EC2](./docs/backends/aws.md)** — one EC2 VM per Run, Terraform-provisioned (VPC, IAM, sweeper Lambda, DynamoDB, S3 state). Full Compose Contract. On-demand by default (`--spot` for cheaper, interruptible Spot).
+- **[AWS EC2](./docs/backends/aws.md)** — one EC2 VM per Run, Terraform-provisioned (VPC, IAM, sweeper Lambda, DynamoDB, S3 state). Full Compose Contract. Spot by default (`--on-demand` for pricier, non-preemptible capacity).
+- **[GCP Compute Engine](./docs/backends/gcp.md)** — one Compute Engine VM per Run, Terraform-provisioned (VPC + NAT + IAP, service accounts, Firestore, Artifact Registry, reconcile Cloud Function, GCS state). Full Compose Contract. Spot by default (`--on-demand` to opt out); attach over an IAP tunnel.
 - **[Cloudflare Containers](./docs/backends/cloudflare.md)** — one Container instance per Run via a customer-deployed launcher Worker (rootless dind). Requires the Workers Paid plan.
 - **[Local](./docs/backends/local.md)** — one container per Run on your own Docker daemon (rootless dind), fully self-contained. Needs only Docker; selectable persistently or via `--local`.
 
-GCP (Compute Engine) and Azure (Virtual Machines) are anticipated — see [Future Backends](#future-backends).
+Azure (Virtual Machines) is anticipated — see [Future Backends](#future-backends).
 
 ---
 
@@ -372,13 +404,14 @@ Where values are stored is backend-specific — **SSM Parameter Store** on AWS, 
 
 ## Attach, lifecycle, state & costs
 
-These are backend-specific — `afk attach` (SSM on AWS, `wrangler containers ssh` on Cloudflare, nested `docker exec` on Local), how a Run self-terminates and what backstops a wedged one, how `afk ls`/`afk history` read live vs. archived state, and per-Run cost — and are documented per backend:
+These are backend-specific — `afk attach` (SSM on AWS, IAP tunnel + OS Login on GCP, `wrangler containers ssh` on Cloudflare, nested `docker exec` on Local), how a Run self-terminates and what backstops a wedged one, how `afk ls`/`afk history` read live vs. archived state, and per-Run cost — and are documented per backend:
 
 - AWS: [docs/backends/aws.md](./docs/backends/aws.md) (attach, lifecycle, querying, costs)
+- GCP: [docs/backends/gcp.md](./docs/backends/gcp.md) (attach, lifecycle, querying, costs)
 - Cloudflare: [docs/backends/cloudflare.md](./docs/backends/cloudflare.md)
 - Local: [docs/backends/local.md](./docs/backends/local.md)
 
-Backend-neutral commands stay identical across all three (see [CLI surface](#cli-surface)).
+Backend-neutral commands stay identical across all four (see [CLI surface](#cli-surface)).
 
 ---
 
@@ -418,4 +451,4 @@ Backend-neutral commands stay identical across all three (see [CLI surface](#cli
 
 ## Future Backends
 
-The CLI is structured around a `Backend` interface. **AWS EC2**, **Cloudflare Containers**, and **Local** (your own Docker daemon) are shipped. **GCP (Compute Engine)** and **Azure (Virtual Machines)** are anticipated; each is expected to follow the same one-compute-primitive-per-Run shape, with its own image-build pipeline mapped onto `afk golden build` and its own exec primitive mapped onto `afk attach`.
+The CLI is structured around a `Backend` interface. **AWS EC2**, **GCP Compute Engine**, **Cloudflare Containers**, and **Local** (your own Docker daemon) are shipped. **Azure (Virtual Machines)** is anticipated; it is expected to follow the same one-compute-primitive-per-Run shape, with its own image-build pipeline mapped onto `afk golden build` and its own exec primitive mapped onto `afk attach`.

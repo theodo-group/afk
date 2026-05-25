@@ -1,0 +1,42 @@
+# Copy to .github/workflows/afk.yml in your repo.
+#
+# Fires when someone comments "@afk <task>" on a pull request. Only commenters
+# with write/maintain/admin permission trigger a Run (others are silently
+# ignored). Fork PRs are rejected. The Run launches against the PR head branch
+# and the agent reports its own results back to the thread.
+
+name: afk
+
+on:
+  issue_comment:
+    types: [created]
+
+# One Run per PR at a time; a newer comment supersedes an in-flight launch.
+concurrency:
+  group: afk-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  afk:
+    # Cheap pre-filter; the action re-checks authoritatively.
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '@afk') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+      pull-requests: write # post the "launched" comment
+    steps:
+      # Configure backend credentials BEFORE the afk step. Example for AWS via
+      # OIDC; swap for GCP Workload Identity Federation or a Cloudflare token as
+      # appropriate for your backend.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AFK_AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - uses: <your-org>/afk/integrations/github@main
+        with:
+          command: "claude -p"
+          afk-repo: "https://github.com/<your-org>/afk.git"
+          # afk-ref: main
+          # trigger-phrase: "@afk"
+          # run-args: "--on-demand --timeout 2"

@@ -163,6 +163,7 @@ export const GcpComputeLive = Layer.effect(
           serviceAccount: gcp.serviceAccount,
           subnet: gcp.subnet,
           startupScript: gcp.startupScript,
+          spot: gcp.spot,
           maxRunDurationSeconds: gcp.maxRunDurationSeconds,
           labels: gcp.labels,
         })
@@ -181,6 +182,7 @@ export const GcpComputeLive = Layer.effect(
             backendDetails: {
               machineType: gcp.machineType,
               zone: gcp.zone,
+              spot: String(gcp.spot),
             },
           })
           .pipe(
