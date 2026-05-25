@@ -1,12 +1,12 @@
 import { describe, it, expect } from "bun:test"
 import { resolveGcpNetworkPlacement } from "./GcpNetworkPlacement.ts"
-import { AFK_VPC_NAME, GCP_VM_SERVICE_ACCOUNT } from "../../constants.ts"
+import { AFK_SUBNET_NAME, GCP_VM_SERVICE_ACCOUNT } from "../../constants.ts"
 
 describe("resolveGcpNetworkPlacement", () => {
   it("derives the region-scoped afk subnet self-link", () => {
     const { subnet } = resolveGcpNetworkPlacement("acme-prod", "us-central1")
     expect(subnet).toBe(
-      `projects/acme-prod/regions/us-central1/subnetworks/${AFK_VPC_NAME}`,
+      `projects/acme-prod/regions/us-central1/subnetworks/${AFK_SUBNET_NAME}`,
     )
   })
 
