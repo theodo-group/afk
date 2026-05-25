@@ -194,7 +194,10 @@ afk session-artifact [--out <dir>] <run-id>    # download the Run's Session Arti
                                                #   collected best-effort from the main service at Run end;
                                                #   Owner-scoped like `afk logs`
 
-afk secrets put <name> [value]                 # write to the active Backend's secret store (prompts if value omitted)
+afk secrets put <name> [value]                 # write to the active Backend's secret store
+                                               #   - value omitted: prompts on stdin (hidden) OR reads stdin if piped
+                                               #   - inline value: visible in `ps`; prefer stdin for real secrets
+                                               #   e.g. `gcloud secrets versions access latest --secret=GH | afk secrets put github-token`
 afk secrets ls                                 # list stored secret names
 afk secrets rm <name>                          # delete from the active Backend's secret store
 
