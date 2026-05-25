@@ -1,4 +1,7 @@
 import { Context, Effect, Layer } from "effect"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { GcpError } from "../../infra/Errors.ts"
 import { makeGcloudCli } from "./gcloudCli.ts"
@@ -130,34 +133,59 @@ export const GceLive = Layer.effect(
     const sub = yield* Subprocess
     const gcloud = makeGcloudCli(sub)
 
+    // Stash the startup-script in a temp file and pass it via
+    // `--metadata-from-file`. The inline `--metadata=startup-script=<value>`
+    // form goes through gcloud's dict-arg parser, which trips over `[`, `]`,
+    // `,` and other YAML/JSON metacharacters that show up legitimately inside
+    // a compose file (e.g. `test: ["CMD", "healthcheck.sh"]`). Reading from a
+    // file sidesteps that parser entirely.
+    const writeStartupScript = (script: string): string => {
+      const dir = mkdtempSync(join(tmpdir(), "afk-startup-"))
+      const path = join(dir, "startup.sh")
+      writeFileSync(path, script)
+      return path
+    }
+
     const createInstance = (input: CreateInstanceInput) =>
-      gcloud
-        .json<ReadonlyArray<{ name: string }>>("compute:instances:create", [
-          "compute",
-          "instances",
-          "create",
-          input.name,
-          `--project=${input.project}`,
-          `--zone=${input.zone}`,
-          `--machine-type=${input.machineType}`,
-          `--image=${input.image}`,
-          `--service-account=${input.serviceAccount}`,
-          `--subnet=${input.subnet}`,
-          // No external IP: egress is via Cloud NAT, ingress via IAP only.
-          "--no-address",
-          // Wall-clock backstop: GCE deletes the instance when the cap elapses.
-          `--max-run-duration=${input.maxRunDurationSeconds}s`,
-          // DELETE governs both the cap and (on Spot) a preemption — either way
-          // the instance is gone, matching the no-retention self-delete model.
-          "--instance-termination-action=DELETE",
-          ...(input.spot ? ["--provisioning-model=SPOT"] : []),
-          "--scopes=https://www.googleapis.com/auth/cloud-platform",
-          // Network tag required by the Terraform-managed IAP allow rule (and
-          // the deny-ingress catch-all). Without it the VM is unreachable.
-          `--tags=${AFK_RUN_NETWORK_TAG}`,
-          `--labels=${labelsArg(input.labels)}`,
-          `--metadata=startup-script=${input.startupScript}`,
-        ])
+      Effect.gen(function* () {
+        const startupScriptPath = yield* Effect.try({
+          try: () => writeStartupScript(input.startupScript),
+          catch: (cause) =>
+            new GcpError({
+              operation: "compute:instances:create",
+              message: `failed to stage startup-script tempfile: ${cause}`,
+            }),
+        })
+        return yield* gcloud.json<ReadonlyArray<{ name: string }>>(
+          "compute:instances:create",
+          [
+            "compute",
+            "instances",
+            "create",
+            input.name,
+            `--project=${input.project}`,
+            `--zone=${input.zone}`,
+            `--machine-type=${input.machineType}`,
+            `--image=${input.image}`,
+            `--service-account=${input.serviceAccount}`,
+            `--subnet=${input.subnet}`,
+            // No external IP: egress is via Cloud NAT, ingress via IAP only.
+            "--no-address",
+            // Wall-clock backstop: GCE deletes the instance when the cap elapses.
+            `--max-run-duration=${input.maxRunDurationSeconds}s`,
+            // DELETE governs both the cap and (on Spot) a preemption — either way
+            // the instance is gone, matching the no-retention self-delete model.
+            "--instance-termination-action=DELETE",
+            ...(input.spot ? ["--provisioning-model=SPOT"] : []),
+            "--scopes=https://www.googleapis.com/auth/cloud-platform",
+            // Network tag required by the Terraform-managed IAP allow rule (and
+            // the deny-ingress catch-all). Without it the VM is unreachable.
+            `--tags=${AFK_RUN_NETWORK_TAG}`,
+            `--labels=${labelsArg(input.labels)}`,
+            `--metadata-from-file=startup-script=${startupScriptPath}`,
+          ],
+        )
+      })
         .pipe(
           Effect.flatMap((rows) => {
             const first = rows[0]
