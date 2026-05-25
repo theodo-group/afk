@@ -137,7 +137,32 @@ const upsertGitignore = (projectDir: string): boolean => {
   return true
 }
 
-const upsertEnvFile = (projectDir: string): boolean => {
+/**
+ * Pick the example scm-token line for the .afk.env scaffold based on the
+ * detected origin host. GitLab repos need `GITLAB_TOKEN` (consumed by the
+ * entrypoint as `oauth2:<token>@…`); GitHub repos need `GITHUB_TOKEN`
+ * (`x-access-token:<token>@…`). When the host is unknown we fall back to
+ * the GitHub form as the documented default.
+ */
+const scmTokenExample = (gitUrl: string | null): string => {
+  if (gitUrl === null) {
+    return "# GITHUB_TOKEN=secret:github-token   # required so Runs can clone source"
+  }
+  try {
+    const host = new URL(gitUrl).host
+    if (/(^|\.)gitlab\b/i.test(host) || /gitlab/i.test(host)) {
+      return "# GITLAB_TOKEN=secret:gitlab-token   # required so Runs can clone source"
+    }
+  } catch {
+    // Non-URL (e.g. an ssh-style remote): fall through to the GitHub default.
+  }
+  return "# GITHUB_TOKEN=secret:github-token   # required so Runs can clone source"
+}
+
+const upsertEnvFile = (
+  projectDir: string,
+  gitUrl: string | null,
+): boolean => {
   const envPath = resolve(projectDir, ENV_FILE)
   if (existsSync(envPath)) return false
   writeFileSync(
@@ -148,6 +173,7 @@ const upsertEnvFile = (projectDir: string): boolean => {
       `#`,
       `# Secret references (canonical form, all backends):`,
       `# ANTHROPIC_API_KEY=secret:anthropic-key`,
+      scmTokenExample(gitUrl),
       `# Use \`afk secrets put <name> <value>\` to store values.`,
       ``,
     ].join("\n"),
@@ -262,7 +288,7 @@ export const BootstrapServiceLive = Layer.effect(
           configCreated = true
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
@@ -420,7 +446,7 @@ export const BootstrapServiceLive = Layer.effect(
             : `added cloudflare block (backend ${wasBackend ?? "?"} → cloudflare)`
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
@@ -818,7 +844,7 @@ export const BootstrapServiceLive = Layer.effect(
             : `added local block (backend ${wasBackend ?? "?"} → local)`
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
@@ -1045,7 +1071,7 @@ export const BootstrapServiceLive = Layer.effect(
             : `added gcp block (backend ${wasBackend ?? "?"} → gcp)`
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
