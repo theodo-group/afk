@@ -102,6 +102,11 @@ export class Gce extends Context.Tag("Gce")<
       zone: string,
       name: string,
     ) => Effect.Effect<void, GcpError>
+    readonly stopInstance: (
+      project: string,
+      zone: string,
+      name: string,
+    ) => Effect.Effect<void, GcpError>
 
     readonly createImage: (
       input: CreateImageInput,
@@ -252,6 +257,20 @@ export const GceLive = Layer.effect(
         `--zone=${zone}`,
       ])
 
+    // Stop a running instance and wait for the operation to settle. Required
+    // before snapshotting its boot disk: GCE rejects `images create` while the
+    // disk is attached to a RUNNING instance (and `--force` is unsafe because
+    // the filesystem cache may still hold un-fsynced writes).
+    const stopInstance = (project: string, zone: string, name: string) =>
+      gcloud.run("compute:instances:stop", [
+        "compute",
+        "instances",
+        "stop",
+        name,
+        `--project=${project}`,
+        `--zone=${zone}`,
+      ])
+
     const createImage = (input: CreateImageInput) =>
       gcloud
         .json<ReadonlyArray<{ name: string }>>("compute:images:create", [
@@ -324,6 +343,7 @@ export const GceLive = Layer.effect(
       describeInstance,
       deleteInstance,
       startInstance,
+      stopInstance,
       createImage,
       listImages,
       deleteImage,
