@@ -31,7 +31,6 @@ import {
   ENV_FILE,
   GCP_DEFAULT_ALLOWED_MACHINE_TYPES,
   GCP_DEFAULT_MACHINE_TYPE,
-  GCP_DEFAULT_ZONE,
   GCP_STATE_BUCKET_PREFIX,
   SESSION_ARTIFACT_DIR,
   SSM_SECRET_PREFIX,
@@ -980,10 +979,15 @@ export const BootstrapServiceLive = Layer.effect(
         }
 
         const configPath = resolve(projectDir, CONFIG_FILE)
+        // Default the zone to the first zone of the chosen region, not the
+        // module-wide GCP_DEFAULT_ZONE — otherwise `afk init --region eu-west1`
+        // scaffolds zone "us-central1-a" and every subsequent gcloud call
+        // explodes with a region/zone mismatch.
+        const zoneDefault = `${region}-a`
         const gcpBlock = {
           ...(projectId === "" ? {} : { projectId }),
           region,
-          zone: GCP_DEFAULT_ZONE,
+          zone: zoneDefault,
           defaultMachineType: GCP_DEFAULT_MACHINE_TYPE,
           allowedMachineTypes: [...GCP_DEFAULT_ALLOWED_MACHINE_TYPES],
           cachedImages: [] as string[],
@@ -1023,7 +1027,18 @@ export const BootstrapServiceLive = Layer.effect(
             existing.gitUrl = originUrl
           }
           // Preserve any values the developer already set; only fill defaults.
-          existing.gcp = { ...gcpBlock, ...(existing.gcp ?? {}) }
+          const merged = { ...gcpBlock, ...(existing.gcp ?? {}) }
+          // The chosen --region overrides whatever's persisted (it's what the
+          // user just typed); a zone that doesn't sit inside it would always
+          // fail at gcloud call time, so realign it to the region default.
+          merged.region = region
+          if (
+            typeof merged.zone !== "string" ||
+            !merged.zone.startsWith(`${region}-`)
+          ) {
+            merged.zone = zoneDefault
+          }
+          existing.gcp = merged
           writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
           configAction = hadGcp
             ? "updated gcp block"
