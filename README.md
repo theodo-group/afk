@@ -64,6 +64,8 @@ bun link              # registers @afk/cli globally
 
 `bun link` puts a symlink at `~/.bun/bin/afk` that resolves back to this checkout. If `~/.bun/bin` is on your PATH (Bun's installer adds it by default), `afk` is now usable from any project. Editing the source in your checkout takes effect immediately — no relink needed.
 
+> If `afk` isn't found after `bun link` (common when Bun was installed via Homebrew or another package manager), add `~/.bun/bin` to your shell `PATH` — e.g. `export PATH="$HOME/.bun/bin:$PATH"` in `~/.bashrc` / `~/.zshrc`, or `set PATH $PATH ~/.bun/bin` in `~/.config/fish/config.fish`.
+
 Prerequisites on the developer machine:
 
 - Bun (runtime)
@@ -223,7 +225,10 @@ afk session-artifact [--out <dir>] <run-id>    # download the Run's Session Arti
                                                #   collected best-effort from the main service at Run end;
                                                #   Owner-scoped like `afk logs`
 
-afk secrets put <name> [value]                 # write to the active Backend's secret store (prompts if value omitted)
+afk secrets put <name> [value]                 # write to the active Backend's secret store
+                                               #   - value omitted: prompts on stdin (hidden) OR reads stdin if piped
+                                               #   - inline value: visible in `ps`; prefer stdin for real secrets
+                                               #   e.g. `gcloud secrets versions access latest --secret=GH | afk secrets put github-token`
 afk secrets ls                                 # list stored secret names
 afk secrets rm <name>                          # delete from the active Backend's secret store
 
@@ -271,6 +276,8 @@ RUN apt-get update && apt-get install -y git
 RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /workspace
 ```
+
+Need a more complete starting point? See [`docs/recipes/claude-code.dockerfile`](./docs/recipes/claude-code.dockerfile) — a copy-paste fragment with `bun`, common build utilities, and clear extension points for project-specific layers.
 
 ### 2. (Optional) `afk.compose.yml` at the repo root
 
@@ -357,7 +364,15 @@ Contains environment variables for Runs. Values may be plain strings (for non-se
 LOG_LEVEL=debug
 ANTHROPIC_API_KEY=secret:anthropic-key
 DATABASE_URL=secret:db-url
+
+# GitHub-hosted repos: the entrypoint clones with `x-access-token:<GITHUB_TOKEN>@…`
+GITHUB_TOKEN=secret:github-token
+
+# GitLab-hosted repos (gitlab.com or self-hosted): the entrypoint clones with `oauth2:<GITLAB_TOKEN>@…`
+# GITLAB_TOKEN=secret:gitlab-token
 ```
+
+The scm-token variable name is host-dependent — the entrypoint matches the `gitUrl` host: `*.github.com` requires `GITHUB_TOKEN`, `*gitlab*` requires `GITLAB_TOKEN`. Set whichever your origin uses; you don't need both.
 
 Secret _values_ are never written here — only `secret:<name>` references. The values themselves are stored separately via `afk secrets put <name> <value>`; see [Secrets](#secrets) for where each Backend keeps them.
 

@@ -47,7 +47,7 @@ export const buildScript = (cachedImages: ReadonlyArray<string>): string => {
     "curl -fsSL https://download.docker.com/linux/debian/gpg \\",
     "  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
     "chmod a+r /etc/apt/keyrings/docker.gpg",
-    "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable\" \\",
+    'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" \\',
     "  > /etc/apt/sources.list.d/docker.list",
     "",
     "echo 'afk-image-build: installing google cloud sdk'",
