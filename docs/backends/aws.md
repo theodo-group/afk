@@ -9,7 +9,7 @@ See the [README quickstart](../../README.md#quickstart-on-aws) for the setup com
 1. `afk init --provider aws --region <region>` creates the Terraform state S3 bucket (`afk-tf-state-<account>-<region>`), copies the Terraform module into `terraform/afk/`, renders `backend.tf`, scaffolds `.afk.env` and `afk.config.json`, and gitignores `.afk.env`.
 2. `afk provision` (or `terraform apply` from `terraform/afk/`) creates the VPC, security groups, IAM roles, the sweeper Lambda, and the developer IAM role.
 3. `afk golden build` launches a short-lived builder EC2 instance, installs Docker, pre-pulls `aws.cachedImages`, snapshots an AMI tagged `afk:golden=true`, and terminates the builder.
-4. `afk run` builds + pushes the agent image to ECR (`afk/<source-repo>`, lazy 7-day-lifecycle repo), reads/lints `afk.compose.yml`, then calls `ec2:RunInstances` against the Golden AMI with a templated `user_data` script — on-demand by default (`--spot` to opt into cheaper, interruptible Spot), tagged `afk:owner`/`afk:run-id`/`afk:branch`/`afk:sha`/`afk:managed`.
+4. `afk run` builds + pushes the agent image to ECR (`afk/<source-repo>`, lazy 7-day-lifecycle repo), reads/lints `afk.compose.yml`, then calls `ec2:RunInstances` against the Golden AMI with a templated `user_data` script — Spot by default (`--on-demand` to opt into pricier, retainable on-demand capacity), tagged `afk:owner`/`afk:run-id`/`afk:branch`/`afk:sha`/`afk:managed`.
 5. The VM boots: `user_data` authenticates to ECR, pulls the agent image, resolves `secret:<name>` vars from SSM, writes `/etc/afk/compose.yml`, and runs `timeout <N>h docker compose up --exit-code-from <main> --abort-on-container-exit` (or `docker run`). The CLI-injected entrypoint clones the repo at the ref into `/workspace` and execs the command.
 6. On exit, compose tears down sidecars and `user_data` runs `shutdown -h now`; the instance was launched with `InstanceInitiatedShutdownBehavior=terminate`, so AWS terminates it.
 
@@ -80,7 +80,7 @@ Stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The 
 
 - VPC + IGW, no NAT/endpoints, sweeper Lambda + EventBridge, DynamoDB on-demand: ~$0 baseline.
 - Per-Run: EC2 Spot compute (~70% off On-Demand), gp3 EBS root (~$0.08/GB-month, billed only while the instance exists), CloudWatch ingest, ECR storage (cycled at 7 days), data egress.
-- On-demand by default; `--spot` opts into cheaper but interruptible capacity (a Spot interruption kills the Run).
+- Spot by default (cheaper, but interruptible — a Spot interruption kills the Run, and Spot Runs are not retainable); `--on-demand` opts into pricier, retainable capacity.
 
 ## Teardown
 

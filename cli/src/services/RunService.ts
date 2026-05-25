@@ -110,8 +110,8 @@ export class RunService extends Context.Tag("RunService")<
      * neutral: it waits for the Run to reach RUNNING, tails via the `LogStore`
      * seam, and stops the tail once `findByRunId` reports a terminal state.
      * Best-effort — transient errors are tolerated and it never fails; Ctrl-C
-     * interrupts it as a clean detach. This is what `afk run` (without
-     * `--detach`) calls instead of branching on the Backend.
+     * interrupts it as a clean detach. This is what `afk run --follow` calls
+     * instead of branching on the Backend.
      */
     readonly streamUntilTerminated: (
       runId: string,

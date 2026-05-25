@@ -6,18 +6,18 @@ import { Output } from "../infra/Output.ts"
 
 const ref = Options.text("ref").pipe(Options.optional)
 const instanceType = Options.text("instance-type").pipe(Options.optional)
-const spot = Options.boolean("spot").pipe(
+const onDemand = Options.boolean("on-demand").pipe(
   Options.withDescription(
-    "use a Spot instance on AWS (cheaper, but not retainable; on-demand by default)",
+    "use an on-demand instance on AWS (pricier, but retainable; Spot by default)",
   ),
 )
 const timeout = Options.integer("timeout").pipe(
   Options.optional,
   Options.withDescription("wall-clock cap in hours"),
 )
-const detach = Options.boolean("detach", { aliases: ["d"] }).pipe(
+const follow = Options.boolean("follow", { aliases: ["f"] }).pipe(
   Options.withDescription(
-    "return immediately after launch; without this flag, afk run streams logs until the Run terminates",
+    "stream logs until the Run terminates; without this flag, afk run returns immediately after launch",
   ),
 )
 const dryRun = Options.boolean("dry-run").pipe(
@@ -35,8 +35,8 @@ const formatBackendDetails = (d: Record<string, string>): string => {
 
 export const run = Command.make(
   "run",
-  { ref, instanceType, spot, timeout, detach, dryRun, command },
-  ({ ref, instanceType, spot, timeout, detach, dryRun, command }) =>
+  { ref, instanceType, onDemand, timeout, follow, dryRun, command },
+  ({ ref, instanceType, onDemand, timeout, follow, dryRun, command }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       const cfg = yield* ConfigService
@@ -45,7 +45,7 @@ export const run = Command.make(
       const backendOverrides: Record<string, string | boolean> = {}
       if (instanceType._tag === "Some")
         backendOverrides.instanceType = instanceType.value
-      if (spot) backendOverrides.spot = true
+      if (onDemand) backendOverrides.onDemand = true
 
       const planInput = {
         command,
@@ -97,17 +97,17 @@ export const run = Command.make(
               `  compose      ${started.composeUsed ? "yes" : "no"}`,
               `  logs         ${started.logChannel}`,
               ``,
-              detach
-                ? `Follow with: afk logs ${started.runId} --follow`
-                : `Streaming logs (Ctrl-C to detach, the Run keeps going)…`,
-              detach ? `Attach with: afk attach ${started.runId}` : ``,
+              follow
+                ? `Streaming logs (Ctrl-C to stop following, the Run keeps going)…`
+                : `Follow with: afk logs ${started.runId} --follow`,
+              follow ? `` : `Attach with: afk attach ${started.runId}`,
             ]
               .filter(Boolean)
               .join("\n"),
           ),
       })
 
-      if (!detach) {
+      if (follow) {
         const { sourceRepoName } = yield* cfg.load
         yield* runs.streamUntilTerminated(started.runId, sourceRepoName)
       }

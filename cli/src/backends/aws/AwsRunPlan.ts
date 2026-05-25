@@ -233,11 +233,12 @@ export const planAwsRun = (
     sessionArtifactMaxBytes: SESSION_ARTIFACT_MAX_BYTES,
   })
 
-  // On-demand is the default; Spot is opt-in via `--spot`. On-demand Runs can be
-  // stopped (EBS preserved) and so are retainable; one-time Spot cannot.
-  const spot =
-    input.backendOverrides?.spot === true ||
-    input.backendOverrides?.spot === "true"
+  // Spot is the default (cheaper); on-demand is opt-in via `--on-demand`. On-demand
+  // Runs can be stopped (EBS preserved) and so are retainable; one-time Spot cannot.
+  const onDemand =
+    input.backendOverrides?.onDemand === true ||
+    input.backendOverrides?.onDemand === "true"
+  const spot = !onDemand
   const retentionDays = config.retentionDays ?? DEFAULT_RETENTION_DAYS
   // Retain only when the Run can actually be stopped (on-demand) and a window
   // is configured. The instance then stops (not terminates) on exit; the
