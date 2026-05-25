@@ -185,20 +185,19 @@ export const GceLive = Layer.effect(
             `--metadata-from-file=startup-script=${startupScriptPath}`,
           ],
         )
-      })
-        .pipe(
-          Effect.flatMap((rows) => {
-            const first = rows[0]
-            return first
-              ? Effect.succeed({ name: first.name })
-              : Effect.fail(
-                  new GcpError({
-                    operation: "compute:instances:create",
-                    message: "no instance returned",
-                  }),
-                )
-          }),
-        )
+      }).pipe(
+        Effect.flatMap((rows) => {
+          const first = rows[0]
+          return first
+            ? Effect.succeed({ name: first.name })
+            : Effect.fail(
+                new GcpError({
+                  operation: "compute:instances:create",
+                  message: "no instance returned",
+                }),
+              )
+        }),
+      )
 
     const toInstance = (i: {
       name: string

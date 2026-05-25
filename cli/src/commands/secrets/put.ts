@@ -5,7 +5,9 @@ import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
 
 const name = Args.text({ name: "name" }).pipe(
-  Args.withDescription("Secret name. Referenced from .afk.env as `secret:<name>`."),
+  Args.withDescription(
+    "Secret name. Referenced from .afk.env as `secret:<name>`.",
+  ),
 )
 const value = Args.text({ name: "value" }).pipe(
   Args.optional,

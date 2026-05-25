@@ -159,10 +159,7 @@ const scmTokenExample = (gitUrl: string | null): string => {
   return "# GITHUB_TOKEN=secret:github-token   # required so Runs can clone source"
 }
 
-const upsertEnvFile = (
-  projectDir: string,
-  gitUrl: string | null,
-): boolean => {
+const upsertEnvFile = (projectDir: string, gitUrl: string | null): boolean => {
   const envPath = resolve(projectDir, ENV_FILE)
   if (existsSync(envPath)) return false
   writeFileSync(
