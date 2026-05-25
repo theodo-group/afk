@@ -5,6 +5,7 @@ import { Git } from "../adapters/Git.ts"
 import { Docker } from "../adapters/Docker.ts"
 import { ImageRegistry } from "./backend/ImageRegistry.ts"
 import { ConfigService } from "./ConfigService.ts"
+import { Output } from "../infra/Output.ts"
 import {
   UserError,
   AwsError,
@@ -68,6 +69,12 @@ export const BuildServiceLive = Layer.effect(
     const docker = yield* Docker
     const registry = yield* ImageRegistry
     const cfg = yield* ConfigService
+    const out = yield* Output
+
+    // Phase markers go to stderr (`out.print` writes stdout via console.log,
+    // which would clobber `--json`). Honour `mode === "json"` by going silent.
+    const phase = (msg: string) =>
+      out.mode === "json" ? Effect.void : out.print(msg)
 
     return BuildService.of({
       build: ({ ref }) =>
@@ -86,6 +93,7 @@ export const BuildServiceLive = Layer.effect(
             )
           }
           const branch = yield* git.currentBranch
+          yield* phase(`Resolving ${ref ?? branch} against ${config.gitUrl}…`)
           const sha = yield* (
             ref
               ? git.resolveRemoteRef(config.gitUrl, ref)
@@ -110,12 +118,14 @@ export const BuildServiceLive = Layer.effect(
           const repoName = `${ECR_REPO_PREFIX}/${sourceRepoName}`
           const tag = `${branch}-${sha.slice(0, 12)}`
 
+          yield* phase("Authenticating against the image registry…")
           yield* registry.ensureRepoAndAuth(repoName)
           const registryHost = yield* registry.registryUri
           const image = `${registryHost}/${repoName}:${tag}`
 
           const exists = yield* registry.imageExists(repoName, tag)
           if (exists) {
+            yield* phase(`Image already exists, skipping build: ${image}`)
             return { image, tag, sha, branch, skipped: true }
           }
 
@@ -155,6 +165,7 @@ export const BuildServiceLive = Layer.effect(
             (t) => `${registryHost}/${repoName}:${t}`,
           )
 
+          yield* phase(`Building user image (${userImageTag})…`)
           yield* docker.build({
             contextDir: projectRoot,
             dockerfile: userDockerfile,
@@ -163,6 +174,7 @@ export const BuildServiceLive = Layer.effect(
             cacheFrom: cacheFromImages,
             inlineCache: true,
           })
+          yield* phase(`Building wrapper image (${image})…`)
           yield* docker.build({
             contextDir: buildDir,
             dockerfile: wrapperDockerfile,
@@ -172,6 +184,7 @@ export const BuildServiceLive = Layer.effect(
             inlineCache: true,
           })
 
+          yield* phase(`Pushing ${image}…`)
           yield* registry.push(image)
 
           return { image, tag, sha, branch, skipped: false }
