@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { GcpError } from "../../infra/Errors.ts"
 import { makeGcloudCli } from "./gcloudCli.ts"
+import { AFK_RUN_NETWORK_TAG } from "../../constants.ts"
 
 export interface Label {
   readonly key: string
@@ -141,6 +142,9 @@ export const GceLive = Layer.effect(
           `--max-run-duration=${input.maxRunDurationSeconds}s`,
           "--instance-termination-action=DELETE",
           "--scopes=https://www.googleapis.com/auth/cloud-platform",
+          // Network tag required by the Terraform-managed IAP allow rule (and
+          // the deny-ingress catch-all). Without it the VM is unreachable.
+          `--tags=${AFK_RUN_NETWORK_TAG}`,
           `--labels=${labelsArg(input.labels)}`,
           `--metadata=startup-script=${input.startupScript}`,
         ])
