@@ -1,5 +1,9 @@
 export const AFK_VPC_NAME = "afk-vpc"
 export const AFK_SUBNET_NAME = "afk-subnet"
+// GCE network tag stamped on every afk-managed VM (golden builder + Runs). The
+// IAP-SSH allow rule and deny-ingress rule both target this tag — a VM created
+// without it is invisible to IAP and cannot be `afk attach`-ed into.
+export const AFK_RUN_NETWORK_TAG = "afk-run"
 export const AFK_SECURITY_GROUP = "afk-runs-sg"
 export const AFK_VM_INSTANCE_ROLE = "afk-vm-instance-role"
 export const AFK_VM_INSTANCE_PROFILE = "afk-vm-instance-profile"
