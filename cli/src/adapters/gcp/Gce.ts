@@ -18,6 +18,8 @@ export interface CreateInstanceInput {
   readonly serviceAccount: string
   readonly subnet: string
   readonly startupScript: string
+  /** Spot capacity (`provisioningModel: SPOT`) when true, else STANDARD on-demand. */
+  readonly spot: boolean
   /** Wall-clock cap; the instance self-deletes (instance_termination_action) at expiry. */
   readonly maxRunDurationSeconds: number
   readonly labels: ReadonlyArray<Label>
@@ -145,7 +147,10 @@ export const GceLive = Layer.effect(
           "--no-address",
           // Wall-clock backstop: GCE deletes the instance when the cap elapses.
           `--max-run-duration=${input.maxRunDurationSeconds}s`,
+          // DELETE governs both the cap and (on Spot) a preemption — either way
+          // the instance is gone, matching the no-retention self-delete model.
           "--instance-termination-action=DELETE",
+          ...(input.spot ? ["--provisioning-model=SPOT"] : []),
           "--scopes=https://www.googleapis.com/auth/cloud-platform",
           // Network tag required by the Terraform-managed IAP allow rule (and
           // the deny-ingress catch-all). Without it the VM is unreachable.

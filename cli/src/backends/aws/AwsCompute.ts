@@ -26,7 +26,6 @@ import {
   LOG_RETENTION_DAYS,
   TAG_MANAGED,
   TAG_OWNER,
-  VM_COMPOSE_PATH,
 } from "../../constants.ts"
 import {
   type AwsBackendPlan,
@@ -169,8 +168,8 @@ export const AwsComputeLive = Layer.effect(
           iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
           userData: aws.userData,
           spot: aws.spot,
-          // Retained Runs stop (EBS preserved) on exit; others terminate.
-          shutdownBehavior: aws.retain ? "stop" : "terminate",
+          // Cloud Runs are never retained — the instance terminates on exit.
+          shutdownBehavior: "terminate",
           tags: aws.tags,
         })
 
@@ -224,34 +223,19 @@ export const AwsComputeLive = Layer.effect(
         const service = opts.service ?? mainService
         const instanceId = run.resourceId
 
-        // A retained Run is a *stopped* (not terminated) instance — its EBS
-        // volume survives, so `retainedUntil` is set. Resume it (start, wait for
-        // the instance + SSM agent) before entering; re-park (stop) on detach so
-        // "retained" stays the only resting state. A non-RUNNING Run without
-        // retainedUntil is gone (terminated — e.g. a Spot Run).
-        const retained = run.retainedUntil !== undefined
-        if (!retained && run.status !== "RUNNING") {
+        // Cloud Runs are never retained, so attach only enters a *live* Run —
+        // a non-RUNNING Run has ended and its instance is gone.
+        if (run.status !== "RUNNING") {
           return yield* Effect.fail(
             new UserError({
-              message: `Run ${runId} has ended and was not retained.`,
-              hint: "Cloud Runs are retained only when launched on-demand (Spot Runs self-terminate).",
+              message: `Run ${runId} has ended.`,
+              hint: "Cloud Runs are not retained — declare a Session Artifact to capture state past a Run's end.",
             }),
           )
         }
-        if (retained) {
-          yield* ec2.startInstances(region, [instanceId])
-          yield* ec2.waitForInstance(region, instanceId, "running")
-          yield* ssm.waitForAgent({ region, instanceId })
-        }
-
-        // Re-park when the session ends (retained only — never stop a live Run).
-        const stopInstance = ec2
-          .stopInstances(region, [instanceId])
-          .pipe(Effect.catchAll(() => Effect.void))
 
         if (opts.host) {
-          const shell = ssm.startHostShell({ region, instanceId })
-          yield* retained ? shell.pipe(Effect.ensuring(stopInstance)) : shell
+          yield* ssm.startHostShell({ region, instanceId })
           return
         }
 
@@ -264,42 +248,19 @@ export const AwsComputeLive = Layer.effect(
           `[ -n "$C" ] || C=$(docker ps -aqf "name=^${svc}$" | head -n1); ` +
           `if [ -z "$C" ]; then echo "service ${svc} not found" >&2; exit 1; fi; `
 
-        let cmd: string
-        if (retained && service === mainService) {
-          // The main service's process has exited; `exec` (or `docker start`,
-          // which would re-run the command) is wrong. Bring the sidecars back so
-          // the post-mortem shell can reach them, then commit the main
-          // container's final filesystem and run a shell from it on host
-          // networking, bypassing the baked entrypoint (--entrypoint).
-          const img = `afk-postmortem-${runId.slice(0, 8)}`
-          cmd =
-            `if [ -f ${VM_COMPOSE_PATH} ]; then ` +
-            `for s in $(docker compose -f ${VM_COMPOSE_PATH} config --services 2>/dev/null); do ` +
-            `if [ "$s" != "${mainService}" ]; then docker compose -f ${VM_COMPOSE_PATH} start "$s" >/dev/null 2>&1 || true; fi; done; fi; ` +
-            findCid(mainService) +
-            `docker commit "$C" ${img} >/dev/null && ` +
-            `{ docker run -it --rm --network host --entrypoint bash ${img} 2>/dev/null || ` +
-            `docker run -it --rm --network host --entrypoint sh ${img}; }; ` +
-            `docker image rm ${img} >/dev/null 2>&1 || true`
-        } else {
-          // Live main service, or a sidecar (live, or stopped on a retained Run):
-          // start the container if stopped (no-op when running) and `exec` in.
-          cmd =
-            findCid(service) +
-            `docker start "$C" >/dev/null 2>&1 || true; ` +
-            `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
-        }
+        const cmd =
+          findCid(service) +
+          `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
 
         // The SSM session enters as `ssm-user`, who is not in the `docker`
         // group, so every docker call would hit the socket with EACCES. Run the
         // whole snippet under root — passwordless sudo is available on the AL
         // host, and the single PTY is preserved through to `docker exec -it`.
-        const session = ssm.startInteractiveCommand({
+        yield* ssm.startInteractiveCommand({
           region,
           instanceId,
           command: `sudo bash -c ${shellQuote(cmd)}`,
         })
-        yield* retained ? session.pipe(Effect.ensuring(stopInstance)) : session
       })
 
     const callerPrincipal = Effect.gen(function* () {

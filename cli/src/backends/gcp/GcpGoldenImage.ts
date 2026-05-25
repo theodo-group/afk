@@ -118,6 +118,8 @@ export const GcpGoldenImageLive = Layer.effect(
         serviceAccount,
         subnet,
         startupScript: plan.builderStartupScript,
+        // On-demand: a preemption mid-build would waste the snapshot work.
+        spot: false,
         maxRunDurationSeconds: BUILDER_MAX_RUN_SECONDS,
         labels: [{ key: "afk-purpose", value: "image-builder" }],
       })
