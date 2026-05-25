@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
+import { homedir } from "node:os"
 import { resolve } from "node:path"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
@@ -8,6 +9,37 @@ import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
 import { Provisioner } from "../../services/backend/Provisioner.ts"
 import { GCP_DEFAULT_REGION, GCP_DEFAULT_ZONE } from "../../constants.ts"
+
+/**
+ * Read the quota_project_id baked into the developer's Application Default
+ * Credentials. Terraform's google provider authenticates via ADC; when the
+ * ADC's quota project doesn't match the project we're applying into, every
+ * API call comes back as a 403 "billing account ... disabled in state absent"
+ * — confusing and unrelated to the project's actual billing state.
+ *
+ * Returns `null` when there is no `application_default_credentials.json`,
+ * when the JSON is unparseable, or when it has no `quota_project_id` field
+ * (in any of which cases we leave the developer to whatever default gcloud
+ * picks — we only fail fast when the file exists and explicitly mismatches).
+ */
+const readAdcQuotaProject = (): string | null => {
+  const candidates = [
+    process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    resolve(homedir(), ".config", "gcloud", "application_default_credentials.json"),
+  ].filter((p): p is string => typeof p === "string" && p.length > 0)
+  for (const path of candidates) {
+    if (!existsSync(path)) continue
+    try {
+      const adc = JSON.parse(readFileSync(path, "utf8")) as {
+        quota_project_id?: unknown
+      }
+      if (typeof adc.quota_project_id === "string") return adc.quota_project_id
+    } catch {
+      // Unparseable ADC file isn't our problem to diagnose here.
+    }
+  }
+  return null
+}
 
 /**
  * GCP provisioning runs the Terraform module dropped at `terraform/gcp` — VPC +
@@ -37,6 +69,20 @@ export const GcpProvisionerLive = Layer.effect(
       const region = config.gcp?.region ?? GCP_DEFAULT_REGION
       const zone = config.gcp?.zone ?? GCP_DEFAULT_ZONE
       const project = config.gcp?.projectId ?? (yield* auth.activeProject)
+
+      // Pre-flight: ADC quota project must match the target project, else
+      // `terraform apply` fails inside the gcs backend's first state read
+      // with a 403 that reads like a billing problem ("billing account …
+      // disabled in state absent"). Surface a one-liner fix instead.
+      const adcQuotaProject = readAdcQuotaProject()
+      if (adcQuotaProject !== null && adcQuotaProject !== project) {
+        return yield* Effect.fail(
+          new UserError({
+            message: `Application Default Credentials quota project (${adcQuotaProject}) does not match afk.config.json gcp.projectId (${project}).`,
+            hint: `Run: gcloud auth application-default set-quota-project ${project}`,
+          }),
+        )
+      }
       // The afk-developer role + IAP/OS-Login bindings need a concrete member at
       // apply time (terraform/gcp has no default for developer_member). Derive it
       // from the active gcloud principal: a *.gserviceaccount.com account is a
