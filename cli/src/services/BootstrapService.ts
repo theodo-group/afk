@@ -31,7 +31,6 @@ import {
   ENV_FILE,
   GCP_DEFAULT_ALLOWED_MACHINE_TYPES,
   GCP_DEFAULT_MACHINE_TYPE,
-  GCP_DEFAULT_ZONE,
   GCP_STATE_BUCKET_PREFIX,
   SESSION_ARTIFACT_DIR,
   SSM_SECRET_PREFIX,
@@ -138,7 +137,29 @@ const upsertGitignore = (projectDir: string): boolean => {
   return true
 }
 
-const upsertEnvFile = (projectDir: string): boolean => {
+/**
+ * Pick the example scm-token line for the .afk.env scaffold based on the
+ * detected origin host. GitLab repos need `GITLAB_TOKEN` (consumed by the
+ * entrypoint as `oauth2:<token>@…`); GitHub repos need `GITHUB_TOKEN`
+ * (`x-access-token:<token>@…`). When the host is unknown we fall back to
+ * the GitHub form as the documented default.
+ */
+const scmTokenExample = (gitUrl: string | null): string => {
+  if (gitUrl === null) {
+    return "# GITHUB_TOKEN=secret:github-token   # required so Runs can clone source"
+  }
+  try {
+    const host = new URL(gitUrl).host
+    if (/(^|\.)gitlab\b/i.test(host) || /gitlab/i.test(host)) {
+      return "# GITLAB_TOKEN=secret:gitlab-token   # required so Runs can clone source"
+    }
+  } catch {
+    // Non-URL (e.g. an ssh-style remote): fall through to the GitHub default.
+  }
+  return "# GITHUB_TOKEN=secret:github-token   # required so Runs can clone source"
+}
+
+const upsertEnvFile = (projectDir: string, gitUrl: string | null): boolean => {
   const envPath = resolve(projectDir, ENV_FILE)
   if (existsSync(envPath)) return false
   writeFileSync(
@@ -149,12 +170,30 @@ const upsertEnvFile = (projectDir: string): boolean => {
       `#`,
       `# Secret references (canonical form, all backends):`,
       `# ANTHROPIC_API_KEY=secret:anthropic-key`,
+      scmTokenExample(gitUrl),
       `# Use \`afk secrets put <name> <value>\` to store values.`,
       ``,
     ].join("\n"),
   )
   return true
 }
+
+/**
+ * Read the `origin` remote URL of the working dir's git repo, or `null` when
+ * there is no git repo / no origin remote. Used by `afk init` to pre-fill
+ * `gitUrl` in `afk.config.json` so devs don't have to copy-paste it.
+ */
+const detectOriginUrl = (
+  projectDir: string,
+  run: (
+    cmd: string,
+    args: ReadonlyArray<string>,
+  ) => Effect.Effect<{ readonly stdout: string }, SubprocessError>,
+): Effect.Effect<string | null> =>
+  run("git", ["-C", projectDir, "remote", "get-url", "origin"]).pipe(
+    Effect.map((r): string | null => r.stdout.trim() || null),
+    Effect.catchAll(() => Effect.succeed(null as string | null)),
+  )
 
 export const BootstrapServiceLive = Layer.effect(
   BootstrapService,
@@ -172,6 +211,7 @@ export const BootstrapServiceLive = Layer.effect(
     ): Effect.Effect<InitResult, AwsError | UserError> =>
       Effect.gen(function* () {
         const { region, projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
         const identity = yield* sts.callerIdentity
         const stateBucket = `${AFK_STATE_BUCKET_PREFIX}-${identity.Account}-${region}`
 
@@ -222,7 +262,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "aws",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultInstanceType: "t3.medium",
                 allowedInstanceTypes: [
@@ -245,7 +285,7 @@ export const BootstrapServiceLive = Layer.effect(
           configCreated = true
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
@@ -286,6 +326,7 @@ export const BootstrapServiceLive = Layer.effect(
     > =>
       Effect.gen(function* () {
         const { projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
 
         const apiToken = process.env.CLOUDFLARE_API_TOKEN
         if (!apiToken) {
@@ -363,7 +404,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "cloudflare",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultTimeoutHours: 4,
                 cloudflare: cloudflareBlock,
@@ -383,6 +424,12 @@ export const BootstrapServiceLive = Layer.effect(
           const hadCf = existing.cloudflare !== undefined
           const wasBackend = existing.backend
           existing.backend = "cloudflare"
+          if (
+            (existing.gitUrl === undefined || existing.gitUrl === "") &&
+            originUrl !== null
+          ) {
+            existing.gitUrl = originUrl
+          }
           // Preserve any values the developer already set (e.g. cachedImages,
           // a custom workerUrl), only filling the accountId + defaults.
           existing.cloudflare = {
@@ -396,7 +443,7 @@ export const BootstrapServiceLive = Layer.effect(
             : `added cloudflare block (backend ${wasBackend ?? "?"} → cloudflare)`
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
@@ -751,6 +798,7 @@ export const BootstrapServiceLive = Layer.effect(
     ): Effect.Effect<InitResult, UserError> =>
       Effect.gen(function* () {
         const { projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
         const configPath = resolve(projectDir, CONFIG_FILE)
         let configCreated = false
         let configAction: string
@@ -760,7 +808,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "local",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultTimeoutHours: 4,
                 local: { cachedImages: [] as string[] },
@@ -780,6 +828,12 @@ export const BootstrapServiceLive = Layer.effect(
           const hadLocal = existing.local !== undefined
           const wasBackend = existing.backend
           existing.backend = "local"
+          if (
+            (existing.gitUrl === undefined || existing.gitUrl === "") &&
+            originUrl !== null
+          ) {
+            existing.gitUrl = originUrl
+          }
           existing.local = { cachedImages: [], ...(existing.local ?? {}) }
           writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
           configAction = hadLocal
@@ -787,7 +841,7 @@ export const BootstrapServiceLive = Layer.effect(
             : `added local block (backend ${wasBackend ?? "?"} → local)`
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
@@ -878,6 +932,7 @@ export const BootstrapServiceLive = Layer.effect(
     const initGcp = (input: InitInput): Effect.Effect<InitResult, UserError> =>
       Effect.gen(function* () {
         const { region, projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
         const projectId = yield* resolveGcpProject
         const stateBucket =
           projectId === ""
@@ -947,10 +1002,15 @@ export const BootstrapServiceLive = Layer.effect(
         }
 
         const configPath = resolve(projectDir, CONFIG_FILE)
+        // Default the zone to the first zone of the chosen region, not the
+        // module-wide GCP_DEFAULT_ZONE — otherwise `afk init --region eu-west1`
+        // scaffolds zone "us-central1-a" and every subsequent gcloud call
+        // explodes with a region/zone mismatch.
+        const zoneDefault = `${region}-a`
         const gcpBlock = {
           ...(projectId === "" ? {} : { projectId }),
           region,
-          zone: GCP_DEFAULT_ZONE,
+          zone: zoneDefault,
           defaultMachineType: GCP_DEFAULT_MACHINE_TYPE,
           allowedMachineTypes: [...GCP_DEFAULT_ALLOWED_MACHINE_TYPES],
           cachedImages: [] as string[],
@@ -963,7 +1023,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "gcp",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultTimeoutHours: 4,
                 gcp: gcpBlock,
@@ -983,15 +1043,32 @@ export const BootstrapServiceLive = Layer.effect(
           const hadGcp = existing.gcp !== undefined
           const wasBackend = existing.backend
           existing.backend = "gcp"
+          if (
+            (existing.gitUrl === undefined || existing.gitUrl === "") &&
+            originUrl !== null
+          ) {
+            existing.gitUrl = originUrl
+          }
           // Preserve any values the developer already set; only fill defaults.
-          existing.gcp = { ...gcpBlock, ...(existing.gcp ?? {}) }
+          const merged = { ...gcpBlock, ...(existing.gcp ?? {}) }
+          // The chosen --region overrides whatever's persisted (it's what the
+          // user just typed); a zone that doesn't sit inside it would always
+          // fail at gcloud call time, so realign it to the region default.
+          merged.region = region
+          if (
+            typeof merged.zone !== "string" ||
+            !merged.zone.startsWith(`${region}-`)
+          ) {
+            merged.zone = zoneDefault
+          }
+          existing.gcp = merged
           writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
           configAction = hadGcp
             ? "updated gcp block"
             : `added gcp block (backend ${wasBackend ?? "?"} → gcp)`
         }
 
-        const envCreated = upsertEnvFile(projectDir)
+        const envCreated = upsertEnvFile(projectDir, originUrl)
         const gitignoreUpdated = upsertGitignore(projectDir)
 
         const status = (b: boolean) => (b ? "created" : "already present")
