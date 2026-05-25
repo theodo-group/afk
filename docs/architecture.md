@@ -137,7 +137,7 @@ Output mode and log level come from `argv` (`--json/--verbose/--quiet`) and are 
 2. `RunService.prepare` loads config, runs the cross-Backend image build via `BuildService`, hands a neutral `StartInput` to `Compute.prepare`. RunService is the orchestrator — cross-cutting concerns (audit, retries) belong here, not in the backend.
 3. `Compute.prepare` (active `backends/*/…Compute.ts`) resolves the full `PreparedRun`, provider specifics in its opaque `backendPlan`.
 4. `--dry-run` stops here and prints via `Output.emit`. Otherwise `Compute.launch` performs the irreversible launch, returns a neutral `RunStarted`.
-5. Unless `--detach`, the command calls `RunService.streamUntilTerminated` — backend-neutral: it waits for the Run to reach RUNNING, tails via the `LogStore` seam, and stops the tail (fiber interruption) once `findByRunId` reports a terminal state. No `backendName` branch.
+5. With `--follow`, the command calls `RunService.streamUntilTerminated` — backend-neutral: it waits for the Run to reach RUNNING, tails via the `LogStore` seam, and stops the tail (fiber interruption) once `findByRunId` reports a terminal state. No `backendName` branch.
 
 ## Output
 
