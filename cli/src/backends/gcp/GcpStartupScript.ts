@@ -64,11 +64,17 @@ const renderSecretFetches = (
   project: string,
 ): string => {
   if (secrets.length === 0) return "# (no secrets)"
+  // Hits the Secret Manager REST API directly with the metadata-server access
+  // token; the response payload is base64-encoded, hence the `base64 -d`.
+  // Avoids depending on `gcloud` (not on Container-Optimized OS).
   return secrets
     .map((s) => {
       const id = `${GCP_SECRET_PREFIX}-${s.secretName}`
+      const url = `https://secretmanager.googleapis.com/v1/projects/${project}/secrets/${id}/versions/latest:access`
       return [
-        `_val=$(gcloud secrets versions access latest --project=${shellQuote(project)} --secret=${shellQuote(id)})`,
+        `AFK_TOKEN=$(afk_token)`,
+        `_val=$(curl -fsS -H "Authorization: Bearer $AFK_TOKEN" ${shellQuote(url)} \\`,
+        `  | sed -nE 's/.*"data":"([^"]+)".*/\\1/p' | base64 -d)`,
         `printf '%s=%s\\n' ${shellQuote(s.name)} "$_val" >> "$AFK_ENV_FILE"`,
         `unset _val`,
       ].join("\n")
@@ -102,9 +108,24 @@ const renderArtifactCollection = (
     `  done`,
     `  find "$AFK_ART_STAGE" -type f -size +${input.sessionArtifactMaxBytes}c -print -delete 2>/dev/null \\`,
     `    | sed 's#^#afk-startup: skipped (over cap): #' || true`,
-    `  gcloud storage cp --recursive "$AFK_ART_STAGE/*" ${shellQuote(`gs://${input.sessionArtifactBucket}/${input.sessionArtifactPrefix}`)} >/dev/null 2>&1 \\`,
-    `    && echo "afk-startup: uploaded session artifacts" \\`,
-    `    || echo "afk-startup: session artifact upload failed (non-fatal)"`,
+    `  # GCS upload via REST (no gcloud on COS). One object per file, name`,
+    `  # = <prefix>/<relative path>, URL-encoded byte-wise via printf | od.`,
+    `  AFK_TOKEN=$(afk_token)`,
+    `  AFK_BUCKET=${shellQuote(input.sessionArtifactBucket)}`,
+    `  AFK_PREFIX=${shellQuote(input.sessionArtifactPrefix)}`,
+    `  while IFS= read -r -d '' _f; do`,
+    `    _rel="\${_f#$AFK_ART_STAGE/}"`,
+    `    _enc=$(printf '%s' "$AFK_PREFIX/$_rel" \\`,
+    `      | od -An -tx1 -v | tr -d ' \\n' | sed -E 's/(..)/%\\1/g')`,
+    `    if curl -fsS -X POST -H "Authorization: Bearer $AFK_TOKEN" \\`,
+    `        -H "Content-Type: application/octet-stream" --data-binary "@$_f" \\`,
+    `        "https://storage.googleapis.com/upload/storage/v1/b/$AFK_BUCKET/o?uploadType=media&name=$_enc" \\`,
+    `        >/dev/null; then`,
+    `      echo "afk-startup: uploaded session artifact $_rel"`,
+    `    else`,
+    `      echo "afk-startup: session artifact $_rel upload failed (non-fatal)"`,
+    `    fi`,
+    `  done < <(find "$AFK_ART_STAGE" -type f -print0 2>/dev/null)`,
     `fi`,
   ].join("\n")
 }
@@ -156,6 +177,8 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
         .filter((l) => l !== "")
         .join("\n")
 
+  const registryHost = input.image.split("/")[0] ?? ""
+
   return [
     "#!/bin/bash",
     "set -uo pipefail",
@@ -163,15 +186,21 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
     `export ${GCP_BACKEND_ENV}=gcp`,
     `export AFK_ZONE=${shellQuote(input.zone)}`,
     `export AFK_INSTANCE=${shellQuote(input.instanceName)}`,
+    `export AFK_PROJECT_ID=${shellQuote(input.project)}`,
     "",
     `mkdir -p ${shellQuote(VM_AFK_DIR)}`,
     "",
+    "# --- IMDS helpers (Container-Optimized OS has no gcloud SDK) ---",
+    "# Every call to a Google API uses an OAuth2 access token fetched fresh from",
+    "# the GCE metadata server. JSON parsing is intentionally tiny-regex — these",
+    "# responses are flat objects so it's good enough, and avoids depending on",
+    "# jq/python being present on the host image.",
+    "afk_meta() { curl -fsS -H 'Metadata-Flavor: Google' \"http://metadata.google.internal/computeMetadata/v1/$1\"; }",
+    `afk_token() { afk_meta 'instance/service-accounts/default/token' | sed -nE 's/.*"access_token":"([^"]+)".*/\\1/p'; }`,
+    "",
     "# --- Pull agent image (instance SA has Artifact Registry read) ---",
-    // A stock VM's Docker isn't wired to authenticate to Artifact Registry, so
-    // register gcloud as the credential helper for this image's registry host
-    // (the prefix of the image URI, e.g. `us-central1-docker.pkg.dev`) before
-    // pulling — the AWS analogue is `ecr get-login-password | docker login`.
-    `gcloud auth configure-docker ${shellQuote(input.image.split("/")[0] ?? "")} --quiet`,
+    `AFK_TOKEN=$(afk_token)`,
+    `echo "$AFK_TOKEN" | docker login -u oauth2accesstoken --password-stdin ${shellQuote(registryHost)}`,
     `docker pull ${shellQuote(input.image)}`,
     "",
     "# --- Build env file (plain + decrypted secrets) ---",
@@ -191,7 +220,11 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
     `echo "afk-startup: run exited $RUN_EXIT"`,
     "",
     "# --- Self-reclaim (max_run_duration is the backstop) ---",
-    `gcloud compute instances delete ${shellQuote(input.instanceName)} --zone=${shellQuote(input.zone)} --quiet || true`,
+    "# Fresh token: a long-running workload can outlive the boot-time one.",
+    `AFK_TOKEN=$(afk_token)`,
+    `curl -fsS -X DELETE -H "Authorization: Bearer $AFK_TOKEN" \\`,
+    `  "https://compute.googleapis.com/compute/v1/projects/$AFK_PROJECT_ID/zones/$AFK_ZONE/instances/$AFK_INSTANCE" \\`,
+    "  || true",
     "",
   ].join("\n")
 }
