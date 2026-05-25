@@ -4,8 +4,17 @@ import { SecretStore } from "../../services/backend/SecretStore.ts"
 import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
 
-const name = Args.text({ name: "name" })
-const value = Args.text({ name: "value" }).pipe(Args.optional)
+const name = Args.text({ name: "name" }).pipe(
+  Args.withDescription("Secret name. Referenced from .afk.env as `secret:<name>`."),
+)
+const value = Args.text({ name: "value" }).pipe(
+  Args.optional,
+  Args.withDescription(
+    "Secret value. Visible in `ps` when passed inline — prefer stdin for real secrets. " +
+      "Omit to either read from a pipe (e.g. `gcloud secrets versions access latest --secret=GH | afk secrets put github-token`) " +
+      "or be prompted interactively (input hidden).",
+  ),
+)
 
 export const put = Command.make("put", { name, value }, ({ name, value }) =>
   Effect.gen(function* () {
