@@ -16,7 +16,17 @@ import {
 // `AwsGoldenPlan.ts`. Testable with plain assertions, no Layer.
 // ---------------------------------------------------------------------------
 
-/** The pre-pull script run on the builder VM via its startup-script. Pure. */
+/**
+ * The setup + pre-pull script that runs on the builder VM via its startup-
+ * script. Three phases:
+ *   1. Install Docker Engine + Compose plugin (Debian 12 doesn't ship them).
+ *   2. Install Google Cloud SDK — every Run-time `gcloud …` call in the
+ *      per-Run startup-script (Artifact Registry auth, Secret Manager
+ *      access, GCS uploads, self-delete) depends on this being baked in.
+ *      The AWS analogue is free: Amazon Linux ships `aws` preinstalled.
+ *   3. Pre-pull the consumer's `cachedImages` so cold-boot Run pulls only
+ *      the agent image. Pure.
+ */
 export const buildScript = (cachedImages: ReadonlyArray<string>): string => {
   const pulls = cachedImages
     .map(
@@ -27,6 +37,31 @@ export const buildScript = (cachedImages: ReadonlyArray<string>): string => {
   return [
     "#!/bin/bash",
     "set -uo pipefail",
+    "export DEBIAN_FRONTEND=noninteractive",
+    "",
+    "echo 'afk-image-build: installing docker engine'",
+    "apt-get update -y",
+    "apt-get install -y --no-install-recommends \\",
+    "  ca-certificates curl gnupg lsb-release apt-transport-https",
+    "install -m 0755 -d /etc/apt/keyrings",
+    "curl -fsSL https://download.docker.com/linux/debian/gpg \\",
+    "  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
+    "chmod a+r /etc/apt/keyrings/docker.gpg",
+    "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable\" \\",
+    "  > /etc/apt/sources.list.d/docker.list",
+    "",
+    "echo 'afk-image-build: installing google cloud sdk'",
+    'echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \\',
+    "  > /etc/apt/sources.list.d/google-cloud-sdk.list",
+    "curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \\",
+    "  | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg",
+    "",
+    "apt-get update -y",
+    "apt-get install -y --no-install-recommends \\",
+    "  docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \\",
+    "  google-cloud-cli",
+    "systemctl enable --now docker",
+    "",
     "echo 'afk-image-build: pre-pulling cached images'",
     pulls || "echo '(no cached images requested)'",
     "echo 'afk-image-build: done'",
