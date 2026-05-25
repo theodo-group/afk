@@ -116,7 +116,11 @@ export const BuildServiceLive = Layer.effect(
           )
 
           const repoName = `${ECR_REPO_PREFIX}/${sourceRepoName}`
-          const tag = `${branch}-${sha.slice(0, 12)}`
+          // Docker tags allow only [A-Za-z0-9_.-]; collapse anything else to '-'
+          // so refs with slashes ('refactor/afk'), colons, or other punctuation
+          // don't break `docker build -t`.
+          const safeBranch = branch.replace(/[^A-Za-z0-9_.-]/g, "-")
+          const tag = `${safeBranch}-${sha.slice(0, 12)}`
 
           yield* phase("Authenticating against the image registry…")
           yield* registry.ensureRepoAndAuth(repoName)
@@ -158,7 +162,7 @@ export const BuildServiceLive = Layer.effect(
 
           const prevTags = yield* registry.listLatestTagsByPrefix(
             repoName,
-            `${branch}-`,
+            `${safeBranch}-`,
             1,
           )
           const cacheFromImages = prevTags.map(

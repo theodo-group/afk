@@ -18,9 +18,19 @@ import {
   GCP_LABEL_GOLDEN_VERSION,
 } from "../../constants.ts"
 
-// Public Container-Optimized OS image family: ships Docker, boots fast, and is
-// the natural base for the dind-less host-Docker shape the GCP Run uses.
-const BUILDER_BASE_IMAGE = "projects/cos-cloud/global/images/family/cos-stable"
+// Debian 12 ("bookworm") public image family. Trade-off vs cos-stable:
+//   - COS is the natural pick for a host-Docker shape (boots faster, smaller
+//     attack surface), but COS has a read-only root fs and no package manager,
+//     so we can't install gcloud or other CLIs on it.
+//   - The startup-script uses `gcloud` for AR auth, Secret Manager fetches,
+//     GCS uploads, and self-delete — the GCP analogue of how AWS's user-data
+//     uses `aws` (which is preinstalled on Amazon Linux). There is no public
+//     GCE image that ships gcloud preinstalled, so we install it ourselves at
+//     golden-build time on a writable base. Debian 12 is the smallest such
+//     base with first-class apt support for the Docker + Google Cloud SDK
+//     repos used in `buildScript`.
+const BUILDER_BASE_IMAGE =
+  "projects/debian-cloud/global/images/family/debian-12"
 const BUILDER_MACHINE_TYPE = "e2-standard-2"
 // Builder backstop: deleted explicitly after snapshot; this caps a leak.
 const BUILDER_MAX_RUN_SECONDS = 3600
@@ -118,6 +128,8 @@ export const GcpGoldenImageLive = Layer.effect(
         serviceAccount,
         subnet,
         startupScript: plan.builderStartupScript,
+        // On-demand: a preemption mid-build would waste the snapshot work.
+        spot: false,
         maxRunDurationSeconds: BUILDER_MAX_RUN_SECONDS,
         labels: [{ key: "afk-purpose", value: "image-builder" }],
       })

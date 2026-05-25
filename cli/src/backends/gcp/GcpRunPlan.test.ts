@@ -97,6 +97,24 @@ describe("planGcpRun", () => {
     }
   })
 
+  it("defaults to Spot capacity", () => {
+    const result = planGcpRun(baseInput())
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.spot).toBe(true)
+    }
+  })
+
+  it("honours the --on-demand override (Spot disabled)", () => {
+    const result = planGcpRun(
+      baseInput({ startInput: { backendOverrides: { onDemand: true } } }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.spot).toBe(false)
+    }
+  })
+
   it("is deterministic — same input, identical labels (no clock/randomness)", () => {
     const a = planGcpRun(baseInput())
     const b = planGcpRun(baseInput())

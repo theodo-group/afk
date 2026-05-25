@@ -26,9 +26,19 @@ After a [[run]] ends, a [[backend]] may **retain** its compute primitive instead
 
 Resuming revives only the compute primitive, never the workload — the Run has already ended, so resume re-animates the host so attach has something to enter; it does not re-run the developer's command. A retained Run is reclaimed explicitly by `afk kill`, or automatically once it is older than the configured **retention period** (default 7 days) — so retained is a bounded grace window, not permanent storage.
 
-Realized on the [[backend|Local Backend]] (every Run) and the **AWS** Backend (on-demand Runs only — a one-time Spot instance cannot be stopped without losing its disk, so Spot Runs self-terminate as before). Cloudflare reclaims immediately: its Container instances are ephemeral, so a restarted one is a clean slate rather than the preserved post-mortem state, which is the opposite of what retention promises.
+Realized on the [[backend|Local Backend]] only, where every Run is retained — Local runs on no capacity-pricing model, so retaining a finished container is free. The cloud Backends do **not** retain: AWS and GCP default to [[spot|Spot]] capacity, which cannot be stopped without losing its disk, so every cloud Run self-terminates on exit. Cloudflare reclaims immediately too — its Container instances are ephemeral, so a restarted one is a clean slate rather than preserved post-mortem state, the opposite of what retention promises.
+
+Post-mortem inspection of a finished cloud Run is therefore not available: on the cloud Backends `afk attach` only enters a Run that is still **live** (its command has not yet exited). To carry state past a cloud Run's end, declare a [[session-artifact]].
 
 Not to be confused with a suspended or paused Run (there is no such state — a Run that has ended has ended) or with `afk kill` (which reclaims, the opposite of retain).
+
+## Spot
+
+The capacity model a cloud [[run]] launches under. **Spot** is interruptible, heavily discounted capacity the provider may reclaim at any time (an AWS Spot instance, a GCP `SPOT` VM); **On-Demand** is full-price capacity the provider does not reclaim. A cloud Run defaults to Spot — the common case is cheap and disposable — and `--on-demand` opts up to On-Demand.
+
+The only thing the choice changes is **interruption risk**: a Spot reclaim kills a live Run mid-flight, so a long or fragile Run pays for On-Demand to avoid that. It does **not** change end-of-life — both self-terminate on exit, neither is retained (see [[retention]]). Spot is a cloud-only concept; the Local Backend has no capacity model.
+
+Not to be confused with [[retention]] (Spot once implied "non-retainable," but retention is now Local-only, so the two are independent) or with the [[golden-image]] (the boot artifact, orthogonal to how the instance is purchased).
 
 ## Backend
 
@@ -38,9 +48,9 @@ The persisted Backend in `afk.config.json` (set by `afk init --provider <name>`)
 
 Backends:
 
-- **AWS EC2** — shipped. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
+- **AWS EC2** — shipped. Each Run is one EC2 instance booted from the project's [[golden-image]], configured via `user_data`, and self-terminated on exit (no [[retention]]). Defaults to [[spot|Spot]] capacity; `--on-demand` selects On-Demand for interruption-resistance, not for any difference in end-of-life. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable). A sweeper Lambda terminates only instances that overran their timeout (the crash backstop — AWS has no native max-run-duration) and reconciles orphaned history rows; with [[retention]] gone there are no stopped instances to reap.
 - **Cloudflare Containers** — shipped. Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. Runs `dockerd` rootless inside the Container to host the workload. Compose Contract honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
-- **GCP (Compute Engine)** — planned, AWS-shaped. Each Run is one Compute Engine instance booted from the project's [[golden-image]] (a custom image), configured via the startup-script, and self-deleted on exit (the instance's service account is scoped to delete only afk-managed VMs), with GCE's native `max_run_duration` as the timeout backstop. Full Compose Contract supported (host Docker daemon). [[owner|Owner]] is the authenticated gcloud account; attach rides Identity-Aware Proxy TCP tunnelling + OS Login so instances need no inbound SSH. A minimal Cloud Function (on Cloud Scheduler) reconciles orphaned history rows only — it does not reclaim VMs.
+- **GCP (Compute Engine)** — planned, AWS-shaped. Each Run is one Compute Engine instance booted from the project's [[golden-image]] (a custom image), configured via the startup-script, and self-deleted on exit (the instance's service account is scoped to delete only afk-managed VMs), with GCE's native `max_run_duration` as the timeout backstop. Defaults to [[spot|Spot]] capacity (`provisioningModel: SPOT`, not legacy preemptible); `--on-demand` selects `STANDARD`. Preemption and timeout both end in instance DELETE, so there is no [[retention]] and no extra teardown path. Full Compose Contract supported (host Docker daemon). [[owner|Owner]] is the authenticated gcloud account; attach rides Identity-Aware Proxy TCP tunnelling + OS Login so instances need no inbound SSH. A minimal Cloud Function (on Cloud Scheduler) reconciles orphaned history rows only — it does not reclaim VMs.
 - **Azure (Virtual Machines)** — anticipated future cloud Backend, expected to follow the same one-VM-per-Run shape as AWS.
 - **Local** — a peer Backend that mirrors the Cloudflare shape with the Cloudflare Container instance swapped for a Docker container on the developer's own machine. Each Run is one outer container running rootless `dockerd`, booted from a local [[golden-image]], hosting the `docker compose` stack inside it — so it honors the same Compose addenda and rootless constraints as Cloudflare. Fully self-contained: it makes no cloud API calls and needs no cloud credentials (secrets, history, and the Run index all live on the developer's machine). Selectable both as the persisted Backend (`afk init --provider local`) and per-command via `--local`.
 
