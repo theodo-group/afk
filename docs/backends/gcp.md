@@ -92,6 +92,25 @@ The Docker **`gcplogs`** driver is injected per compose service (labelled `runId
 - Gated by `roles/iap.tunnelResourceAccessor`; Owner-scoping (only your own Runs) is enforced CLI-side via history lookup, since instance-label conditions aren't expressible in IAM.
 - `--service <name>` exec's into a sidecar; `--host` drops to the VM's host shell (exposes the Docker socket — use deliberately).
 
+## Adding teammates
+
+`afk provision` binds the `afkDeveloper` custom role onto the active gcloud principal only. To onboard another developer, bind an *existing* GCP principal to the same role — GCP doesn't create principals, so you pass the canonical IAM member string explicitly:
+
+```sh
+afk team add alice --principal user:alice@example.com
+afk team add ci    --principal serviceAccount:ci@my-proj.iam.gserviceaccount.com
+afk team ls
+afk team rm alice
+```
+
+What this does:
+
+- `add` binds the project-level `afkDeveloper` role onto `--principal`. That role already carries the permissions the developer needs (`compute.instances.create/delete` on afk-managed labels, `iam.serviceAccountUser` on `afk-vm`, `iap.tunnelResourceAccessor`, `compute.osLogin`) — defined once at provision time and reused across team members.
+- `ls` enumerates the principals bound to the role.
+- `rm` unbinds the principal from the role.
+
+> The caller of `afk team add/rm` needs permission to edit project IAM (`resourcemanager.projects.setIamPolicy`) — typically project Owner or a custom IAM-admin role. Without it the IAM bind call fails and the developer was never added.
+
 ## Run lifecycle and reclaim
 
 - A Run's lifetime equals its main service container's lifetime. On exit the CLI-injected entrypoint (seeing `AFK_BACKEND=gcp`) writes the completion row, uploads Session Artifacts, flushes logs, then self-deletes the instance with `gcloud compute instances delete`. The `afk-vm` SA can delete only afk-managed VMs.
