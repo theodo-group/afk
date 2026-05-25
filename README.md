@@ -64,6 +64,8 @@ bun link              # registers @afk/cli globally
 
 `bun link` puts a symlink at `~/.bun/bin/afk` that resolves back to this checkout. If `~/.bun/bin` is on your PATH (Bun's installer adds it by default), `afk` is now usable from any project. Editing the source in your checkout takes effect immediately — no relink needed.
 
+> If `afk` isn't found after `bun link` (common when Bun was installed via Homebrew or another package manager), add `~/.bun/bin` to your shell `PATH` — e.g. `export PATH="$HOME/.bun/bin:$PATH"` in `~/.bashrc` / `~/.zshrc`, or `set PATH $PATH ~/.bun/bin` in `~/.config/fish/config.fish`.
+
 Prerequisites on the developer machine:
 
 - Bun (runtime)
