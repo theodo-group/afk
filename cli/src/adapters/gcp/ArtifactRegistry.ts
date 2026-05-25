@@ -77,21 +77,30 @@ export const ArtifactRegistryLive = Layer.effect(
       limit: number,
     ) =>
       gcloud
-        .json<ReadonlyArray<{ tags?: string; createTime?: string }>>(
-          "artifacts:docker:images:list",
-          [
-            "artifacts",
-            "docker",
-            "images",
-            "list",
-            `${host(region)}/${project}/${repo}/${image}`,
-            "--include-tags",
-          ],
-        )
+        .json<
+          ReadonlyArray<{
+            tags?: string | ReadonlyArray<string>
+            createTime?: string
+          }>
+        >("artifacts:docker:images:list", [
+          "artifacts",
+          "docker",
+          "images",
+          "list",
+          `${host(region)}/${project}/${repo}/${image}`,
+          "--include-tags",
+        ])
         .pipe(
           Effect.map((rows) =>
             rows
-              .flatMap((r) => (r.tags ? r.tags.split(",") : []))
+              .flatMap((r) => {
+                // gcloud returns `tags` either as a comma-string (older
+                // versions / `--format=value`) or as an array (newer JSON
+                // output). Accept both.
+                if (Array.isArray(r.tags)) return [...r.tags]
+                if (typeof r.tags === "string") return r.tags.split(",")
+                return []
+              })
               .map((t) => t.trim())
               .filter((t) => t.startsWith(tagPrefix))
               .slice(0, limit),
