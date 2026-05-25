@@ -156,6 +156,23 @@ const upsertEnvFile = (projectDir: string): boolean => {
   return true
 }
 
+/**
+ * Read the `origin` remote URL of the working dir's git repo, or `null` when
+ * there is no git repo / no origin remote. Used by `afk init` to pre-fill
+ * `gitUrl` in `afk.config.json` so devs don't have to copy-paste it.
+ */
+const detectOriginUrl = (
+  projectDir: string,
+  run: (
+    cmd: string,
+    args: ReadonlyArray<string>,
+  ) => Effect.Effect<{ readonly stdout: string }, SubprocessError>,
+): Effect.Effect<string | null> =>
+  run("git", ["-C", projectDir, "remote", "get-url", "origin"]).pipe(
+    Effect.map((r): string | null => r.stdout.trim() || null),
+    Effect.catchAll(() => Effect.succeed(null as string | null)),
+  )
+
 export const BootstrapServiceLive = Layer.effect(
   BootstrapService,
   Effect.gen(function* () {
@@ -172,6 +189,7 @@ export const BootstrapServiceLive = Layer.effect(
     ): Effect.Effect<InitResult, AwsError | UserError> =>
       Effect.gen(function* () {
         const { region, projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
         const identity = yield* sts.callerIdentity
         const stateBucket = `${AFK_STATE_BUCKET_PREFIX}-${identity.Account}-${region}`
 
@@ -222,7 +240,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "aws",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultInstanceType: "t3.medium",
                 allowedInstanceTypes: [
@@ -286,6 +304,7 @@ export const BootstrapServiceLive = Layer.effect(
     > =>
       Effect.gen(function* () {
         const { projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
 
         const apiToken = process.env.CLOUDFLARE_API_TOKEN
         if (!apiToken) {
@@ -363,7 +382,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "cloudflare",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultTimeoutHours: 4,
                 cloudflare: cloudflareBlock,
@@ -383,6 +402,12 @@ export const BootstrapServiceLive = Layer.effect(
           const hadCf = existing.cloudflare !== undefined
           const wasBackend = existing.backend
           existing.backend = "cloudflare"
+          if (
+            (existing.gitUrl === undefined || existing.gitUrl === "") &&
+            originUrl !== null
+          ) {
+            existing.gitUrl = originUrl
+          }
           // Preserve any values the developer already set (e.g. cachedImages,
           // a custom workerUrl), only filling the accountId + defaults.
           existing.cloudflare = {
@@ -751,6 +776,7 @@ export const BootstrapServiceLive = Layer.effect(
     ): Effect.Effect<InitResult, UserError> =>
       Effect.gen(function* () {
         const { projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
         const configPath = resolve(projectDir, CONFIG_FILE)
         let configCreated = false
         let configAction: string
@@ -760,7 +786,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "local",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultTimeoutHours: 4,
                 local: { cachedImages: [] as string[] },
@@ -780,6 +806,12 @@ export const BootstrapServiceLive = Layer.effect(
           const hadLocal = existing.local !== undefined
           const wasBackend = existing.backend
           existing.backend = "local"
+          if (
+            (existing.gitUrl === undefined || existing.gitUrl === "") &&
+            originUrl !== null
+          ) {
+            existing.gitUrl = originUrl
+          }
           existing.local = { cachedImages: [], ...(existing.local ?? {}) }
           writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
           configAction = hadLocal
@@ -878,6 +910,7 @@ export const BootstrapServiceLive = Layer.effect(
     const initGcp = (input: InitInput): Effect.Effect<InitResult, UserError> =>
       Effect.gen(function* () {
         const { region, projectDir } = input
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
         const projectId = yield* resolveGcpProject
         const stateBucket =
           projectId === ""
@@ -963,7 +996,7 @@ export const BootstrapServiceLive = Layer.effect(
             JSON.stringify(
               {
                 backend: "gcp",
-                gitUrl: "",
+                gitUrl: originUrl ?? "",
                 mainService: "agent",
                 defaultTimeoutHours: 4,
                 gcp: gcpBlock,
@@ -983,6 +1016,12 @@ export const BootstrapServiceLive = Layer.effect(
           const hadGcp = existing.gcp !== undefined
           const wasBackend = existing.backend
           existing.backend = "gcp"
+          if (
+            (existing.gitUrl === undefined || existing.gitUrl === "") &&
+            originUrl !== null
+          ) {
+            existing.gitUrl = originUrl
+          }
           // Preserve any values the developer already set; only fill defaults.
           existing.gcp = { ...gcpBlock, ...(existing.gcp ?? {}) }
           writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
