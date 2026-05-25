@@ -2,6 +2,7 @@ import { Duration, Effect, Layer, Schedule } from "effect"
 import { Gce } from "../../adapters/gcp/Gce.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
 import { Subprocess } from "../../infra/Subprocess.ts"
+import { Output } from "../../infra/Output.ts"
 import { resolveGcpNetworkPlacement } from "./GcpNetworkPlacement.ts"
 import { planGcpGolden } from "./GcpGoldenPlan.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
@@ -75,6 +76,10 @@ export const GcpGoldenImageLive = Layer.effect(
     const auth = yield* Auth
     const sub = yield* Subprocess
     const cfg = yield* ConfigService
+    const out = yield* Output
+
+    const phase = (msg: string) =>
+      out.mode === "json" ? Effect.void : out.print(msg)
 
     const coords = Effect.gen(function* () {
       const { config } = yield* cfg.load
@@ -128,7 +133,15 @@ export const GcpGoldenImageLive = Layer.effect(
 
       // Poll the build-done marker over IAP SSH (the startup-script touches it
       // once the pre-pull finishes). Each pass depends on the previous probe.
-      const waitForBuild = sub
+      // The startup-script can sit silent for several minutes while pre-pulling
+      // sidecar images, so emit a heartbeat per poll so the user knows we're
+      // still alive (build progress isn't streamable over IAP SSH from a
+      // builder we don't own a console on).
+      const pollStartedAt = Date.now()
+      yield* phase(
+        `• builder VM up (${plan.builderName}) — waiting for image pre-pull (poll every 10s, ≤10min)…`,
+      )
+      const probe = sub
         .run("gcloud", [
           "compute",
           "ssh",
@@ -147,15 +160,25 @@ export const GcpGoldenImageLive = Layer.effect(
                 message: e.stderr,
               }),
           ),
-          Effect.retry(
-            Schedule.intersect(
-              Schedule.spaced(Duration.seconds(10)),
-              Schedule.recurs(60),
-            ),
-          ),
-          Effect.tapError(() => cleanup),
         )
+      const waitForBuild = probe.pipe(
+        Effect.tapError(() =>
+          phase(
+            `  …still building (elapsed ${Math.round((Date.now() - pollStartedAt) / 1000)}s)`,
+          ),
+        ),
+        Effect.retry(
+          Schedule.intersect(
+            Schedule.spaced(Duration.seconds(10)),
+            Schedule.recurs(60),
+          ),
+        ),
+        Effect.tapError(() => cleanup),
+      )
       yield* waitForBuild
+      yield* phase(
+        `• image pre-pull complete (took ${Math.round((Date.now() - pollStartedAt) / 1000)}s)`,
+      )
 
       // Stop the builder before snapshotting its boot disk. GCE rejects
       // `images create` while the disk is attached to a RUNNING instance, and
