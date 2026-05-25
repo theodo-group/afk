@@ -5,13 +5,16 @@ import { Output } from "../infra/Output.ts"
 
 const region = Options.text("region").pipe(
   Options.withDefault("us-east-1"),
-  Options.withDescription("AWS region to bootstrap in (provider=aws only)"),
+  Options.withDescription(
+    "region to bootstrap in (provider=aws|gcp; ignored for cloudflare/local)",
+  ),
 )
 
 const provider = Options.choice("provider", [
   "aws",
   "cloudflare",
   "local",
+  "gcp",
 ]).pipe(
   Options.withDefault("aws"),
   Options.withDescription(
@@ -27,7 +30,7 @@ export const init = Command.make(
       const boot = yield* BootstrapService
       const out = yield* Output
       const result = yield* boot.init({
-        provider: provider as "aws" | "cloudflare" | "local",
+        provider: provider as "aws" | "cloudflare" | "local" | "gcp",
         region,
         projectDir: process.cwd(),
       })

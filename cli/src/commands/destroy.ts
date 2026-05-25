@@ -19,7 +19,7 @@ export const destroy = Command.make("destroy", { yes }, ({ yes }) =>
     const out = yield* Output
     const { config, sourceRepoName } = yield* cfg.load
     const provider = config.backend ?? "aws"
-    const region = config.aws?.region ?? DEFAULT_REGION
+    const region = config.gcp?.region ?? config.aws?.region ?? DEFAULT_REGION
 
     const result = yield* boot.destroy({
       provider,

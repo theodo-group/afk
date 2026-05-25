@@ -39,7 +39,7 @@ export interface AssembleRunPlanInput {
   readonly ref?: string
   readonly timeoutHours?: number
   readonly mainService: string
-  readonly backend: "aws" | "cloudflare" | "local"
+  readonly backend: "aws" | "cloudflare" | "local" | "gcp"
   /** Raw `afk.compose.yml` content, pre-read by the caller; absent when none. */
   readonly composeContent?: string
   readonly runId: string

@@ -2,6 +2,7 @@ import { Context, Effect } from "effect"
 import {
   AwsError,
   CloudflareError,
+  GcpError,
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
@@ -24,19 +25,19 @@ export class SecretStore extends Context.Tag("SecretStore")<
       value: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
 
     readonly delete: (
       name: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
 
     readonly list: Effect.Effect<
       ReadonlyArray<Secret>,
-      AwsError | CloudflareError | ConfigError | UserError
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
     >
   }
 >() {}

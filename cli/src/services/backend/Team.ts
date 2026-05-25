@@ -2,6 +2,7 @@ import { Context, Effect } from "effect"
 import {
   AwsError,
   CloudflareError,
+  GcpError,
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
@@ -37,17 +38,17 @@ export class Team extends Context.Tag("Team")<
       readonly principal?: string
     }) => Effect.Effect<
       AddMemberResult,
-      AwsError | CloudflareError | UserError | ConfigError
+      AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
     readonly ls: Effect.Effect<
       ReadonlyArray<TeamMember>,
-      AwsError | CloudflareError | UserError | ConfigError
+      AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
     readonly rm: (
       name: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | UserError | ConfigError
+      AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
   }
 >() {}

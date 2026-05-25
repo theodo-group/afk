@@ -138,7 +138,6 @@ export const buildUserData = (input: UserDataInput): string => {
   const logGroup = `${LOG_GROUP_PREFIX}/${input.repoName}`
   const daemonJson = renderDaemonJson(logGroup, input.region, input.runId)
   const cmdShell = renderCommandShellString(input.command)
-  const collectArtifacts = input.sessionArtifactBases.length > 0
 
   // The compose file the dev wrote (with ${AFK_IMAGE} already substituted by
   // the CLI). ${AFK_COMMAND} is left intact — compose substitutes it at runtime
@@ -168,19 +167,23 @@ export const buildUserData = (input: UserDataInput): string => {
         `timeout --preserve-status ${input.timeoutSeconds}s docker compose -f ${shellQuote(VM_COMPOSE_PATH)} \\`,
         `  up --exit-code-from ${shellQuote(input.mainService)} --abort-on-container-exit`,
         `RUN_EXIT=$?`,
-        // Collect before `down` removes the (exited) main container.
+        // Deliberately no `down`: `--abort-on-container-exit` has already stopped
+        // every service, and on a retained Run the instance is *stopped* (not
+        // terminated), so the exited containers + volumes must survive for
+        // post-mortem `afk attach` to commit the agent and resume sidecars. The
+        // stack is reclaimed with the instance, never here.
         renderArtifactCollection(
           `$(docker compose -f ${shellQuote(VM_COMPOSE_PATH)} ps -aq ${shellQuote(input.mainService)})`,
           input,
         ),
-        `docker compose -f ${shellQuote(VM_COMPOSE_PATH)} down -v --remove-orphans || true`,
       ]
         .filter((l) => l !== "")
         .join("\n")
     : [
-        // `--rm` is dropped when collecting so the exited container survives for
-        // `docker cp`; we remove it explicitly after collection.
-        `timeout --preserve-status ${input.timeoutSeconds}s docker run ${collectArtifacts ? "" : "--rm "}\\`,
+        // No `--rm` and no explicit removal: the exited container must survive
+        // the instance stop so post-mortem `afk attach` (retention) can commit
+        // and shell into it. It's reclaimed with the instance, not here.
+        `timeout --preserve-status ${input.timeoutSeconds}s docker run \\`,
         `  --name ${shellQuote(input.mainService)} \\`,
         `  --env-file "$AFK_ENV_FILE" \\`,
         `  --log-driver awslogs \\`,
@@ -192,9 +195,6 @@ export const buildUserData = (input: UserDataInput): string => {
         `  sh -c ${shellQuote(cmdShell)}`,
         `RUN_EXIT=$?`,
         renderArtifactCollection(shellQuote(input.mainService), input),
-        collectArtifacts
-          ? `docker rm -f ${shellQuote(input.mainService)} >/dev/null 2>&1 || true`
-          : "",
       ]
         .filter((l) => l !== "")
         .join("\n")

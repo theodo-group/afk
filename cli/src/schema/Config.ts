@@ -61,7 +61,21 @@ export const LegacyGoldenConfig = Schema.Struct({
 })
 export type LegacyGoldenConfig = typeof LegacyGoldenConfig.Type
 
-export const BackendName = Schema.Literal("aws", "cloudflare", "local")
+/**
+ * GCP-specific config block. Read only when `backend == "gcp"`.
+ */
+export const GcpBackendConfig = Schema.Struct({
+  projectId: Schema.optional(Schema.String),
+  region: Schema.optional(Schema.String),
+  zone: Schema.optional(Schema.String),
+  defaultMachineType: Schema.optional(Schema.String),
+  allowedMachineTypes: Schema.optional(Schema.Array(Schema.String)),
+  /** Images pre-pulled into the GCE Golden custom image by `afk golden build`. */
+  cachedImages: Schema.optional(Schema.Array(Schema.String)),
+})
+export type GcpBackendConfig = typeof GcpBackendConfig.Type
+
+export const BackendName = Schema.Literal("aws", "cloudflare", "local", "gcp")
 export type BackendName = typeof BackendName.Type
 
 export const AfkConfig = Schema.Struct({
@@ -102,6 +116,7 @@ export const AfkConfig = Schema.Struct({
   aws: Schema.optional(AwsBackendConfig),
   cloudflare: Schema.optional(CloudflareBackendConfig),
   local: Schema.optional(LocalBackendConfig),
+  gcp: Schema.optional(GcpBackendConfig),
 })
 export type AfkConfig = typeof AfkConfig.Type
 

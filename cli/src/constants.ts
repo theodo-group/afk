@@ -119,3 +119,61 @@ export const LOCAL_RUN_MOUNT = "/var/afk/run"
 // talk to the inner daemon.
 export const LOCAL_INNER_DOCKER_HOST =
   "unix:///home/rootless/.docker/run/docker.sock"
+
+// ---------- GCP Backend ----------
+//
+// GCE instance labels are the GCP Backend's truth source — the analogue of the
+// `afk:*` EC2 tags. GCE label keys can't contain ':' and must be lowercase
+// [a-z0-9_-], so we use the dash convention CONTEXT.md records (`afk-owner`).
+export const GCP_LABEL_OWNER = "afk-owner"
+export const GCP_LABEL_RUN_ID = "afk-run-id"
+export const GCP_LABEL_BRANCH = "afk-branch"
+export const GCP_LABEL_SHA = "afk-sha"
+export const GCP_LABEL_MANAGED = "afk-managed"
+export const GCP_LABEL_REPO = "afk-repo"
+export const GCP_LABEL_TIMEOUT_HOURS = "afk-timeout-hours"
+export const GCP_LABEL_STARTED_AT = "afk-started-at"
+export const GCP_LABEL_GOLDEN = "afk-golden"
+export const GCP_LABEL_GOLDEN_VERSION = "afk-golden-version"
+
+// Label values share the same [a-z0-9_-]{0,63} restriction and cannot hold an
+// email's `@`/`.` or a git ref's `/`. Values are sanitized to this charset on
+// write; the raw value is preserved in the Firestore history row for display.
+export const GCP_LABEL_VALUE_MAX = 63
+
+export const GCP_DEFAULT_REGION = "us-central1"
+export const GCP_DEFAULT_ZONE = "us-central1-a"
+export const GCP_DEFAULT_MACHINE_TYPE = "e2-standard-4"
+export const GCP_DEFAULT_ALLOWED_MACHINE_TYPES = [
+  "e2-standard-2",
+  "e2-standard-4",
+  "e2-standard-8",
+  "n2-standard-4",
+  "n2-standard-8",
+] as const
+
+// Artifact Registry Docker repo holding the per-build agent images and the
+// Golden custom image is keyed by family below. The custom image family lets
+// `findLatest` resolve the newest image without listing+sorting by hand.
+export const GCP_ARTIFACT_REPO = "afk"
+export const GCP_GOLDEN_IMAGE_FAMILY = "afk-golden"
+
+// Secret Manager secret names are flat (no '/'), so the SSM `/afk/secrets/<n>`
+// path collapses to `afk-secret-<n>`.
+export const GCP_SECRET_PREFIX = "afk-secret"
+
+// Firestore collection holding the run index (the DynamoDB `afk-runs` analogue).
+export const GCP_RUNS_COLLECTION = "afk-runs"
+
+// GCS bucket prefixes (suffixed with the project id): Session Artifacts + the
+// terraform remote-state bucket.
+export const GCP_ARTIFACTS_BUCKET_PREFIX = "afk-artifacts"
+export const GCP_STATE_BUCKET_PREFIX = "afk-tf-state"
+
+// The afk-developer custom role and the per-Run instance service account.
+export const GCP_DEVELOPER_ROLE = "afkDeveloper"
+export const GCP_VM_SERVICE_ACCOUNT = "afk-vm"
+
+// IAP brokers the SSH tunnel; this is the env var the startup-script exports so
+// the CLI-owned entrypoint can self-delete the instance on exit.
+export const GCP_BACKEND_ENV = "AFK_BACKEND"

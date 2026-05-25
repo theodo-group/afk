@@ -1,5 +1,10 @@
 import { Context, Effect } from "effect"
-import { AwsError, CloudflareError, DockerError } from "../../infra/Errors.ts"
+import {
+  AwsError,
+  CloudflareError,
+  GcpError,
+  DockerError,
+} from "../../infra/Errors.ts"
 
 /**
  * Backend-neutral wrapper-image registry.
@@ -13,13 +18,16 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
   ImageRegistry,
   {
     /** Registry host, e.g. "<account>.dkr.ecr.eu-west-1.amazonaws.com". */
-    readonly registryUri: Effect.Effect<string, AwsError | CloudflareError>
+    readonly registryUri: Effect.Effect<
+      string,
+      AwsError | CloudflareError | GcpError
+    >
 
     /** True if `<repo>:<tag>` already exists in the registry. */
     readonly imageExists: (
       repoName: string,
       tag: string,
-    ) => Effect.Effect<boolean, AwsError | CloudflareError>
+    ) => Effect.Effect<boolean, AwsError | CloudflareError | GcpError>
 
     /**
      * Newest tags matching `<repo>:<tagPrefix>*`. Used by BuildService for
@@ -30,7 +38,10 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
       repoName: string,
       tagPrefix: string,
       limit: number,
-    ) => Effect.Effect<ReadonlyArray<string>, AwsError | CloudflareError>
+    ) => Effect.Effect<
+      ReadonlyArray<string>,
+      AwsError | CloudflareError | GcpError
+    >
 
     /**
      * Ensure the named repo exists (idempotent) and the local docker daemon
@@ -38,7 +49,10 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
      */
     readonly ensureRepoAndAuth: (
       repoName: string,
-    ) => Effect.Effect<void, AwsError | CloudflareError | DockerError>
+    ) => Effect.Effect<
+      void,
+      AwsError | CloudflareError | GcpError | DockerError
+    >
 
     /**
      * Push an already-built local image (whose tag is `imageUri`) to the
@@ -47,6 +61,9 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
      */
     readonly push: (
       imageUri: string,
-    ) => Effect.Effect<void, AwsError | CloudflareError | DockerError>
+    ) => Effect.Effect<
+      void,
+      AwsError | CloudflareError | GcpError | DockerError
+    >
   }
 >() {}

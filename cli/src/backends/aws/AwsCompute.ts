@@ -36,6 +36,8 @@ import {
   toRunStarted,
 } from "./AwsRunPlan.ts"
 
+const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
+
 export const AwsComputeLive = Layer.effect(
   Compute,
   Effect.gen(function* () {
@@ -288,10 +290,14 @@ export const AwsComputeLive = Layer.effect(
             `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
         }
 
+        // The SSM session enters as `ssm-user`, who is not in the `docker`
+        // group, so every docker call would hit the socket with EACCES. Run the
+        // whole snippet under root — passwordless sudo is available on the AL
+        // host, and the single PTY is preserved through to `docker exec -it`.
         const session = ssm.startInteractiveCommand({
           region,
           instanceId,
-          command: cmd,
+          command: `sudo bash -c ${shellQuote(cmd)}`,
         })
         yield* retained ? session.pipe(Effect.ensuring(stopInstance)) : session
       })

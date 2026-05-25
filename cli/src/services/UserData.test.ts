@@ -18,29 +18,31 @@ const base: UserDataInput = {
 }
 
 describe("buildUserData — Session Artifact collection", () => {
-  it("omits the collection block and keeps --rm when no artifacts declared", () => {
+  it("omits the collection block and never uses --rm (container retained for post-mortem)", () => {
     const ud = buildUserData(base)
     expect(ud).not.toContain("Collect Session Artifacts")
-    expect(ud).toContain("docker run --rm ")
+    // The exited container must survive the instance stop for post-mortem attach.
+    expect(ud).not.toContain("docker run --rm")
+    expect(ud).toContain("docker run \\")
   })
 
-  it("drops --rm and emits collection + cleanup on the no-compose path", () => {
+  it("emits collection on the no-compose path and never removes the container", () => {
     const ud = buildUserData({
       ...base,
       sessionArtifactBases: ["/root/.claude/projects"],
     })
     expect(ud).toContain("Collect Session Artifacts")
-    expect(ud).not.toContain("docker run --rm ")
+    expect(ud).not.toContain("docker run --rm")
     expect(ud).toContain('docker cp "$AFK_CREF:$base"')
     expect(ud).toContain(
       "s3://afk-artifacts-111122223333-eu-west-1/demo/run-123/session-artifacts/",
     )
     expect(ud).toContain(`-size +${25 * 1024 * 1024}c`)
-    // explicit removal replaces the dropped --rm
-    expect(ud).toContain("docker rm -f 'agent'")
+    // container is reclaimed with the instance, not torn down here
+    expect(ud).not.toContain("docker rm -f")
   })
 
-  it("collects from the compose main container before teardown", () => {
+  it("collects from the compose main container and never tears the stack down", () => {
     const ud = buildUserData({
       ...base,
       compose: "services:\n  agent:\n    image: x\n",
@@ -48,9 +50,7 @@ describe("buildUserData — Session Artifact collection", () => {
     })
     expect(ud).toContain("Collect Session Artifacts")
     expect(ud).toContain("ps -aq 'agent'")
-    // collection must precede `down`
-    expect(ud.indexOf("Collect Session Artifacts")).toBeLessThan(
-      ud.indexOf("down -v --remove-orphans"),
-    )
+    // stack must survive the instance stop for post-mortem attach
+    expect(ud).not.toContain("down -v --remove-orphans")
   })
 })

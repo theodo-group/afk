@@ -58,6 +58,16 @@ export class CloudflareError extends Data.TaggedError("CloudflareError")<{
   readonly message: string
 }> {}
 
+/**
+ * Generic GCP-side failure (gcloud CLI / Google API). Distinct from AwsError so
+ * the abstract Compute/SecretStore/etc. interfaces keep stable error channels —
+ * each backend contributes its own member to the union the callers see.
+ */
+export class GcpError extends Data.TaggedError("GcpError")<{
+  readonly operation: string
+  readonly message: string
+}> {}
+
 export type AfkError =
   | UserError
   | SubprocessError
@@ -67,6 +77,7 @@ export type AfkError =
   | GitError
   | ConfigError
   | CloudflareError
+  | GcpError
 
 /**
  * The single render point for a failed program. A tagged failure (an AfkError,

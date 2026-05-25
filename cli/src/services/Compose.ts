@@ -28,7 +28,7 @@ export interface ComposeLintInput {
    * rootless `dind`, so it needs the same `network_mode: host` + `extra_hosts`
    * addenda and the same port-collision hard error.
    */
-  readonly backend: "aws" | "cloudflare" | "local"
+  readonly backend: "aws" | "cloudflare" | "local" | "gcp"
 }
 
 export interface ComposeLintResult {
@@ -153,8 +153,9 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
 
   const warnings: string[] = []
 
-  if (input.backend === "aws") {
-    // AWS: just warn on `ports:` (security group denies it anyway).
+  if (input.backend === "aws" || input.backend === "gcp") {
+    // AWS/GCP: real VM host Docker daemon, full Compose Contract. Just warn on
+    // `ports:` (the firewall denies inbound anyway).
     for (const name of serviceNames) {
       const svc = asMap(services.get(name))
       if (!svc) continue
@@ -251,6 +252,48 @@ export const injectAwsLogging = (
     logging.set("driver", "awslogs")
     logging.set("options", options)
     svc.set("logging", logging)
+  }
+  return stringify(doc)
+}
+
+export interface GcpLoggingInput {
+  readonly runId: string
+  readonly service: string
+}
+
+/**
+ * Pin each service's logs to the `gcplogs` driver, labelled with the Run id and
+ * the compose service name, so `afk logs` can filter Cloud Logging by
+ * `labels.afk-run`/`labels.afk-service` per service — the GCP analogue of
+ * {@link injectAwsLogging}'s `<runId>/<service>` stream. The VM's instance
+ * service account holds `roles/logging.logWriter`, so no credentials are
+ * threaded through the driver options.
+ */
+export const injectGcpLogging = (
+  composeContent: string,
+  runId: string,
+): string => {
+  const doc = parseDocument(composeContent)
+  const services = asMap(asMap(doc.contents)?.get("services"))
+  if (!services) return composeContent
+
+  for (const pair of services.items) {
+    const key = pair.key as Scalar
+    if (!key || typeof key.value !== "string") continue
+    const svc = asMap(services.get(key.value))
+    if (!svc) continue
+    const options = new YAMLMap()
+    options.set("labels", "afk-run,afk-service")
+    const logging = new YAMLMap()
+    logging.set("driver", "gcplogs")
+    logging.set("options", options)
+    svc.set("logging", logging)
+    // Docker's gcplogs driver reads label *values* off the container, so each
+    // service must carry the labels named in `labels:` above.
+    const labels = asMap(svc.get("labels")) ?? new YAMLMap()
+    labels.set("afk-run", runId)
+    labels.set("afk-service", key.value)
+    svc.set("labels", labels)
   }
   return stringify(doc)
 }

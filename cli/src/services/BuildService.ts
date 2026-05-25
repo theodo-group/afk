@@ -9,6 +9,7 @@ import {
   UserError,
   AwsError,
   CloudflareError,
+  GcpError,
   DockerError,
   GitError,
   ConfigError,
@@ -52,6 +53,7 @@ export class BuildService extends Context.Tag("BuildService")<
       | UserError
       | AwsError
       | CloudflareError
+      | GcpError
       | DockerError
       | GitError
       | ConfigError

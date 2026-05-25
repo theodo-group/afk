@@ -6,6 +6,7 @@ import { Terraform } from "../../adapters/Terraform.ts"
 import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
 import { Provisioner } from "../../services/backend/Provisioner.ts"
+import { ensureBackendRegionMatches } from "../../services/TerraformBackend.ts"
 import { DEFAULT_REGION } from "../../constants.ts"
 
 /**
@@ -32,6 +33,10 @@ export const AwsProvisionerLive = Layer.effect(
         )
       }
       const region = config.aws?.region ?? DEFAULT_REGION
+      yield* ensureBackendRegionMatches({
+        terraformDir: dir,
+        configRegion: region,
+      })
       yield* out.print(`• terraform init + apply (region ${region})…`)
       yield* tf.apply({ dir, vars: { aws_region: region } })
 

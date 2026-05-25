@@ -15,6 +15,7 @@ import { Ec2 } from "../adapters/aws/Ec2.ts"
 import { Ssm } from "../adapters/aws/Ssm.ts"
 import { Ecr } from "../adapters/aws/Ecr.ts"
 import { Terraform } from "../adapters/Terraform.ts"
+import { ensureBackendRegionMatches } from "./TerraformBackend.ts"
 import {
   AwsError,
   CloudflareError,
@@ -28,6 +29,10 @@ import {
   CONFIG_FILE,
   ECR_REPO_PREFIX,
   ENV_FILE,
+  GCP_DEFAULT_ALLOWED_MACHINE_TYPES,
+  GCP_DEFAULT_MACHINE_TYPE,
+  GCP_DEFAULT_ZONE,
+  GCP_STATE_BUCKET_PREFIX,
   SESSION_ARTIFACT_DIR,
   SSM_SECRET_PREFIX,
   TAG_GOLDEN,
@@ -49,15 +54,23 @@ const TEMPLATE_CF_WORKER_DIR = resolve(
   "worker",
   "cloudflare",
 )
+const TEMPLATE_GCP_TERRAFORM_DIR = resolve(
+  import.meta.dir,
+  "..",
+  "..",
+  "..",
+  "terraform",
+  "gcp",
+)
 
 export interface InitInput {
-  readonly provider: "aws" | "cloudflare" | "local"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
   readonly region: string
   readonly projectDir: string
 }
 
 export interface InitResult {
-  readonly provider: "aws" | "cloudflare" | "local"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
   readonly configCreated: boolean
   readonly envCreated: boolean
   readonly gitignoreUpdated: boolean
@@ -74,7 +87,7 @@ export interface InitResult {
 }
 
 export interface DestroyInput {
-  readonly provider: "aws" | "cloudflare" | "local"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
   readonly region: string
   readonly projectDir: string
   /** ECR repo suffix — the consumer's source-repo name (`afk/<name>`). */
@@ -84,7 +97,7 @@ export interface DestroyInput {
 }
 
 export interface DestroyResult {
-  readonly provider: "aws" | "cloudflare" | "local"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
   readonly executed: boolean
   /** Human-readable lines describing each planned/performed action. */
   readonly actions: ReadonlyArray<string>
@@ -419,6 +432,10 @@ export const BootstrapServiceLive = Layer.effect(
         const identity = yield* sts.callerIdentity
         const stateBucket = `${AFK_STATE_BUCKET_PREFIX}-${identity.Account}-${region}`
         const terraformDir = resolve(projectDir, "terraform", "afk")
+        yield* ensureBackendRegionMatches({
+          terraformDir,
+          configRegion: region,
+        })
         const ecrRepo = `${ECR_REPO_PREFIX}/${sourceRepoName}`
 
         const goldenImages = yield* ec2
@@ -839,19 +856,278 @@ export const BootstrapServiceLive = Layer.effect(
         }
       })
 
+    // Resolve the active gcloud project without taking a hard dependency on the
+    // GCP Auth adapter (keeps initGcp's error channel to UserError). Best-effort:
+    // an unset project yields "" so the caller can scaffold with a placeholder
+    // rather than fail outright.
+    const resolveGcpProject = sub
+      .run("gcloud", ["config", "get-value", "project", "--quiet"])
+      .pipe(
+        Effect.map((r) => r.stdout.trim()),
+        Effect.map((p) => (p === "" || p === "(unset)" ? "" : p)),
+        Effect.catchAll(() => Effect.succeed("")),
+      )
+
+    // GCP init mirrors initAws: scaffold the config block, copy the terraform/gcp
+    // module into the project, render the GCS-backed backend.tf, and create the
+    // remote-state bucket up front (the gcs backend can't initialise against a
+    // missing bucket, and the module deliberately doesn't manage it — same split
+    // as AWS's S3 state bucket). Bucket creation is best-effort: an unset gcloud
+    // project leaves a placeholder for the developer to fill, and an
+    // already-existing bucket is fine.
+    const initGcp = (input: InitInput): Effect.Effect<InitResult, UserError> =>
+      Effect.gen(function* () {
+        const { region, projectDir } = input
+        const projectId = yield* resolveGcpProject
+        const stateBucket =
+          projectId === ""
+            ? "REPLACE_WITH_TF_STATE_BUCKET"
+            : `${GCP_STATE_BUCKET_PREFIX}-${projectId}`
+
+        let stateBucketCreated = false
+        if (projectId !== "") {
+          const created = yield* sub
+            .run("gcloud", [
+              "storage",
+              "buckets",
+              "create",
+              `gs://${stateBucket}`,
+              `--project=${projectId}`,
+              `--location=${region}`,
+              "--uniform-bucket-level-access",
+              "--public-access-prevention",
+            ])
+            .pipe(
+              Effect.as(true),
+              // Already-exists (409) or insufficient perms shouldn't abort init —
+              // the developer can create it by hand; surface it in the report.
+              Effect.catchAll(() => Effect.succeed(false)),
+            )
+          stateBucketCreated = created
+          if (created) {
+            yield* sub
+              .run("gcloud", [
+                "storage",
+                "buckets",
+                "update",
+                `gs://${stateBucket}`,
+                "--versioning",
+              ])
+              .pipe(Effect.catchAll(() => Effect.void))
+          }
+        }
+
+        const terraformDir = resolve(projectDir, "terraform", "gcp")
+        const terraformDirCreated = !existsSync(terraformDir)
+        if (existsSync(TEMPLATE_GCP_TERRAFORM_DIR)) {
+          mkdirSync(terraformDir, { recursive: true })
+          yield* Effect.try({
+            try: () => {
+              cpSync(TEMPLATE_GCP_TERRAFORM_DIR, terraformDir, {
+                recursive: true,
+                errorOnExist: false,
+                force: false,
+              })
+            },
+            catch: (cause) =>
+              new UserError({
+                message: `failed to copy terraform module: ${String(cause)}`,
+              }),
+          })
+          const backendTf = [
+            `terraform {`,
+            `  backend "gcs" {`,
+            `    bucket = "${stateBucket}"`,
+            `    prefix = "afk/terraform.tfstate"`,
+            `  }`,
+            `}`,
+            ``,
+          ].join("\n")
+          writeFileSync(resolve(terraformDir, "backend.tf"), backendTf)
+        }
+
+        const configPath = resolve(projectDir, CONFIG_FILE)
+        const gcpBlock = {
+          ...(projectId === "" ? {} : { projectId }),
+          region,
+          zone: GCP_DEFAULT_ZONE,
+          defaultMachineType: GCP_DEFAULT_MACHINE_TYPE,
+          allowedMachineTypes: [...GCP_DEFAULT_ALLOWED_MACHINE_TYPES],
+          cachedImages: [] as string[],
+        }
+        let configCreated = false
+        let configAction: string
+        if (!existsSync(configPath)) {
+          writeFileSync(
+            configPath,
+            JSON.stringify(
+              {
+                backend: "gcp",
+                gitUrl: "",
+                mainService: "agent",
+                defaultTimeoutHours: 4,
+                gcp: gcpBlock,
+              },
+              null,
+              2,
+            ) + "\n",
+          )
+          configCreated = true
+          configAction = "created"
+        } else {
+          const existing = JSON.parse(readFileSync(configPath, "utf8")) as {
+            backend?: string
+            gcp?: Record<string, unknown>
+            [k: string]: unknown
+          }
+          const hadGcp = existing.gcp !== undefined
+          const wasBackend = existing.backend
+          existing.backend = "gcp"
+          // Preserve any values the developer already set; only fill defaults.
+          existing.gcp = { ...gcpBlock, ...(existing.gcp ?? {}) }
+          writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n")
+          configAction = hadGcp
+            ? "updated gcp block"
+            : `added gcp block (backend ${wasBackend ?? "?"} → gcp)`
+        }
+
+        const envCreated = upsertEnvFile(projectDir)
+        const gitignoreUpdated = upsertGitignore(projectDir)
+
+        const status = (b: boolean) => (b ? "created" : "already present")
+        const projectNote =
+          projectId === ""
+            ? `  ⚠ gcloud project not set — set it (\`gcloud config set project <id>\`),\n    then fill projectId in afk.config.json, create the state bucket\n    (\`gcloud storage buckets create gs://${stateBucket}\`), and fix terraform/gcp/backend.tf`
+            : `  project            ${projectId}`
+        const stateBucketStatus =
+          projectId === ""
+            ? "unresolved (gcloud project not set)"
+            : stateBucketCreated
+              ? "created"
+              : "already present or not creatable (check perms)"
+        const humanReport = [
+          `terraform dir      ${terraformDir} (${status(terraformDirCreated)})`,
+          `state bucket       ${stateBucket} (${stateBucketStatus})`,
+          `afk.config.json    ${configAction}`,
+          `.afk.env           ${status(envCreated)}`,
+          `.gitignore         ${gitignoreUpdated ? "updated" : "already had .afk.env / .afk/"}`,
+          projectNote,
+          ``,
+          `Next:`,
+          `  1. afk provision              # terraform init + apply (VPC, IAM, Firestore, buckets, sweeper)`,
+          `                                #   or run terraform yourself in ${terraformDir}`,
+          `  2. afk golden build           # one-time golden custom-image build`,
+          `  3. afk secrets put github-token <PAT>`,
+          `  4. afk run "<your command>"`,
+        ].join("\n")
+
+        return {
+          provider: "gcp" as const,
+          stateBucket,
+          stateBucketCreated,
+          terraformDir,
+          terraformDirCreated,
+          configCreated,
+          envCreated,
+          gitignoreUpdated,
+          humanReport,
+        }
+      })
+
+    // GCP teardown runs `terraform destroy` in the project's terraform/gcp dir.
+    // Golden custom images and Secret Manager secrets live outside the module
+    // (built/created by `afk golden build` / `afk secrets put`), so they are
+    // surfaced as manual follow-ups rather than deleted here.
+    const destroyGcp = (
+      input: DestroyInput,
+    ): Effect.Effect<DestroyResult, UserError | SubprocessError> =>
+      Effect.gen(function* () {
+        const { region, projectDir, execute } = input
+        const projectId = yield* resolveGcpProject
+        const terraformDir = resolve(projectDir, "terraform", "gcp")
+        const hasTerraform = existsSync(terraformDir)
+
+        const actions = [
+          hasTerraform
+            ? `terraform destroy in ${terraformDir} (VPC, IAM, Firestore, buckets, reconcile function)`
+            : `no terraform/gcp dir — skipping terraform destroy`,
+          `delete golden custom image(s) in family afk-golden (afk golden rm)`,
+          `delete Secret Manager secrets under afk-secret-* (afk secrets rm)`,
+        ]
+
+        if (!execute) {
+          const humanReport = [
+            `DRY RUN — nothing has been deleted.`,
+            `Backend: gcp   Region: ${region}   Project: ${projectId || "(unset)"}`,
+            ``,
+            `Would perform:`,
+            ...actions.map((a, i) => `  ${i + 1}. ${a}`),
+            ``,
+            `Re-run with --yes to execute. This is irreversible.`,
+          ].join("\n")
+          return {
+            provider: "gcp" as const,
+            executed: false,
+            actions,
+            humanReport,
+          }
+        }
+
+        if (projectId === "") {
+          return yield* Effect.fail(
+            new UserError({
+              message: `No active gcloud project — cannot terraform destroy the GCP backend.`,
+              hint: "Run `gcloud config set project <id>` first.",
+            }),
+          )
+        }
+
+        const done: string[] = []
+        if (hasTerraform) {
+          yield* terraform.destroy({
+            dir: terraformDir,
+            vars: { project_id: projectId, region },
+          })
+          done.push(`terraform destroy completed`)
+        }
+
+        const humanReport = [
+          `Teardown complete (backend: gcp, project: ${projectId}).`,
+          ``,
+          ...done.map((d) => `  - ${d}`),
+          ``,
+          `Manual follow-ups (outside the terraform module):`,
+          `  - golden images:  afk golden ls && afk golden rm <id>`,
+          `  - secrets:        afk secrets ls && afk secrets rm <name>`,
+          ``,
+          `Local files (terraform/gcp/, afk.config.json, .afk.env) were left in place.`,
+        ].join("\n")
+
+        return {
+          provider: "gcp" as const,
+          executed: true,
+          actions: done,
+          humanReport,
+        }
+      })
+
     return BootstrapService.of({
       init: (input) =>
         input.provider === "cloudflare"
           ? initCloudflare(input)
           : input.provider === "local"
             ? initLocal(input)
-            : initAws(input),
+            : input.provider === "gcp"
+              ? initGcp(input)
+              : initAws(input),
       destroy: (input) =>
         input.provider === "cloudflare"
           ? destroyCloudflare(input)
           : input.provider === "local"
             ? destroyLocal(input)
-            : destroyAws(input),
+            : input.provider === "gcp"
+              ? destroyGcp(input)
+              : destroyAws(input),
     })
   }),
 )
