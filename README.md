@@ -277,6 +277,8 @@ RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /workspace
 ```
 
+Need a more complete starting point? See [`docs/recipes/claude-code.dockerfile`](./docs/recipes/claude-code.dockerfile) — a copy-paste fragment with `bun`, common build utilities, and clear extension points for project-specific layers.
+
 ### 2. (Optional) `afk.compose.yml` at the repo root
 
 When the Run needs sidecar services, declare them in a compose file. One service — the "main service," named in `afk.config.json` (default: `agent`) — is the agent; its image must be `${AFK_IMAGE}` (the CLI substitutes the agent image's registry URI at submit time). Other services are stock images.
