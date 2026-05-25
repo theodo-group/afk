@@ -362,7 +362,15 @@ Contains environment variables for Runs. Values may be plain strings (for non-se
 LOG_LEVEL=debug
 ANTHROPIC_API_KEY=secret:anthropic-key
 DATABASE_URL=secret:db-url
+
+# GitHub-hosted repos: the entrypoint clones with `x-access-token:<GITHUB_TOKEN>@…`
+GITHUB_TOKEN=secret:github-token
+
+# GitLab-hosted repos (gitlab.com or self-hosted): the entrypoint clones with `oauth2:<GITLAB_TOKEN>@…`
+# GITLAB_TOKEN=secret:gitlab-token
 ```
+
+The scm-token variable name is host-dependent — the entrypoint matches the `gitUrl` host: `*.github.com` requires `GITHUB_TOKEN`, `*gitlab*` requires `GITLAB_TOKEN`. Set whichever your origin uses; you don't need both.
 
 Secret _values_ are never written here — only `secret:<name>` references. The values themselves are stored separately via `afk secrets put <name> <value>`; see [Secrets](#secrets) for where each Backend keeps them.
 
