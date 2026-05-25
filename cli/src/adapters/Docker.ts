@@ -62,6 +62,11 @@ export const DockerLive = Layer.effect(
               ...(opts.inlineCache
                 ? ["--build-arg", "BUILDKIT_INLINE_CACHE=1"]
                 : []),
+              // BuildKit's default `--progress=auto` falls silent when stderr
+              // isn't a TTY (CI logs, captured background jobs, `2>&1 |`).
+              // Force plain in those cases so each step is line-streamed; in
+              // an interactive terminal keep auto for the live UI.
+              ...(process.stderr.isTTY ? [] : ["--progress=plain"]),
               opts.contextDir,
             ],
             { env: { DOCKER_BUILDKIT: "1" } },
