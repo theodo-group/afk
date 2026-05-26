@@ -82,7 +82,7 @@ Stored in **Secret Manager** as `afk-<name>`. The startup-script resolves refere
 
 ## Logs
 
-The Docker **`gcplogs`** driver is injected per compose service (labelled `runId` + `service`). `afk logs <run-id>` reads via a `gcloud logging read` label filter; default = the main service, `--service <name>` = one service, `--all` = every service. `--follow` polls the logging API.
+The Docker **`gcplogs`** driver is injected per compose service (labelled `runId` + `service`). `afk logs <run-id>` reads via `gcloud logging read` with a `jsonPayload.container.metadata.afk-run=…` filter (gcplogs writes container labels under the JSON payload's `container.metadata`, not at the entry's top-level `labels`); default = the main service, `--service <name>` = one service, `--all` = every service. `--follow` polls the logging API.
 
 ## Attach
 

@@ -6,9 +6,10 @@ import { ConfigService } from "../../services/ConfigService.ts"
 
 /**
  * GCP implementation of LogStore. Backed by Cloud Logging: the `gcplogs` driver
- * (injected per compose service) labels entries with `afk-run`/`afk-service`,
- * so a tail filters on those labels. `--all` (no `serviceFilter`) drops the
- * `afk-service` clause.
+ * (injected per compose service) carries each container's `afk-run` /
+ * `afk-service` labels inside `jsonPayload.container.metadata.*` on every log
+ * entry, so the tail filters on that path (see {@link CloudLogging}). `--all`
+ * (no `serviceFilter`) drops the `afk-service` clause.
  */
 export const GcpLogStoreLive = Layer.effect(
   LogStore,
