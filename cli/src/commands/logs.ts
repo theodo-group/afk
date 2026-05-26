@@ -6,6 +6,7 @@ import { ConfigService } from "../services/ConfigService.ts"
 import { HistoryService } from "../services/HistoryService.ts"
 import { pickRunId } from "./pickRun.ts"
 import { DEFAULT_MAIN_SERVICE } from "../constants.ts"
+import { UserError } from "../infra/Errors.ts"
 
 const runId = Args.text({ name: "run-id" }).pipe(Args.optional)
 const follow = Options.boolean("follow", { aliases: ["f"] })
@@ -44,11 +45,39 @@ export const logs = Command.make(
       // the Run is still live. For a self-terminated cloud Run the live
       // lookup 404s — but the LogStore reads from a persistent source
       // (CloudWatch / Cloud Logging / Worker storage / bind-mounted file)
-      // that outlives the VM, so fall back to whatever the developer typed
-      // (must be a full UUID to match anything in that case).
+      // that outlives the VM, and Cloud Logging's filter is exact-match, so
+      // a prefix would never match. Fall back to history (which the picker
+      // already queries) and resolve the prefix there.
       const resolvedRunId = yield* runs.findByRunId(picked.value).pipe(
         Effect.map((r) => r.runId),
-        Effect.catchTag("UserError", () => Effect.succeed(picked.value)),
+        Effect.catchTag("UserError", () =>
+          hist.query({ limit: 100 }).pipe(
+            Effect.flatMap((rows) => {
+              const exact = rows.find((r) => r.runId === picked.value)
+              if (exact) return Effect.succeed(exact.runId)
+              const matches = rows.filter((r) =>
+                r.runId.startsWith(picked.value),
+              )
+              if (matches.length === 1) return Effect.succeed(matches[0]!.runId)
+              if (matches.length === 0) {
+                return Effect.fail(
+                  new UserError({
+                    message: `Run ${picked.value} not found.`,
+                    hint: "Use `afk history` to list past Runs.",
+                  }),
+                )
+              }
+              return Effect.fail(
+                new UserError({
+                  message: `Run id prefix '${picked.value}' is ambiguous (${matches.length} matches).`,
+                  hint:
+                    "Use a longer prefix. Matches:\n" +
+                    matches.map((r) => `  ${r.runId}`).join("\n"),
+                }),
+              )
+            }),
+          ),
+        ),
       )
 
       const { config, sourceRepoName } = yield* cfg.load
