@@ -10,12 +10,17 @@ import {
   type Fields,
 } from "../../adapters/gcp/Firestore.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
+import { Gce } from "../../adapters/gcp/Gce.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import {
   RunHistory,
   type HistoryRow,
 } from "../../services/backend/RunHistory.ts"
-import { GCP_RUNS_COLLECTION } from "../../constants.ts"
+import {
+  GCP_DEFAULT_ZONE,
+  GCP_LABEL_MANAGED,
+  GCP_RUNS_COLLECTION,
+} from "../../constants.ts"
 
 const rowFromFields = (f: Fields): HistoryRow | null => {
   const runId = readSv(f, "run_id")
@@ -46,7 +51,9 @@ const rowFromFields = (f: Fields): HistoryRow | null => {
  * GCP implementation of RunHistory. Backed by Firestore (Native mode), keyed by
  * `run_id`, with composite indexes on `owner+started_at` for `afk history`
  * queries (the Firestore analogue of the DynamoDB GSIs). Shared with the
- * reconcile Cloud Function.
+ * reconcile Cloud Function; `query` also reconciles inline so the picker
+ * doesn't show stale "running" rows in the 0-5 minute gap before the sweeper
+ * fires (and as a backstop if the sweeper isn't deployed at all).
  */
 export const GcpRunHistoryLive = Layer.effect(
   RunHistory,
@@ -54,11 +61,16 @@ export const GcpRunHistoryLive = Layer.effect(
     const fs = yield* Firestore
     const auth = yield* Auth
     const cfg = yield* ConfigService
+    const gce = yield* Gce
 
     const project = Effect.gen(function* () {
       const { config } = yield* cfg.load
       return config.gcp?.projectId ?? (yield* auth.activeProject)
     })
+
+    const zone = cfg.load.pipe(
+      Effect.map((r) => r.config.gcp?.zone ?? GCP_DEFAULT_ZONE),
+    )
 
     return RunHistory.of({
       recordStart: (input) =>
@@ -142,6 +154,65 @@ export const GcpRunHistoryLive = Layer.effect(
             descending: true,
             ...(limit !== undefined ? { limit } : {}),
           })
+
+          const runningDocs = docs.filter(
+            (d) => readSv(d, "status") === "running",
+          )
+          // Lazy reconcile — same pattern as LocalRunHistory.query. List live
+          // afk-managed VMs in the configured zone; any "running" row whose
+          // instance isn't there has actually ended, so flip it (best-effort
+          // Firestore write, mirroring the sweeper Cloud Function's transition).
+          // Best-effort: a failed listInstances or putDoc just means the picker
+          // shows what Firestore had, no harder than today.
+          if (runningDocs.length > 0) {
+            const z = yield* zone
+            const liveNames = yield* gce
+              .listInstances({
+                project: p,
+                zone: z,
+                labelFilters: [{ key: GCP_LABEL_MANAGED, value: "true" }],
+              })
+              .pipe(
+                Effect.map(
+                  (instances) => new Set(instances.map((i) => i.name)),
+                ),
+                Effect.catchAll(() => Effect.succeed(new Set<string>())),
+              )
+            const stoppedAt = DateTime.formatIso(yield* DateTime.now)
+            const reconciled = runningDocs
+              .map((d) => ({ d, name: readSv(d, "instance_name") ?? "" }))
+              .filter(({ name }) => name !== "" && !liveNames.has(name))
+            yield* Effect.forEach(
+              reconciled,
+              ({ d }) => {
+                const runId = readSv(d, "run_id")
+                if (!runId) return Effect.void
+                const next: Fields = {
+                  ...d,
+                  status: sv("stopped"),
+                  stopped_at: sv(stoppedAt),
+                  stop_reason: sv("reconcile: instance no longer exists"),
+                }
+                // Mutate the source doc too so the rowFromFields below sees
+                // the flipped status without an extra refetch.
+                ;(d as Record<string, unknown>).status = sv("stopped")
+                ;(d as Record<string, unknown>).stopped_at = sv(stoppedAt)
+                ;(d as Record<string, unknown>).stop_reason = sv(
+                  "reconcile: instance no longer exists",
+                )
+                return fs
+                  .putDoc({
+                    project: p,
+                    collection: GCP_RUNS_COLLECTION,
+                    docId: runId,
+                    fields: next,
+                  })
+                  .pipe(Effect.catchAll(() => Effect.void))
+              },
+              { concurrency: "unbounded" },
+            )
+          }
+
           return docs
             .map(rowFromFields)
             .filter((x): x is HistoryRow => x !== null)
