@@ -5,10 +5,13 @@
  * duty and is deliberately narrow:
  *
  *   Reconcile the Firestore `afk-runs` collection. Any document still in
- *   status="RUNNING" whose backing Compute Engine instance no longer exists is
- *   flipped to "STOPPED" (stoppedAt=now, exitCode=null) — the orphan case where
- *   a VM vanished (crash, preemption, or GCE `max_run_duration` deletion)
+ *   status="running" whose backing Compute Engine instance no longer exists is
+ *   flipped to "stopped" (stopped_at=now, exit_code=null) — the orphan case
+ *   where a VM vanished (crash, preemption, or GCE `max_run_duration` deletion)
  *   without the entrypoint writing its own completion row.
+ *
+ *   Status strings are lowercase to match what the CLI writes
+ *   (`GcpRunHistory.recordStart/recordComplete`) and the AWS sweeper Lambda.
  *
  * It NEVER deletes VMs. Timeout-driven reclaim is handled natively by GCE
  * `scheduling.max_run_duration` + `instance_termination_action=DELETE` set at
@@ -53,7 +56,7 @@ interface RunningRow {
 async function listRunningRows(): Promise<RunningRow[]> {
   const snapshot = await firestore
     .collection(RUNS_COLLECTION)
-    .where("status", "==", "RUNNING")
+    .where("status", "==", "running")
     .get()
 
   const rows: RunningRow[] = []
@@ -66,18 +69,18 @@ async function listRunningRows(): Promise<RunningRow[]> {
 }
 
 /**
- * Flip one orphaned row to STOPPED, guarding against a racing writer: only
- * write if the row is still RUNNING when the transaction reads it (the entry-
- * point's own completion write wins if it lands first).
+ * Flip one orphaned row to stopped, guarding against a racing writer: only
+ * write if the row is still "running" when the transaction reads it (the
+ * entrypoint's own completion write wins if it lands first).
  */
 async function reconcileRow(id: string): Promise<boolean> {
   const ref = firestore.collection(RUNS_COLLECTION).doc(id)
   return firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref)
     if (!snap.exists) return false
-    if (snap.data()?.status !== "RUNNING") return false
+    if (snap.data()?.status !== "running") return false
     tx.update(ref, {
-      status: "STOPPED",
+      status: "stopped",
       stopped_at: new Date().toISOString(),
       exit_code: null,
       stop_reason: "reconcile: instance no longer exists",
