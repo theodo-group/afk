@@ -1,6 +1,5 @@
 import { Args, Command, Options } from "@effect/cli"
 import { Effect, Option } from "effect"
-import { RunService } from "../services/RunService.ts"
 import { LogStore } from "../services/backend/LogStore.ts"
 import { ConfigService } from "../services/ConfigService.ts"
 import { HistoryService } from "../services/HistoryService.ts"
@@ -28,7 +27,6 @@ export const logs = Command.make(
   { runId, follow, service, all, since },
   ({ runId, follow, service, all, since }) =>
     Effect.gen(function* () {
-      const runs = yield* RunService
       // LogStore is the active backend's tailer, not a fixed provider adapter.
       const logStore = yield* LogStore
       const cfg = yield* ConfigService
@@ -41,8 +39,11 @@ export const logs = Command.make(
       if (Option.isNone(picked)) return
       const resolvedRunId = picked.value
 
-      yield* runs.findByRunId(resolvedRunId)
-
+      // No `findByRunId` gate: the log source (CloudWatch / Cloud Logging /
+      // Worker storage / bind-mounted file) persists past the compute primitive,
+      // so a finished Run still has readable logs. Gating on a live VM lookup
+      // would 404 every self-terminated cloud Run (GCP self-deletes immediately,
+      // AWS once the terminated instance is reaped).
       const { config, sourceRepoName } = yield* cfg.load
 
       // Scope is resolved here, not in the backends: default to the main
