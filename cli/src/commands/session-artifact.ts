@@ -84,11 +84,12 @@ export const sessionArtifact = Command.make(
           ? Option.some(runId.value)
           : yield* pickRunId(hist)
       if (Option.isNone(picked)) return
-      const resolvedRunId = picked.value
 
       // findByRunId enforces the same Owner scoping as `afk logs` — you can only
-      // retrieve artifacts for Runs you own.
-      yield* runs.findByRunId(resolvedRunId)
+      // retrieve artifacts for Runs you own — and resolves a leading prefix to
+      // the canonical full id.
+      const run = yield* runs.findByRunId(picked.value)
+      const resolvedRunId = run.runId
 
       const { config, sourceRepoName } = yield* cfg.load
       const patterns = config.sessionArtifacts ?? []
