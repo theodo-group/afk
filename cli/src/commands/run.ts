@@ -99,7 +99,7 @@ export const run = Command.make(
               ``,
               follow
                 ? `Streaming logs (Ctrl-C to stop following, the Run keeps going)…`
-                : `Follow with: afk logs ${started.runId} --follow`,
+                : `Follow with: afk logs --follow ${started.runId}`,
               follow ? `` : `Attach with: afk attach ${started.runId}`,
             ]
               .filter(Boolean)
