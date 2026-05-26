@@ -1,5 +1,6 @@
 import { Args, Command, Options } from "@effect/cli"
 import { Effect, Option } from "effect"
+import { RunService } from "../services/RunService.ts"
 import { LogStore } from "../services/backend/LogStore.ts"
 import { ConfigService } from "../services/ConfigService.ts"
 import { HistoryService } from "../services/HistoryService.ts"
@@ -27,6 +28,7 @@ export const logs = Command.make(
   { runId, follow, service, all, since },
   ({ runId, follow, service, all, since }) =>
     Effect.gen(function* () {
+      const runs = yield* RunService
       // LogStore is the active backend's tailer, not a fixed provider adapter.
       const logStore = yield* LogStore
       const cfg = yield* ConfigService
@@ -37,13 +39,18 @@ export const logs = Command.make(
           ? Option.some(runId.value)
           : yield* pickRunId(hist)
       if (Option.isNone(picked)) return
-      const resolvedRunId = picked.value
 
-      // No `findByRunId` gate: the log source (CloudWatch / Cloud Logging /
-      // Worker storage / bind-mounted file) persists past the compute primitive,
-      // so a finished Run still has readable logs. Gating on a live VM lookup
-      // would 404 every self-terminated cloud Run (GCP self-deletes immediately,
-      // AWS once the terminated instance is reaped).
+      // findByRunId resolves a leading prefix to the canonical full id when
+      // the Run is still live. For a self-terminated cloud Run the live
+      // lookup 404s — but the LogStore reads from a persistent source
+      // (CloudWatch / Cloud Logging / Worker storage / bind-mounted file)
+      // that outlives the VM, so fall back to whatever the developer typed
+      // (must be a full UUID to match anything in that case).
+      const resolvedRunId = yield* runs.findByRunId(picked.value).pipe(
+        Effect.map((r) => r.runId),
+        Effect.catchTag("UserError", () => Effect.succeed(picked.value)),
+      )
+
       const { config, sourceRepoName } = yield* cfg.load
 
       // Scope is resolved here, not in the backends: default to the main
