@@ -39,9 +39,10 @@ export const logs = Command.make(
           ? Option.some(runId.value)
           : yield* pickRunId(hist)
       if (Option.isNone(picked)) return
-      const resolvedRunId = picked.value
 
-      yield* runs.findByRunId(resolvedRunId)
+      // findByRunId resolves a leading prefix to the canonical full id; use
+      // that downstream so the LogStore call always sees the full UUID.
+      const run = yield* runs.findByRunId(picked.value)
 
       const { config, sourceRepoName } = yield* cfg.load
 
@@ -56,7 +57,7 @@ export const logs = Command.make(
           : mainService
 
       yield* logStore.tail({
-        runId: resolvedRunId,
+        runId: run.runId,
         repoName: sourceRepoName,
         ...(serviceFilter !== undefined ? { serviceFilter } : {}),
         follow,
