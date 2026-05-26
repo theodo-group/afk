@@ -25,6 +25,7 @@ import {
   toStartRequest,
   wireToRun,
 } from "./CloudflareRunPlan.ts"
+import { resolveRunByIdPrefix } from "../../services/RunIdPrefix.ts"
 
 /**
  * Cloudflare implementation of the abstract Compute tag. Every operation is
@@ -161,38 +162,24 @@ export const CloudflareComputeLive = Layer.effect(
       return runs.map(wireToRun)
     })
 
+    // Resolve via listAll + helper rather than the launcher Worker's
+    // GET /runs/{id}: the single-id endpoint needs a full UUID, but `afk` accepts
+    // a leading prefix so the developer can paste a short id from `afk ls`.
     const findByRunId = (
       runId: string,
     ): Effect.Effect<Run, CloudflareError | UserError | ConfigError> =>
-      Effect.gen(function* () {
-        const wire: RunMetadataWire = yield* worker
-          .getJson<RunMetadataWire>(
-            `GET /runs/${runId}`,
-            `/runs/${encodeURIComponent(runId)}`,
-          )
-          .pipe(
-            Effect.catchTag(
-              "CloudflareError",
-              (
-                e,
-              ): Effect.Effect<RunMetadataWire, CloudflareError | UserError> =>
-                e.status === 404
-                  ? Effect.fail(
-                      new UserError({
-                        message: `Run ${runId} not found.`,
-                        hint: "Use `afk ls` to see available Runs.",
-                      }),
-                    )
-                  : Effect.fail(e),
-            ),
-          )
-        return wireToRun(wire)
-      })
+      listAll.pipe(Effect.flatMap((runs) => resolveRunByIdPrefix(runId, runs)))
 
     const kill = (runId: string) =>
-      worker
-        .del(`DELETE /runs/${runId}`, `/runs/${encodeURIComponent(runId)}`)
-        .pipe(Effect.asVoid)
+      Effect.gen(function* () {
+        const run = yield* findByRunId(runId)
+        yield* worker
+          .del(
+            `DELETE /runs/${run.runId}`,
+            `/runs/${encodeURIComponent(run.runId)}`,
+          )
+          .pipe(Effect.asVoid)
+      })
 
     /**
      * Interactive shell into a Run via `wrangler containers ssh`.
@@ -223,9 +210,10 @@ export const CloudflareComputeLive = Layer.effect(
           )
         }
 
+        const run = yield* findByRunId(runId)
         const { instanceId } = yield* worker.getJson<{ instanceId: string }>(
-          `GET /runs/${runId}/ssh-target`,
-          `/runs/${encodeURIComponent(runId)}/ssh-target`,
+          `GET /runs/${run.runId}/ssh-target`,
+          `/runs/${encodeURIComponent(run.runId)}/ssh-target`,
         )
 
         const args = ["containers", "ssh", instanceId]
@@ -251,7 +239,7 @@ export const CloudflareComputeLive = Layer.effect(
           Effect.mapError(
             (e): CloudflareError =>
               new CloudflareError({
-                operation: `wrangler containers ssh ${runId}`,
+                operation: `wrangler containers ssh ${run.runId}`,
                 message: e.message,
               }),
           ),

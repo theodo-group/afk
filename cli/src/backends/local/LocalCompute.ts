@@ -44,6 +44,7 @@ import {
   mapDockerState,
   type LocalContainer,
 } from "./localDocker.ts"
+import { resolveRunByIdPrefix } from "../../services/RunIdPrefix.ts"
 
 /** Map any Subprocess/Parse failure into the seam's user-facing error channel. */
 const toUserError = (op: string) => (e: { message?: string }) =>
@@ -147,19 +148,7 @@ export const LocalComputeLive = Layer.effect(
     const listMine = (_ownerUserId: string) => listAll
 
     const findByRunId = (runId: string) =>
-      listAll.pipe(
-        Effect.flatMap((runs) => {
-          const found = runs.find((r) => r.runId === runId)
-          return found
-            ? Effect.succeed(found)
-            : Effect.fail(
-                new UserError({
-                  message: `Run ${runId} not found.`,
-                  hint: "Use `afk ls` to see available Runs.",
-                }),
-              )
-        }),
-      )
+      listAll.pipe(Effect.flatMap((runs) => resolveRunByIdPrefix(runId, runs)))
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {

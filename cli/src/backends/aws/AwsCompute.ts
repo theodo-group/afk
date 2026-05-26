@@ -34,6 +34,7 @@ import {
   planAwsRun,
   toRunStarted,
 } from "./AwsRunPlan.ts"
+import { resolveRunByIdPrefix } from "../../services/RunIdPrefix.ts"
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 
@@ -89,16 +90,7 @@ export const AwsComputeLive = Layer.effect(
     const findByRunId = (runId: string) =>
       Effect.gen(function* () {
         const all = yield* listAll
-        const found = all.find((r) => r.runId === runId)
-        if (!found) {
-          return yield* Effect.fail(
-            new UserError({
-              message: `Run ${runId} not found.`,
-              hint: "Use `afk ls` to see available Runs.",
-            }),
-          )
-        }
-        return found
+        return yield* resolveRunByIdPrefix(runId, all)
       })
 
     const prepare = (input: StartInput) =>
