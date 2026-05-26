@@ -35,6 +35,7 @@ import {
   sanitizeLabel,
   toRunStarted,
 } from "./GcpRunPlan.ts"
+import { resolveRunByIdPrefix } from "../../services/RunIdPrefix.ts"
 
 export const GcpComputeLive = Layer.effect(
   Compute,
@@ -84,16 +85,7 @@ export const GcpComputeLive = Layer.effect(
     const findByRunId = (runId: string) =>
       Effect.gen(function* () {
         const all = yield* listAll
-        const found = all.find((r) => r.runId === runId)
-        if (!found) {
-          return yield* Effect.fail(
-            new UserError({
-              message: `Run ${runId} not found.`,
-              hint: "Use `afk ls` to see available Runs.",
-            }),
-          )
-        }
-        return found
+        return yield* resolveRunByIdPrefix(runId, all)
       })
 
     const prepare = (input: StartInput) =>
