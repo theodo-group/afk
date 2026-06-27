@@ -210,7 +210,17 @@ afk run <command…>                             # launch a Run
   --on-demand                                  #   AWS/GCP: on-demand capacity (pricier, not preemptible; Spot by default)
   --instance-tier <tier>                       #   CF only: overrides project default CF Containers tier
   --timeout <hours>                            #   overrides default (4h)
+  --retain                                     #   AWS/GCP: keep the instance (stopped) after the Run ends so
+                                               #     `afk attach` can resume it for post-mortem inspection; implies
+                                               #     --on-demand (Spot can't retain), reclaimed after the retention period
   --follow / -f                                #   stream logs until the Run ends (default: launch and exit)
+afk session                                    # launch an Interactive Run: a box with no command that you attach into
+  --ref <branch|sha|tag>                       #   same source-clone as `afk run`
+  --instance-type <type>                       #   AWS/GCP machine size
+  --spot                                       #   use Spot (On-Demand by default — a reclaim would kill your session)
+  --timeout <hours>                            #   wall-clock cap before reclaim (default 24h)
+  --retain                                     #   keep the box (stopped) past its timeout so you can `afk attach` later
+  --detach / -d                                #   launch without attaching (default: auto-attach once RUNNING)
 afk ls [--all] [--status <s>]                  # list Runs (yours by default; --all = team-wide if permitted)
 afk attach <run-id> [--service <name>] [--host]
                                                # interactive shell. Default: docker exec into main service.
