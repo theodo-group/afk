@@ -4,8 +4,8 @@
 # Two principals:
 #   (a) afk-vm  — the service account attached to every Run instance. Minimal:
 #       pull from Artifact Registry, read afk-* secrets, write logs, upload
-#       Session Artifacts, and delete ITSELF (compute.instances.delete gated on
-#       the afk-managed=true label so a Run can only reclaim afk-managed VMs).
+#       Session Artifacts, and reclaim ITSELF — delete on exit, or stop (not
+#       delete) when the Run is retained for post-mortem `afk attach`.
 #   (b) afk-developer — a custom role bound to developer principals. Grants
 #       conditioned instances.create (golden image + afk subnet + machine-type
 #       + owner), instances.delete scoped to the caller's own Runs, plus IAP
@@ -84,10 +84,13 @@ resource "google_storage_bucket_iam_member" "vm_artifacts_creator" {
 # single-tenant per Run.
 resource "google_project_iam_custom_role" "vm_self_delete" {
   role_id     = "${replace(var.project_name, "-", "_")}_vm_self_delete"
-  title       = "AFK VM self-delete"
-  description = "compute.instances.delete only; bound to the Run instance SA so a Run can reclaim itself."
+  title       = "AFK VM self-reclaim"
+  description = "compute.instances.delete + stop; bound to the Run instance SA so a Run can reclaim (or, when retained, stop) itself."
   permissions = [
     "compute.instances.delete",
+    # A retained Run self-*stops* instead of deleting, preserving its boot disk
+    # for post-mortem `afk attach` (CONTEXT.md "Retention").
+    "compute.instances.stop",
     "compute.zoneOperations.get",
   ]
 }
@@ -117,6 +120,9 @@ resource "google_project_iam_custom_role" "developer" {
     "compute.instances.list",
     "compute.instances.setMetadata",
     "compute.instances.setLabels",
+    # Resume / re-park a retained Run for post-mortem `afk attach`.
+    "compute.instances.start",
+    "compute.instances.stop",
     # Pass the afk-vm SA to the instance (see actAs binding below).
     "compute.instances.setServiceAccount",
     # Read network/image/zone resources instances.create touches.

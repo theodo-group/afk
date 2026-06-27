@@ -1,14 +1,21 @@
 /**
  * AFK sweeper Lambda.
  *
- * Two duties on every EventBridge tick (default: every 15 minutes):
+ * Three duties on every EventBridge tick (default: every 15 minutes):
  *
- *   1. Terminate *running* AFK-managed EC2 instances past their
- *      afk:timeout-hours plus a grace window — the backstop for crashed agents
- *      that never reached `shutdown -h now` (AWS has no native max-run-duration).
- *      Cloud Runs are never retained, so there is no stopped-instance reaper.
+ *   1. Reclaim *running* AFK-managed EC2 instances past their afk:timeout-hours
+ *      plus a grace window — the backstop for crashed agents that never reached
+ *      `shutdown -h now` (AWS has no native max-run-duration). A non-retained
+ *      overrun is terminated; a *retained* (afk:retain) overrun is **stopped**
+ *      instead, so an overran or resumed-for-attach retained Run keeps its
+ *      post-mortem state (the retention reaper, duty 2, reclaims it later).
  *
- *   2. Reconcile the DynamoDB run-history table. Any row still in
+ *   2. Reap *retained* Runs: an AFK-managed instance tagged afk:retain=true that
+ *      is stopped (not terminated) is a retained Run, resumable via `afk attach`.
+ *      Terminate it once it is older than RETENTION_DAYS past the point it
+ *      stopped (the authoritative reclamation — see CONTEXT.md "Retention").
+ *
+ *   3. Reconcile the DynamoDB run-history table. Any row still in
  *      status="running" whose EC2 instance is no longer in a live state is
  *      flipped to "stopped" (or "killed" if the sweeper itself terminated it
  *      on this tick) with stopped_at and a stop_reason.
@@ -22,6 +29,7 @@ import {
   EC2Client,
   DescribeInstancesCommand,
   TerminateInstancesCommand,
+  StopInstancesCommand,
   type Instance,
 } from "@aws-sdk/client-ec2"
 import {
@@ -32,6 +40,8 @@ import {
 } from "@aws-sdk/client-dynamodb"
 
 const GRACE_MINUTES = Number(process.env.SWEEPER_GRACE_MINUTES ?? "30")
+const RETENTION_DAYS = Number(process.env.RETENTION_DAYS ?? "7")
+const DAY_MS = 86_400_000
 const REGION = process.env.AWS_REGION ?? "us-east-1"
 const RUNS_TABLE = process.env.RUNS_TABLE ?? ""
 
@@ -44,6 +54,9 @@ interface ExpiredInstance {
   readonly owner: string
   readonly ageMinutes: number
   readonly timeoutMinutes: number
+  /** A retained Run that overran is *stopped* (preserving retention), not
+   *  terminated — the retention reaper reclaims it later. */
+  readonly retain: boolean
 }
 
 const getTag = (i: Instance, key: string): string | undefined =>
@@ -79,6 +92,50 @@ const collectExpired = (instances: ReadonlyArray<Instance>, nowMs: number): Expi
       owner: getTag(inst, "afk:owner") ?? "?",
       ageMinutes: Math.floor((nowMs - startedAt) / 60000),
       timeoutMinutes: timeoutHours * 60,
+      retain: getTag(inst, "afk:retain") === "true",
+    })
+  }
+  return out
+}
+
+interface ReapedInstance {
+  readonly instanceId: string
+  readonly runId: string
+  readonly owner: string
+  readonly ageDays: number
+}
+
+// The parenthesised time in StateTransitionReason ("User initiated (2026-06-28
+// 14:00:00 GMT)") is the only signal for when an instance stopped. Best-effort:
+// an unparseable reason falls back to launch time so a retained instance can
+// never linger past retention forever.
+const parseStopTime = (i: Instance): number | undefined => {
+  const m = i.StateTransitionReason?.match(/\(([^)]+)\)/)
+  if (m) {
+    const t = Date.parse(m[1]!)
+    if (Number.isFinite(t)) return t
+  }
+  return i.LaunchTime?.getTime()
+}
+
+const collectExpiredRetained = (
+  instances: ReadonlyArray<Instance>,
+  nowMs: number,
+  retentionDays: number,
+): ReapedInstance[] => {
+  const out: ReapedInstance[] = []
+  for (const inst of instances) {
+    if (!inst.InstanceId) continue
+    if (inst.State?.Name !== "stopped") continue
+    if (getTag(inst, "afk:retain") !== "true") continue
+    const stoppedAt = parseStopTime(inst)
+    if (stoppedAt === undefined) continue
+    if (nowMs < stoppedAt + retentionDays * DAY_MS) continue
+    out.push({
+      instanceId: inst.InstanceId,
+      runId: getTag(inst, "afk:run-id") ?? "?",
+      owner: getTag(inst, "afk:owner") ?? "?",
+      ageDays: Math.floor((nowMs - stoppedAt) / DAY_MS),
     })
   }
   return out
@@ -176,52 +233,89 @@ async function reconcileHistory(
   return { updated }
 }
 
-export const handler = async (): Promise<{
-  swept: number
-  reconciled: number
-  details: ExpiredInstance[]
-}> => {
-  const nowMs = Date.now()
-  const expired: ExpiredInstance[] = []
+const describeAll = async (
+  stateValues: ReadonlyArray<string>,
+  extraFilters: ReadonlyArray<{ Name: string; Values: string[] }> = [],
+): Promise<Instance[]> => {
+  const out: Instance[] = []
   let nextToken: string | undefined
-
   do {
     const page = await ec2.send(
       new DescribeInstancesCommand({
         Filters: [
           { Name: "tag:afk:managed", Values: ["true"] },
-          {
-            Name: "instance-state-name",
-            // running/pending → timeout backstop (no retained instances exist).
-            Values: ["pending", "running"],
-          },
+          { Name: "instance-state-name", Values: [...stateValues] },
+          ...extraFilters,
         ],
         NextToken: nextToken,
       }),
     )
-    const instances =
-      page.Reservations?.flatMap((r) => r.Instances ?? []) ?? []
-    expired.push(...collectExpired(instances, nowMs))
+    out.push(...(page.Reservations?.flatMap((r) => r.Instances ?? []) ?? []))
     nextToken = page.NextToken
   } while (nextToken)
+  return out
+}
 
-  const killedRunIds = new Set(expired.map((e) => e.runId))
+export const handler = async (): Promise<{
+  swept: number
+  reaped: number
+  reconciled: number
+  details: ExpiredInstance[]
+}> => {
+  const nowMs = Date.now()
+
+  // Duty 1: timeout backstop for live (pending/running) instances.
+  const expired = collectExpired(
+    await describeAll(["pending", "running"]),
+    nowMs,
+  )
+
+  // Duty 2: reap retained (stopped + afk:retain) instances past their window.
+  const reaped = collectExpiredRetained(
+    await describeAll(["stopped"], [
+      { Name: "tag:afk:retain", Values: ["true"] },
+    ]),
+    nowMs,
+    RETENTION_DAYS,
+  )
+
+  // An overran *retained* Run is stopped (preserving retention for post-mortem
+  // attach), not terminated — the retention reaper reclaims it later. Only
+  // non-retained overruns and retention-expired instances are terminated.
+  const expiredStop = expired.filter((e) => e.retain)
+  const expiredTerminate = expired.filter((e) => !e.retain)
+  const killedRunIds = new Set(expiredTerminate.map((e) => e.runId))
+  const toTerminate = [
+    ...expiredTerminate.map((e) => e.instanceId),
+    ...reaped.map((r) => r.instanceId),
+  ]
+  const toStop = expiredStop.map((e) => e.instanceId)
 
   if (expired.length > 0) {
     console.log(
-      `sweeper: terminating ${expired.length} expired instance(s):`,
+      `sweeper: ${expired.length} overran instance(s):`,
       expired.map(
         (e) =>
-          `${e.instanceId} (run ${e.runId}, timeout, age ${e.ageMinutes}m / ${e.timeoutMinutes}m)`,
+          `${e.instanceId} (run ${e.runId}, ${e.retain ? "retain→stop" : "terminate"}, age ${e.ageMinutes}m / ${e.timeoutMinutes}m)`,
       ),
     )
-    await ec2.send(
-      new TerminateInstancesCommand({
-        InstanceIds: expired.map((e) => e.instanceId),
-      }),
+  }
+  if (reaped.length > 0) {
+    console.log(
+      `sweeper: reaping ${reaped.length} retained instance(s) past ${RETENTION_DAYS}d:`,
+      reaped.map((r) => `${r.instanceId} (run ${r.runId}, retained ${r.ageDays}d)`),
     )
-  } else {
-    console.log("sweeper: no expired instances to terminate")
+  }
+  if (toStop.length > 0) {
+    await ec2.send(new StopInstancesCommand({ InstanceIds: toStop }))
+  }
+  if (toTerminate.length > 0) {
+    await ec2.send(
+      new TerminateInstancesCommand({ InstanceIds: toTerminate }),
+    )
+  }
+  if (toStop.length === 0 && toTerminate.length === 0) {
+    console.log("sweeper: nothing to stop or terminate")
   }
 
   const recon = await reconcileHistory(killedRunIds).catch((err) => {
@@ -235,6 +329,7 @@ export const handler = async (): Promise<{
 
   return {
     swept: expired.length,
+    reaped: reaped.length,
     reconciled: recon.updated,
     details: expired,
   }

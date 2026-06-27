@@ -61,8 +61,10 @@ data "aws_iam_policy_document" "sweeper" {
   }
 
   statement {
-    sid       = "TerminateAfkManagedOnly"
-    actions   = ["ec2:TerminateInstances"]
+    sid = "ReclaimAfkManagedOnly"
+    # Terminate (timeout backstop + retention reaper) and stop (re-park an
+    # overran retained Run instead of destroying its post-mortem state).
+    actions   = ["ec2:TerminateInstances", "ec2:StopInstances"]
     resources = ["arn:aws:ec2:${local.region}:${local.account_id}:instance/*"]
     condition {
       test     = "StringEquals"
@@ -107,6 +109,7 @@ resource "aws_lambda_function" "sweeper" {
     variables = {
       SWEEPER_GRACE_MINUTES = tostring(var.sweeper_grace_minutes)
       RUNS_TABLE            = aws_dynamodb_table.runs.name
+      RETENTION_DAYS        = tostring(var.retention_days)
     }
   }
 }

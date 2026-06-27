@@ -49,6 +49,7 @@ import { config as configCmd } from "./commands/config.ts"
 import { build } from "./commands/build.ts"
 import { golden } from "./commands/golden/index.ts"
 import { run } from "./commands/run.ts"
+import { session } from "./commands/session.ts"
 import { ls } from "./commands/ls.ts"
 import { logs } from "./commands/logs.ts"
 import { sessionArtifact } from "./commands/session-artifact.ts"
@@ -158,6 +159,7 @@ const rootCommand = Command.make("afk", { json, verbose, quiet, local }, () =>
     build,
     golden,
     run,
+    session,
     ls,
     logs,
     sessionArtifact,

@@ -15,6 +15,12 @@ variable "zone" {
   default     = "us-central1-a"
 }
 
+variable "retention_days" {
+  description = "Days a retained Run's stopped instance is kept (resumable via `afk attach`) before the sweeper reclaims it. Should match the CLI's retentionDays."
+  type        = number
+  default     = 7
+}
+
 variable "project_name" {
   description = "Prefix used to name AFK-owned GCP resources. Also surfaces in resource labels."
   type        = string

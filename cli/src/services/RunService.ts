@@ -29,6 +29,9 @@ export interface RunRequest {
   readonly command: ReadonlyArray<string>
   readonly ref?: string
   readonly timeoutHours?: number
+  /** Retain the compute primitive past Run end for post-mortem `afk attach`
+   *  (cloud On-Demand only; see StartInput.retain and CONTEXT.md "Retention"). */
+  readonly retain?: boolean
   readonly backendOverrides?: Record<string, string | boolean | number>
 }
 
@@ -106,6 +109,17 @@ export class RunService extends Context.Tag("RunService")<
       AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
     /**
+     * Block until the Run leaves PROVISIONING, returning its first settled
+     * status (`RUNNING`, a terminal status, or `"GONE"` if it vanished). Prints
+     * boot progress to stderr; the caller prints the resolution. `afk session`
+     * uses it to auto-attach once the box is live; `streamUntilTerminated` uses
+     * it before tailing.
+     */
+    readonly waitUntilRunning: (
+      runId: string,
+      label?: string,
+    ) => Effect.Effect<RunStatus | "GONE">
+    /**
      * Follow a Run's logs to the terminal until it stops, then return. Backend-
      * neutral: it waits for the Run to reach RUNNING, tails via the `LogStore`
      * seam, and stops the tail once `findByRunId` reports a terminal state.
@@ -145,10 +159,10 @@ export const RunServiceLive = Layer.effect(
         Effect.catchAll(() => Effect.succeed("TRANSIENT" as const)),
       )
 
-    const streamUntilTerminated = (runId: string, repoName: string) =>
+    const waitUntilRunning = (runId: string, label = "the Run") =>
       Effect.gen(function* () {
         yield* Effect.sync(() =>
-          process.stderr.write("waiting for the Run to boot…"),
+          process.stderr.write(`waiting for ${label} to boot…`),
         )
         let status = yield* probeStatus(runId)
         // biome-ignore lint/plugin/noloops: time-gated poll — each pass depends on the previous probe plus a real sleep (code-style.md exception)
@@ -157,6 +171,14 @@ export const RunServiceLive = Layer.effect(
           yield* Effect.sleep("3 seconds")
           status = yield* probeStatus(runId)
         }
+        // The loop exits only on a settled status — TS narrows TRANSIENT and
+        // PROVISIONING out, so what remains is `RunStatus | "GONE"`.
+        return status
+      })
+
+    const streamUntilTerminated = (runId: string, repoName: string) =>
+      Effect.gen(function* () {
+        const status = yield* waitUntilRunning(runId)
         if (status === "GONE" || isTerminal(status)) {
           yield* Effect.sync(() =>
             process.stderr.write(
@@ -195,6 +217,7 @@ export const RunServiceLive = Layer.effect(
           command: input.command,
           ref: input.ref,
           timeoutHours: input.timeoutHours,
+          retain: input.retain,
           backendOverrides: input.backendOverrides,
           built,
         })
@@ -214,6 +237,7 @@ export const RunServiceLive = Layer.effect(
       findByRunId: compute.findByRunId,
       kill: compute.kill,
       attach: compute.attach,
+      waitUntilRunning,
       streamUntilTerminated,
     })
   }),

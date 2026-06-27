@@ -2,9 +2,10 @@
 # History-reconcile Cloud Function (gen2) + Cloud Scheduler trigger.
 #
 # Code lives in function/sweeper/. Bundled with esbuild at `terraform apply`
-# time (mirrors terraform/aws/lambda/sweeper). Its ONLY job: flip orphaned
-# RUNNING Firestore rows to STOPPED when their VM no longer exists. It never
-# deletes VMs — GCE native max_run_duration handles timeout deletion.
+# time (mirrors terraform/aws/lambda/sweeper). Two jobs: flip orphaned RUNNING
+# Firestore rows to STOPPED when their VM no longer exists, and reap retained
+# Runs (stopped afk-retain VMs) past the retention window. Timeout deletion of
+# live Runs is still GCE-native (max_run_duration).
 # ---------------------------------------------------------------------------
 
 locals {
@@ -59,15 +60,20 @@ resource "google_service_account" "sweeper" {
   depends_on = [google_project_service.required]
 }
 
-# Read-only on Compute Engine instances (aggregatedList). No delete — the
-# function must never reclaim VMs.
+# List Compute Engine instances for history reconcile, plus delete to reap
+# retained Runs (afk-retain VMs left stopped past the retention window). Delete
+# is project-wide because the afk-retain label is not an IAM-condition attribute
+# (same gap as the developer/vm roles); the function only ever targets stopped
+# instances carrying afk-managed=true + afk-retain=true, enforced in code.
 resource "google_project_iam_custom_role" "sweeper" {
   role_id     = "${replace(var.project_name, "-", "_")}_sweeper"
   title       = "AFK sweeper"
-  description = "List Compute Engine instances (read-only) for history reconcile."
+  description = "List Compute Engine instances for reconcile; delete to reap expired retained Runs."
   permissions = [
     "compute.instances.list",
     "compute.instances.get",
+    "compute.instances.delete",
+    "compute.zoneOperations.get",
   ]
 }
 
@@ -111,6 +117,7 @@ resource "google_cloudfunctions2_function" "sweeper" {
     environment_variables = {
       AFK_PROJECT_ID      = var.project_id
       AFK_RUNS_COLLECTION = "afk-runs"
+      RETENTION_DAYS      = tostring(var.retention_days)
     }
   }
 
