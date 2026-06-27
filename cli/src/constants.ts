@@ -47,6 +47,11 @@ export const TAG_MANAGED = "afk:managed"
 export const TAG_TIMEOUT_HOURS = "afk:timeout-hours"
 export const TAG_STARTED_AT = "afk:started-at"
 export const TAG_REPO = "afk:repo"
+// Marks a Run launched with `--retain`: its instance stops (not terminates) on
+// exit and is resumable via `afk attach` until the sweeper reaps it. Its
+// presence is what tells `findByRunId`/the sweeper a STOPPED instance is a
+// retained Run rather than a crashed one.
+export const TAG_RETAIN = "afk:retain"
 
 export const TAG_GOLDEN = "afk:golden"
 export const TAG_GOLDEN_VERSION = "afk:golden-version"
@@ -64,6 +69,15 @@ export const DEFAULT_ALLOWED_INSTANCE_TYPES = [
   "m6a.4xlarge",
 ] as const
 export const DEFAULT_TIMEOUT_HOURS = 4
+/** Wall-clock cap for an Interactive Run (`afk session`) when `--timeout` is
+ * omitted. Longer than a Run's default because a session is driven by hand and
+ * has no command-exit to end it; still bounded so a forgotten box cannot bill
+ * indefinitely (see CONTEXT.md "Interactive Run"). */
+export const DEFAULT_SESSION_TIMEOUT_HOURS = 24
+/** The afk-supplied keep-alive that occupies an Interactive Run's command slot,
+ * parking the main service so `afk attach` has a live container to enter. Same
+ * idiom the Golden bootstraps use; portable across the dev's base images. */
+export const SESSION_KEEPALIVE_COMMAND = ["tail", "-f", "/dev/null"] as const
 export const DEFAULT_MAIN_SERVICE = "agent"
 /** Days a finished Run's compute primitive is retained before reclamation.
  * Honoured by the Local Backend only; cloud Backends self-reclaim on exit. */
@@ -136,6 +150,9 @@ export const GCP_LABEL_MANAGED = "afk-managed"
 export const GCP_LABEL_REPO = "afk-repo"
 export const GCP_LABEL_TIMEOUT_HOURS = "afk-timeout-hours"
 export const GCP_LABEL_STARTED_AT = "afk-started-at"
+// Marks a Run launched with `--retain`: its instance stops (not deletes) on
+// exit and is resumable via `afk attach` until the reconcile Function reaps it.
+export const GCP_LABEL_RETAIN = "afk-retain"
 export const GCP_LABEL_GOLDEN = "afk-golden"
 export const GCP_LABEL_GOLDEN_VERSION = "afk-golden-version"
 

@@ -11,6 +11,7 @@ import { UserError } from "../../infra/Errors.ts"
 import { assembleRunPlan } from "../../services/RunPlan.ts"
 import { buildStartupScript } from "./GcpStartupScript.ts"
 import { collectionBases } from "../../services/SessionArtifact.ts"
+import { retainedUntilIso } from "../../services/retention.ts"
 import {
   GCP_ARTIFACTS_BUCKET_PREFIX,
   GCP_DEFAULT_MACHINE_TYPE,
@@ -20,6 +21,7 @@ import {
   GCP_LABEL_MANAGED,
   GCP_LABEL_OWNER,
   GCP_LABEL_REPO,
+  GCP_LABEL_RETAIN,
   GCP_LABEL_RUN_ID,
   GCP_LABEL_SHA,
   GCP_LABEL_STARTED_AT,
@@ -36,8 +38,8 @@ import {
 // seeds (`runId`, `startedAt`), and translates the returned data — `Either` for
 // validation failures, `warnings` for non-fatal findings — into the Effect
 // channel. Mirrors `AwsRunPlan.ts`, the functional-core/imperative-shell
-// exemplar. GCP reclaims immediately, so there is no retention (no
-// `retainedUntil`).
+// exemplar. A `--retain` Run (On-Demand only) stops instead of deleting on
+// exit, so a stopped instance can carry a `retainedUntil` resume window.
 // ---------------------------------------------------------------------------
 
 const mapGceStatus = (s: string): RunStatus => {
@@ -70,19 +72,35 @@ export const sanitizeLabel = (raw: string): string =>
 const labelsToMap = (labels: ReadonlyArray<Label>): Record<string, string> =>
   Object.fromEntries(labels.map((l) => [l.key, l.value]))
 
-export const gceInstanceToRun = (i: {
-  name: string
-  id: string
-  status: string
-  machineType: string
-  zone: string
-  creationTimestamp?: string
-  labels: ReadonlyArray<Label>
-}): Run | null => {
+export const gceInstanceToRun = (
+  i: {
+    name: string
+    id: string
+    status: string
+    machineType: string
+    zone: string
+    creationTimestamp?: string
+    lastStopTimestamp?: string
+    labels: ReadonlyArray<Label>
+  },
+  retentionDays: number,
+): Run | null => {
   const m = labelsToMap(i.labels)
   const runId = m[GCP_LABEL_RUN_ID]
   const owner = m[GCP_LABEL_OWNER]
   if (!runId || !owner) return null
+
+  // A stopped (GCE status TERMINATED) instance labelled afk-retain is a
+  // retained Run, resumable via `afk attach` until its window closes. A
+  // deleted instance simply does not appear in the list, so the label + the
+  // stopped state together identify a retained Run (not a reclaimed one).
+  const isRetained = i.status === "TERMINATED" && m[GCP_LABEL_RETAIN] === "true"
+  const stoppedAt = isRetained ? i.lastStopTimestamp : undefined
+  const retainedUntil =
+    isRetained && stoppedAt
+      ? retainedUntilIso(stoppedAt, retentionDays)
+      : undefined
+
   return {
     runId: runId as Run["runId"],
     resourceId: i.name,
@@ -97,8 +115,9 @@ export const gceInstanceToRun = (i: {
       zone: i.zone,
     },
     startedAt: m[GCP_LABEL_STARTED_AT] ?? i.creationTimestamp,
-    stoppedAt: undefined,
+    stoppedAt,
     stopReason: undefined,
+    ...(retainedUntil ? { retainedUntil } : {}),
   }
 }
 
@@ -116,6 +135,8 @@ export type GcpBackendPlan = {
   readonly machineType: string
   /** Spot (`provisioningModel: SPOT`) vs On-Demand (`STANDARD`). */
   readonly spot: boolean
+  /** Retain (stop, not delete) on exit for post-mortem attach. On-Demand only. */
+  readonly retain: boolean
   readonly serviceAccount: string
   readonly instanceName: string
   readonly maxRunDurationSeconds: number
@@ -176,11 +197,26 @@ export const planGcpRun = (
     config.gcp?.defaultMachineType ??
     GCP_DEFAULT_MACHINE_TYPE
 
-  // Spot is the default (cheaper); `--on-demand` opts up to STANDARD capacity for
-  // interruption-resistance. Both DELETE on exit, so neither is retained.
-  const onDemand =
+  // Spot is the default (cheaper); `--on-demand` opts up to STANDARD capacity.
+  // Retention couples to capacity: only On-Demand can stop without losing its
+  // disk, so `--retain` requires On-Demand — auto-upgrade a would-be Spot Run,
+  // reject explicit `--spot --retain` (CONTEXT.md "Retention", ADR-0001).
+  const explicitSpot =
+    input.backendOverrides?.spot === true ||
+    input.backendOverrides?.spot === "true"
+  const explicitOnDemand =
     input.backendOverrides?.onDemand === true ||
     input.backendOverrides?.onDemand === "true"
+  const retain = input.retain === true
+  if (retain && explicitSpot) {
+    return Either.left(
+      new UserError({
+        message: "--retain cannot be combined with --spot.",
+        hint: "Spot capacity cannot be stopped without losing its disk, so a Spot Run can never be retained. Drop --spot (it implies On-Demand).",
+      }),
+    )
+  }
+  const onDemand = explicitOnDemand || retain
   const spot = !onDemand
   const whitelist = config.gcp?.allowedMachineTypes
   if (whitelist && whitelist.length > 0 && !whitelist.includes(machineType)) {
@@ -234,6 +270,7 @@ export const planGcpRun = (
     image: built.image,
     command: input.command,
     timeoutSeconds,
+    retain,
     env,
     secrets: secrets.map((s) => s.secretName),
     secretEnvNames: secrets.map((s) => ({
@@ -256,6 +293,7 @@ export const planGcpRun = (
     { key: GCP_LABEL_REPO, value: sanitizeLabel(i.sourceRepoName) },
     { key: GCP_LABEL_TIMEOUT_HOURS, value: String(timeoutHours) },
     { key: GCP_LABEL_STARTED_AT, value: sanitizeLabel(i.startedAt) },
+    ...(retain ? [{ key: GCP_LABEL_RETAIN, value: "true" }] : []),
   ]
 
   return Either.right({
@@ -286,6 +324,7 @@ export const planGcpRun = (
       imageFamily: i.goldenImageFamily,
       machineType,
       spot,
+      retain,
       serviceAccount: "",
       instanceName,
       maxRunDurationSeconds: timeoutSeconds,
