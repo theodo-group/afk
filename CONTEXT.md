@@ -12,6 +12,16 @@ A Run is backed by exactly one **compute primitive** in the active [[backend]]: 
 
 Not to be confused with: an EC2 instance / Container instance (provider resources), a TodoWrite task (work item inside an agent), or an agent sub-task (delegated work inside Claude).
 
+## Interactive Run
+
+A [[run]] launched with no developer command, for the purpose of being attached into and driven by hand rather than executing an autonomous workload. Started by `afk session` — the interactive counterpart to `afk run <command>`, which executes a developer-defined command to completion.
+
+An Interactive Run is a Run in every structural sense: backed by exactly one compute primitive, owned by its launcher, cloning [[ref|source]] into `/workspace`, streaming logs, bounded by a timeout, reclaimed by `afk kill`. It differs only in what occupies its command slot and therefore in how it ends. An ordinary Run carries the developer's command and ends when that command exits; an Interactive Run carries an afk-supplied keep-alive in that slot, so nothing exits on its own — it stays live until the developer ends it with `afk kill` or its timeout backstop fires. `afk attach` is the entire point of an Interactive Run, not the optional observation it is for an ordinary Run.
+
+Because it is just a Run, an Interactive Run inherits the [[spot|capacity]] and end-of-life story of its [[backend]] — with one default flipped: a Spot reclaim would kill a session mid-keystroke, so an Interactive Run defaults to On-Demand (see [[spot]]).
+
+Not to be confused with a [[retention|retained]] Run (post-mortem inspection of a Run that has already ended) — an Interactive Run is *live* the whole time it is attachable; its command never ran to completion because there was no command to run.
+
 ## Run Plan
 
 The fully-resolved description of a [[run]] before any compute primitive is launched: the resolved image, [[ref]], command, timeout, environment, secret references, and (if present) the linted [[compose-contract]] graph. A Run Plan is the output of resolving a developer's request against `afk.config.json` and the built image — deterministic and side-effect-free to compute.
@@ -26,9 +36,9 @@ After a [[run]] ends, a [[backend]] may **retain** its compute primitive instead
 
 Resuming revives only the compute primitive, never the workload — the Run has already ended, so resume re-animates the host so attach has something to enter; it does not re-run the developer's command. A retained Run is reclaimed explicitly by `afk kill`, or automatically once it is older than the configured **retention period** (default 7 days) — so retained is a bounded grace window, not permanent storage.
 
-Realized on the [[backend|Local Backend]] only, where every Run is retained — Local runs on no capacity-pricing model, so retaining a finished container is free. The cloud Backends do **not** retain: AWS and GCP default to [[spot|Spot]] capacity, which cannot be stopped without losing its disk, so every cloud Run self-terminates on exit. Cloudflare reclaims immediately too — its Container instances are ephemeral, so a restarted one is a clean slate rather than preserved post-mortem state, the opposite of what retention promises.
+Realized automatically on the [[backend|Local Backend]], where every Run is retained — Local runs on no capacity-pricing model, so retaining a finished container is free. On **AWS and GCP** retention is available but **opt-in and On-Demand-only**: `afk run --retain` stops the instance instead of terminating it when the Run ends, preserving its disk for later `afk attach`. It requires [[spot|On-Demand]] capacity because Spot cannot be stopped without losing its disk — so `--retain` implies On-Demand, and a [[spot|Spot]] Run can never be retained. Because a stopped instance still bills for its disk, retention is off by default and bounded by the retention period. **Cloudflare cannot retain at all** — its Container instances are ephemeral, so a restarted one is a clean slate rather than preserved post-mortem state, the opposite of what retention promises.
 
-Post-mortem inspection of a finished cloud Run is therefore not available: on the cloud Backends `afk attach` only enters a Run that is still **live** (its command has not yet exited). To carry state past a cloud Run's end, declare a [[session-artifact]].
+Post-mortem inspection of a finished cloud Run is therefore available only when it was launched with `--retain` (AWS/GCP); otherwise, and always on Cloudflare, `afk attach` enters only a Run that is still **live** (its command has not yet exited). To carry state past a non-retained cloud Run's end, declare a [[session-artifact]].
 
 Not to be confused with a suspended or paused Run (there is no such state — a Run that has ended has ended) or with `afk kill` (which reclaims, the opposite of retain).
 
@@ -36,9 +46,9 @@ Not to be confused with a suspended or paused Run (there is no such state — a 
 
 The capacity model a cloud [[run]] launches under. **Spot** is interruptible, heavily discounted capacity the provider may reclaim at any time (an AWS Spot instance, a GCP `SPOT` VM); **On-Demand** is full-price capacity the provider does not reclaim. A cloud Run defaults to Spot — the common case is cheap and disposable — and `--on-demand` opts up to On-Demand.
 
-The only thing the choice changes is **interruption risk**: a Spot reclaim kills a live Run mid-flight, so a long or fragile Run pays for On-Demand to avoid that. It does **not** change end-of-life — both self-terminate on exit, neither is retained (see [[retention]]). Spot is a cloud-only concept; the Local Backend has no capacity model.
+The choice changes two things: **interruption risk** and **retention eligibility**. Interruption risk: a Spot reclaim kills a live Run mid-flight, so a long or fragile Run pays for On-Demand to avoid that. Retention eligibility: only On-Demand capacity can be stopped without losing its disk, so [[retention]] (post-mortem `afk attach` via `--retain`) is available only on an On-Demand Run — a Spot Run can never be retained and always self-terminates on exit. By default neither is retained; On-Demand additionally *permits* `--retain`. Spot is a cloud-only concept; the Local Backend has no capacity model.
 
-Not to be confused with [[retention]] (Spot once implied "non-retainable," but retention is now Local-only, so the two are independent) or with the [[golden-image]] (the boot artifact, orthogonal to how the instance is purchased).
+Not to be confused with [[retention]] itself: capacity is what makes retention *possible*, but a plain On-Demand Run without `--retain` still self-terminates on exit. Orthogonal to the [[golden-image]] (the boot artifact, independent of how the instance is purchased).
 
 ## Backend
 
