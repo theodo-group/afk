@@ -2,6 +2,7 @@ import { Command, Options } from "@effect/cli"
 import { Effect } from "effect"
 import { RunService } from "../services/RunService.ts"
 import { Output } from "../infra/Output.ts"
+import { UserError } from "../infra/Errors.ts"
 import {
   DEFAULT_SESSION_TIMEOUT_HOURS,
   SESSION_KEEPALIVE_COMMAND,
@@ -102,14 +103,16 @@ export const session = Command.make(
       // The primitive reaching RUNNING does not mean the main service container
       // is execable yet — with sidecars, `docker compose up` holds the agent
       // back until their healthchecks pass. Re-attempt the attach for a bounded
-      // window, swallowing the not-ready failures and bailing early if the Run
-      // ends; the final attempt below surfaces the real error if it never came
-      // up. A successful attach returns the moment the developer detaches.
+      // window, swallowing the not-ready failures. A successful attach returns
+      // the moment the developer detaches. If the Run instead reaches a terminal
+      // state, the box died during boot (most often a failed source clone) — say
+      // so, rather than silently dropping the developer into the post-mortem
+      // shell of a session that never came up.
       const attachOnce = runs.attach(started.runId, {
         service: undefined,
         host: false,
       })
-      for (let attempt = 0; attempt < 9; attempt++) {
+      for (let attempt = 0; attempt < 12; attempt++) {
         const attached = yield* attachOnce.pipe(
           Effect.as(true),
           Effect.catchAll(() => Effect.succeed(false)),
@@ -118,7 +121,14 @@ export const session = Command.make(
         const run = yield* runs
           .findByRunId(started.runId)
           .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
-        if (run && run.status !== "RUNNING") break
+        if (run && run.status !== "RUNNING") {
+          return yield* Effect.fail(
+            new UserError({
+              message: `Session ${started.runId} ended during boot before it became attachable.`,
+              hint: `See \`afk logs ${started.runId}\` for why. A common cause is a failed source clone — check the github/gitlab token. The finished box is retained: \`afk attach ${started.runId}\` opens its post-mortem shell, \`afk kill ${started.runId}\` reclaims it.`,
+            }),
+          )
+        }
         yield* Effect.sleep("3 seconds")
       }
       yield* attachOnce
