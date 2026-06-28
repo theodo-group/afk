@@ -98,6 +98,29 @@ export const session = Command.make(
         return
       }
       yield* Effect.sync(() => process.stderr.write(" ready, attaching…\n"))
-      yield* runs.attach(started.runId, { service: undefined, host: false })
+
+      // The primitive reaching RUNNING does not mean the main service container
+      // is execable yet — with sidecars, `docker compose up` holds the agent
+      // back until their healthchecks pass. Re-attempt the attach for a bounded
+      // window, swallowing the not-ready failures and bailing early if the Run
+      // ends; the final attempt below surfaces the real error if it never came
+      // up. A successful attach returns the moment the developer detaches.
+      const attachOnce = runs.attach(started.runId, {
+        service: undefined,
+        host: false,
+      })
+      for (let attempt = 0; attempt < 9; attempt++) {
+        const attached = yield* attachOnce.pipe(
+          Effect.as(true),
+          Effect.catchAll(() => Effect.succeed(false)),
+        )
+        if (attached) return
+        const run = yield* runs
+          .findByRunId(started.runId)
+          .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+        if (run && run.status !== "RUNNING") break
+        yield* Effect.sleep("3 seconds")
+      }
+      yield* attachOnce
     }),
 )
