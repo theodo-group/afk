@@ -467,3 +467,9 @@ Backend-neutral commands stay identical across all four (see [CLI surface](#cli-
 ## Future Backends
 
 The CLI is structured around a `Backend` interface. **AWS EC2**, **GCP Compute Engine**, **Cloudflare Containers**, and **Local** (your own Docker daemon) are shipped. **Azure (Virtual Machines)** is anticipated; it is expected to follow the same one-compute-primitive-per-Run shape, with its own image-build pipeline mapped onto `afk golden build` and its own exec primitive mapped onto `afk attach`.
+
+---
+
+## License
+
+Licensed under the [Apache License, Version 2.0](./LICENSE). Copyright 2026 Theodo Group.

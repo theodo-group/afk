@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/HttpApiBuilder.js",
-  "module": "../dist/esm/HttpApiBuilder.js",
-  "types": "../dist/dts/HttpApiBuilder.d.ts",
-  "sideEffects": []
-}

@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/QueryString.js",
-  "module": "../dist/esm/QueryString.js",
-  "types": "../dist/dts/QueryString.d.ts",
-  "sideEffects": []
-}

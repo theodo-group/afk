@@ -1,1 +1,29 @@
+# Dependencies
 **/node_modules
+
+# Build output
+**/dist
+**/build
+*.tsbuildinfo
+
+# Environment & local config
+.env
+.env.*
+!.env.example
+afk.config.local.json
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+*.swp

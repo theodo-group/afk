@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/Template.js",
-  "module": "../dist/esm/Template.js",
-  "types": "../dist/dts/Template.d.ts",
-  "sideEffects": []
-}

@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/OpenApi.js",
-  "module": "../dist/esm/OpenApi.js",
-  "types": "../dist/dts/OpenApi.d.ts",
-  "sideEffects": []
-}

@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/HttpApiMiddleware.js",
-  "module": "../dist/esm/HttpApiMiddleware.js",
-  "types": "../dist/dts/HttpApiMiddleware.d.ts",
-  "sideEffects": []
-}

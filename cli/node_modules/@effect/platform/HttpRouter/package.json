@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/HttpRouter.js",
-  "module": "../dist/esm/HttpRouter.js",
-  "types": "../dist/dts/HttpRouter.d.ts",
-  "sideEffects": []
-}

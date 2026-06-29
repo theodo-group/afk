@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/HttpBody.js",
-  "module": "../dist/esm/HttpBody.js",
-  "types": "../dist/dts/HttpBody.d.ts",
-  "sideEffects": []
-}
