@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/Multipart.js",
-  "module": "../dist/esm/Multipart.js",
-  "types": "../dist/dts/Multipart.d.ts",
-  "sideEffects": []
-}

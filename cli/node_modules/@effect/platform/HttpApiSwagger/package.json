@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/HttpApiSwagger.js",
-  "module": "../dist/esm/HttpApiSwagger.js",
-  "types": "../dist/dts/HttpApiSwagger.d.ts",
-  "sideEffects": []
-}

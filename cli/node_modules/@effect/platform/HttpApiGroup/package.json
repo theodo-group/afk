@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/HttpApiGroup.js",
-  "module": "../dist/esm/HttpApiGroup.js",
-  "types": "../dist/dts/HttpApiGroup.d.ts",
-  "sideEffects": []
-}

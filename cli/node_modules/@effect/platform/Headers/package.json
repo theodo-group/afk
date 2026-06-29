@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/Headers.js",
-  "module": "../dist/esm/Headers.js",
-  "types": "../dist/dts/Headers.d.ts",
-  "sideEffects": []
-}

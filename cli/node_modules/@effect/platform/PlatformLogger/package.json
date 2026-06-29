@@ -1,6 +1,0 @@
-{
-  "main": "../dist/cjs/PlatformLogger.js",
-  "module": "../dist/esm/PlatformLogger.js",
-  "types": "../dist/dts/PlatformLogger.d.ts",
-  "sideEffects": []
-}
