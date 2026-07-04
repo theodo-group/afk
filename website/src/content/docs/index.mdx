@@ -1,0 +1,83 @@
+---
+title: AFK
+description: Run ephemeral containerized tasks in the cloud from a CLI — one identical surface across AWS, GCP, Cloudflare, and your own Docker daemon.
+template: splash
+hero:
+  tagline: Run ephemeral containerized tasks in the cloud from a CLI. Built for AI agents that work while you're AFK — but works for any command-runnable workload.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /getting-started/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/theodo-group/afk
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Code } from "@astrojs/starlight/components"
+
+export const quickstart = `# In any repo with an afk.Dockerfile — no cloud account, just Docker:
+afk init --provider local                                  # configure (writes backend=local)
+afk golden build                                           # one-time: build the local runtime image
+afk run "claude -p 'fix the failing test and open a PR'"   # launch an agent in a container
+afk ls                                                     # see it running
+afk logs <run-id>                                          # tail its output`
+
+<Code code={quickstart} lang="sh" title="Your first Run" />
+
+That Run executes on your own Docker daemon. Point the same project at a cloud
+Backend and the **identical** commands launch the work on ephemeral cloud
+compute instead.
+
+## Why AFK
+
+<CardGrid stagger>
+  <Card title="One CLI, four Backends" icon="laptop">
+    `afk run`, `afk attach`, `afk ls`, `afk kill` mean the same thing on AWS
+    EC2, GCP Compute Engine, Cloudflare Containers, and your local Docker
+    daemon. Switch providers without changing a command.
+  </Card>
+  <Card title="Ephemeral by design" icon="rocket">
+    Each Run is one short-lived compute primitive that boots, runs your
+    workload, and self-terminates on exit. No always-on infrastructure, no
+    resident CLI — a dead laptop never affects a live Run.
+  </Card>
+  <Card title="Real Docker, real sidecars" icon="puzzle">
+    Every Run has Docker available, so `docker compose up` is the same surface
+    everywhere. Give an agent first-class Postgres, Redis, and friends without
+    serverless container limits.
+  </Card>
+  <Card title="What runs is what's on origin" icon="approve-check">
+    A Run refuses to launch on a dirty tree or an unpushed ref. Images cache
+    the toolchain, source is cloned fresh at Run start — fast, reproducible,
+    no surprise branches.
+  </Card>
+</CardGrid>
+
+## Pick a path
+
+<CardGrid>
+  <LinkCard
+    title="Introduction"
+    description="What AFK is, the model behind it, and how a Run flows end to end."
+    href="/getting-started/introduction/"
+  />
+  <LinkCard
+    title="Installation"
+    description="Clone, bun link, and the per-Backend prerequisites."
+    href="/getting-started/installation/"
+  />
+  <LinkCard
+    title="Quickstart"
+    description="Stand up your first Run on Local, AWS, GCP, or Cloudflare."
+    href="/getting-started/quickstart/"
+  />
+  <LinkCard
+    title="Glossary"
+    description="The canonical vocabulary — Run, Backend, Golden Image, Ref, and more."
+    href="/concepts/glossary/"
+  />
+</CardGrid>

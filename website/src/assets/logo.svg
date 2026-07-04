@@ -1,0 +1,6 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AFK">
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="currentColor" opacity="0.12"/>
+  <rect x="1.5" y="1.5" width="29" height="29" rx="7.5" stroke="currentColor" stroke-opacity="0.4"/>
+  <path d="M9 11 L14.5 16 L9 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M16.5 21 H23.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+</svg>
