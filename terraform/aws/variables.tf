@@ -59,6 +59,12 @@ variable "sweeper_grace_minutes" {
   default     = 30
 }
 
+variable "retention_days" {
+  description = "Days a retained Run's stopped instance is kept (resumable via `afk attach`) before the sweeper reclaims it. Should match the CLI's retentionDays."
+  type        = number
+  default     = 7
+}
+
 variable "enable_session_logging" {
   description = "When true, SSM Session Manager sessions are recorded to CloudWatch under /afk/sessions. Off by default."
   type        = bool

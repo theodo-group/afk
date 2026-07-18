@@ -19,6 +19,9 @@ import {
  *   - Self-reclaim is `gcloud compute instances delete` (the GCE
  *     `max_run_duration` backstop deletes it regardless). `AFK_BACKEND=gcp` and
  *     `ZONE` are exported so the CLI-owned entrypoint knows which delete to run.
+ *     On a *retained* Run it instead self-*stops* (preserving the boot disk and
+ *     the exited containers) so `afk attach` can resume it post-mortem, and the
+ *     max_run_duration backstop is set to STOP to match (see GcpRunPlan/Gce).
  */
 export interface GcpStartupScriptInput {
   readonly runId: string
@@ -29,6 +32,9 @@ export interface GcpStartupScriptInput {
   readonly image: string
   readonly command: ReadonlyArray<string>
   readonly timeoutSeconds: number
+  /** Retain on exit: preserve exited containers + boot disk and self-*stop*
+   *  instead of self-deleting, so `afk attach` can resume for post-mortem. */
+  readonly retain: boolean
   readonly env: ReadonlyArray<{ readonly name: string; readonly value: string }>
   /** Secret Manager secret ids (already prefixed) to read at boot. */
   readonly secrets: ReadonlyArray<string>
@@ -133,12 +139,17 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
           `$(docker compose -f ${shellQuote(VM_COMPOSE_PATH)} ps -aq ${shellQuote(input.mainService)})`,
           input,
         ),
-        `docker compose -f ${shellQuote(VM_COMPOSE_PATH)} down -v --remove-orphans || true`,
+        // A retained Run keeps its exited containers + volumes for post-mortem
+        // attach (they are reclaimed when the instance is); a non-retained Run
+        // tears the stack down before self-deleting.
+        input.retain
+          ? ""
+          : `docker compose -f ${shellQuote(VM_COMPOSE_PATH)} down -v --remove-orphans || true`,
       ]
         .filter((l) => l !== "")
         .join("\n")
     : [
-        `timeout --preserve-status ${input.timeoutSeconds}s docker run ${collectArtifacts ? "" : "--rm "}\\`,
+        `timeout --preserve-status ${input.timeoutSeconds}s docker run ${collectArtifacts || input.retain ? "" : "--rm "}\\`,
         `  --name ${shellQuote(input.mainService)} \\`,
         `  --env-file "$AFK_ENV_FILE" \\`,
         `  --log-driver gcplogs \\`,
@@ -149,7 +160,7 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
         `  sh -c ${shellQuote(cmdShell)}`,
         `RUN_EXIT=$?`,
         renderArtifactCollection(shellQuote(input.mainService), input),
-        collectArtifacts
+        collectArtifacts && !input.retain
           ? `docker rm -f ${shellQuote(input.mainService)} >/dev/null 2>&1 || true`
           : "",
       ]
@@ -190,8 +201,13 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
     "set -e",
     `echo "afk-startup: run exited $RUN_EXIT"`,
     "",
-    "# --- Self-reclaim (max_run_duration is the backstop) ---",
-    `gcloud compute instances delete ${shellQuote(input.instanceName)} --zone=${shellQuote(input.zone)} --quiet || true`,
+    // Self-reclaim (max_run_duration is the backstop, set to match). A retained
+    // Run stops — preserving the boot disk for post-mortem `afk attach` — rather
+    // than deleting; the reconcile Function reaps it after the retention period.
+    input.retain
+      ? "# --- Self-stop (retained for post-mortem; reaped after retention) ---"
+      : "# --- Self-reclaim (max_run_duration is the backstop) ---",
+    `gcloud compute instances ${input.retain ? "stop" : "delete"} ${shellQuote(input.instanceName)} --zone=${shellQuote(input.zone)} --quiet || true`,
     "",
   ].join("\n")
 }

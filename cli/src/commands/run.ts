@@ -25,6 +25,11 @@ const dryRun = Options.boolean("dry-run").pipe(
     "print the resolved launch plan (instance type/tier, image, env, compose, …) and exit without launching",
   ),
 )
+const retain = Options.boolean("retain").pipe(
+  Options.withDescription(
+    "keep the instance (stopped, not terminated) after the Run ends so `afk attach` can resume it for post-mortem inspection. Implies --on-demand (Spot cannot be retained); reclaimed after the retention period",
+  ),
+)
 
 const command = Args.text({ name: "command" }).pipe(Args.repeated)
 
@@ -35,8 +40,8 @@ const formatBackendDetails = (d: Record<string, string>): string => {
 
 export const run = Command.make(
   "run",
-  { ref, instanceType, onDemand, timeout, follow, dryRun, command },
-  ({ ref, instanceType, onDemand, timeout, follow, dryRun, command }) =>
+  { ref, instanceType, onDemand, timeout, follow, dryRun, retain, command },
+  ({ ref, instanceType, onDemand, timeout, follow, dryRun, retain, command }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       const cfg = yield* ConfigService
@@ -51,6 +56,7 @@ export const run = Command.make(
         command,
         ref: ref._tag === "Some" ? ref.value : undefined,
         timeoutHours: timeout._tag === "Some" ? timeout.value : undefined,
+        retain,
         backendOverrides,
       }
 

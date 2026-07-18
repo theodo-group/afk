@@ -1,11 +1,11 @@
 ---
 title: Glossary
-description: The canonical vocabulary used throughout AFK — Run, Run Plan, Retention, Spot, Backend, Owner, the Contracts, Golden Image, Ref, and Session Artifact.
+description: The canonical vocabulary used throughout AFK — Run, Interactive Run, Run Plan, Retention, Spot, Backend, Owner, the Contracts, Golden Image, Ref, and Session Artifact.
 ---
 
 The canonical terms used throughout AFK. This is the source of truth for the
 project's vocabulary; implementation details live in the [Backend
-docs](/backends/overview/).
+docs](/afk/backends/overview/).
 
 ## Run
 
@@ -30,6 +30,33 @@ the developer interacts with through the CLI (`afk run`, `afk attach <run>`,
 Not to be confused with: an EC2 instance / Container instance (provider
 resources), a TodoWrite task (work item inside an agent), or an agent sub-task
 (delegated work inside Claude).
+
+## Interactive Run
+
+A [Run](#run) launched with no developer command, for the purpose of being
+attached into and driven by hand rather than executing an autonomous workload.
+Started by `afk session` — the interactive counterpart to `afk run <command>`,
+which executes a developer-defined command to completion.
+
+An Interactive Run is a Run in every structural sense: backed by exactly one
+compute primitive, owned by its launcher, cloning [source](#ref) into
+`/workspace`, streaming logs, bounded by a timeout, reclaimed by `afk kill`. It
+differs only in what occupies its command slot and therefore in how it ends. An
+ordinary Run carries the developer's command and ends when that command exits;
+an Interactive Run carries an afk-supplied keep-alive in that slot, so nothing
+exits on its own — it stays live until the developer ends it with `afk kill` or
+its timeout backstop fires. `afk attach` is the entire point of an Interactive
+Run, not the optional observation it is for an ordinary Run.
+
+Because it is just a Run, an Interactive Run inherits the
+[capacity](#spot) and end-of-life story of its [Backend](#backend) — with one
+default flipped: a Spot reclaim would kill a session mid-keystroke, so an
+Interactive Run defaults to On-Demand (see [Spot](#spot)).
+
+Not to be confused with a [retained](#retention) Run (post-mortem inspection of
+a Run that has already ended) — an Interactive Run is _live_ the whole time it
+is attachable; its command never ran to completion because there was no command
+to run.
 
 ## Run Plan
 
@@ -65,18 +92,30 @@ Resuming revives only the compute primitive, never the workload — the Run has
 already ended, so resume re-animates the host so attach has something to enter;
 it does not re-run the developer's command. A retained Run is reclaimed
 explicitly by `afk kill`, or automatically once it is older than the configured
-**retention period** (default 7 days).
+**retention period** (default 7 days) — so retained is a bounded grace window,
+not permanent storage.
 
-Realized on the **Local Backend** only, where every Run is retained — Local runs
-on no capacity-pricing model, so retaining a finished container is free. The
-cloud Backends do **not** retain: AWS and GCP default to [Spot](#spot) capacity,
-which cannot be stopped without losing its disk, so every cloud Run
-self-terminates on exit. Cloudflare reclaims immediately too.
+Realized automatically on the **Local Backend**, where every Run is retained —
+Local runs on no capacity-pricing model, so retaining a finished container is
+free. On **AWS and GCP** retention is available but **opt-in and
+On-Demand-only**: `afk run --retain` stops the instance instead of terminating
+it when the Run ends, preserving its disk for later `afk attach`. It requires
+[On-Demand](#spot) capacity because Spot cannot be stopped without losing its
+disk — so `--retain` implies On-Demand, and a Spot Run can never be retained.
+Because a stopped instance still bills for its disk, retention is off by default
+and bounded by the retention period. **Cloudflare cannot retain at all** — its
+Container instances are ephemeral, so a restarted one is a clean slate rather
+than preserved post-mortem state, the opposite of what retention promises.
 
-Post-mortem inspection of a finished cloud Run is therefore not available: on the
-cloud Backends `afk attach` only enters a Run that is still **live** (its command
-has not yet exited). To carry state past a cloud Run's end, declare a [Session
+Post-mortem inspection of a finished cloud Run is therefore available only when
+it was launched with `--retain` (AWS/GCP); otherwise, and always on Cloudflare,
+`afk attach` enters only a Run that is still **live** (its command has not yet
+exited). To carry state past a non-retained cloud Run's end, declare a [Session
 Artifact](#session-artifact).
+
+Not to be confused with a suspended or paused Run (there is no such state — a
+Run that has ended has ended) or with `afk kill` (which reclaims, the opposite
+of retain).
 
 ## Spot
 
@@ -86,10 +125,20 @@ instance, a GCP `SPOT` VM); **On-Demand** is full-price capacity the provider
 does not reclaim. A cloud Run defaults to Spot — the common case is cheap and
 disposable — and `--on-demand` opts up to On-Demand.
 
-The only thing the choice changes is **interruption risk**: a Spot reclaim kills
-a live Run mid-flight, so a long or fragile Run pays for On-Demand to avoid that.
-It does **not** change end-of-life — both self-terminate on exit, neither is
-retained. Spot is a cloud-only concept; the Local Backend has no capacity model.
+The choice changes two things: **interruption risk** and **retention
+eligibility**. Interruption risk: a Spot reclaim kills a live Run mid-flight, so
+a long or fragile Run pays for On-Demand to avoid that. Retention eligibility:
+only On-Demand capacity can be stopped without losing its disk, so
+[Retention](#retention) (post-mortem `afk attach` via `--retain`) is available
+only on an On-Demand Run — a Spot Run can never be retained and always
+self-terminates on exit. By default neither is retained; On-Demand additionally
+_permits_ `--retain`. Spot is a cloud-only concept; the Local Backend has no
+capacity model.
+
+Not to be confused with [Retention](#retention) itself: capacity is what makes
+retention _possible_, but a plain On-Demand Run without `--retain` still
+self-terminates on exit. Orthogonal to the [Golden Image](#golden-image) (the
+boot artifact, independent of how the instance is purchased).
 
 ## Backend
 
@@ -106,7 +155,7 @@ invocation only regardless of the persisted Backend.
 
 The four shipped Backends — AWS EC2, GCP Compute Engine, Cloudflare Containers,
 and Local — plus the anticipated Azure Backend are detailed in the [Backends
-overview](/backends/overview/).
+overview](/afk/backends/overview/).
 
 ## Owner
 
@@ -130,7 +179,7 @@ command, but does **not** copy the source code (the source is cloned at Run star
 by the entrypoint). The entrypoint script is owned by the CLI and injected at
 build time — the developer's `afk.Dockerfile` does not declare it.
 
-See [Consumer contract](/reference/consumer-contract/) for the full rules and an
+See [Consumer contract](/afk/reference/consumer-contract/) for the full rules and an
 example.
 
 ## Compose Contract
@@ -141,7 +190,9 @@ lives at the repo root and declares a graph of services; one of them — the "ma
 service," named in `afk.config.json` (default: `agent`) — is the agent itself,
 and its image is the one built from `afk.Dockerfile`. The Run's lifetime is the
 main service's lifetime: when it exits the Run ends and its sidecars stop with
-it.
+it. Their containers and volumes are reclaimed with the compute primitive —
+immediately, or, where [Retention](#retention) applies, preserved until the
+retained primitive is reclaimed so the whole stack can be inspected post-mortem.
 
 The compose file is portable across Backends without dev changes. Some Backends
 impose structural addenda that the CLI applies automatically at submit time —
@@ -201,5 +252,7 @@ exfiltration out of an arbitrary container.
 Distinct from **logs**: logs are the per-service stdout/stderr stream tailed live
 by `afk logs`; a Session Artifact is a file collected once, at Run end, from the
 agent's own on-disk state. The single collection point — the Run command's
-graceful exit — also bounds what is captured: a Session Artifact is the artifact
-of _the Run's own execution_, not of any later attach session.
+graceful exit — also bounds what is captured, on every Backend: a Session
+Artifact is the artifact of _the Run's own execution_, not of any later attach
+session. Running a fresh agent inside an `afk attach` shell and then exiting
+happens outside that one collection moment, so it is never captured.

@@ -11,6 +11,7 @@ import { UserError } from "../../infra/Errors.ts"
 import { assembleRunPlan } from "../../services/RunPlan.ts"
 import { buildUserData } from "../../services/UserData.ts"
 import { collectionBases } from "../../services/SessionArtifact.ts"
+import { retainedUntilIso } from "../../services/retention.ts"
 import {
   AFK_ARTIFACTS_BUCKET_PREFIX,
   DEFAULT_INSTANCE_TYPE,
@@ -22,6 +23,7 @@ import {
   TAG_MANAGED,
   TAG_OWNER,
   TAG_REPO,
+  TAG_RETAIN,
   TAG_RUN_ID,
   TAG_SHA,
   TAG_STARTED_AT,
@@ -56,22 +58,54 @@ const mapEc2State = (s: string): RunStatus => {
 const tagsToMap = (tags: ReadonlyArray<Ec2Tag>): Record<string, string> =>
   Object.fromEntries(tags.map((t) => [t.key, t.value]))
 
-export const ec2InstanceToRun = (i: {
-  instanceId: string
-  state: string
-  instanceType: string
-  launchTime?: string
-  imageId: string
-  spotInstanceRequestId?: string
-  stateReason?: string
-  tags: ReadonlyArray<Ec2Tag>
-}): Run | null => {
+/**
+ * The only timestamp DescribeInstances gives for *when* an instance stopped is
+ * the parenthesised time in its StateTransitionReason
+ * (`"User initiated (2026-06-28 14:00:00 GMT)"`). Parse it best-effort; an
+ * unparseable or absent reason just yields no retention window (display-only —
+ * the sweeper Lambda is the authoritative reaper).
+ */
+const parseStopTimeIso = (reason: string | undefined): string | undefined => {
+  const m = reason?.match(/\(([^)]+)\)/)
+  if (!m) return undefined
+  const t = Date.parse(m[1]!)
+  return Number.isNaN(t) ? undefined : new Date(t).toISOString()
+}
+
+export const ec2InstanceToRun = (
+  i: {
+    instanceId: string
+    state: string
+    instanceType: string
+    launchTime?: string
+    imageId: string
+    spotInstanceRequestId?: string
+    stateReason?: string
+    stateTransitionReason?: string
+    tags: ReadonlyArray<Ec2Tag>
+  },
+  retentionDays: number,
+): Run | null => {
   const m = tagsToMap(i.tags)
   const runId = m[TAG_RUN_ID]
   const owner = m[TAG_OWNER]
   if (!runId || !owner) return null
   const spot = Boolean(i.spotInstanceRequestId)
   const startedAt = m[TAG_STARTED_AT] ?? i.launchTime
+
+  // A genuinely *stopped* (not terminated) instance tagged afk:retain is a
+  // retained Run: resumable via `afk attach` until its window closes. Both
+  // stopped and terminated map to STOPPED status, so the tag + native state
+  // are what distinguish a retained Run from a reclaimed one.
+  const isRetained = i.state === "stopped" && m[TAG_RETAIN] === "true"
+  const stoppedAt = isRetained
+    ? parseStopTimeIso(i.stateTransitionReason)
+    : undefined
+  const retainedUntil =
+    isRetained && stoppedAt
+      ? retainedUntilIso(stoppedAt, retentionDays)
+      : undefined
+
   return {
     runId: runId as Run["runId"],
     resourceId: i.instanceId,
@@ -86,8 +120,9 @@ export const ec2InstanceToRun = (i: {
       spot: String(spot),
     },
     startedAt,
-    stoppedAt: undefined,
+    stoppedAt,
     stopReason: i.stateReason,
+    ...(retainedUntil ? { retainedUntil } : {}),
   }
 }
 
@@ -104,6 +139,10 @@ export type AwsBackendPlan = {
   readonly amiId: string
   readonly instanceType: string
   readonly spot: boolean
+  /** Retain the instance (stop, not terminate) on exit for post-mortem attach. */
+  readonly retain: boolean
+  /** What the instance's `shutdown -h` does: `stop` when retained, else `terminate`. */
+  readonly shutdownBehavior: "stop" | "terminate"
   readonly subnetIds: ReadonlyArray<string>
   readonly securityGroupId: string
   readonly tags: ReadonlyArray<Ec2Tag>
@@ -219,12 +258,27 @@ export const planAwsRun = (
     sessionArtifactMaxBytes: SESSION_ARTIFACT_MAX_BYTES,
   })
 
-  // Spot is the default (cheaper); on-demand is opt-in via `--on-demand`. The
-  // choice only changes interruption risk — a Spot reclaim kills a live Run — not
-  // end-of-life: every cloud Run self-terminates on exit and is never retained.
-  const onDemand =
+  // Spot is the default (cheaper); on-demand is opt-in. Retention couples to
+  // capacity: only On-Demand can be stopped without losing its disk, so
+  // `--retain` requires On-Demand. We auto-upgrade a would-be Spot Run that asks
+  // to retain, but reject an *explicit* `--spot --retain` as the documented hard
+  // error (CONTEXT.md "Retention").
+  const explicitSpot =
+    input.backendOverrides?.spot === true ||
+    input.backendOverrides?.spot === "true"
+  const explicitOnDemand =
     input.backendOverrides?.onDemand === true ||
     input.backendOverrides?.onDemand === "true"
+  const retain = input.retain === true
+  if (retain && explicitSpot) {
+    return Either.left(
+      new UserError({
+        message: "--retain cannot be combined with --spot.",
+        hint: "Spot capacity cannot be stopped without losing its disk, so a Spot Run can never be retained. Drop --spot (it implies On-Demand).",
+      }),
+    )
+  }
+  const onDemand = explicitOnDemand || retain
   const spot = !onDemand
 
   const tags: ReadonlyArray<Ec2Tag> = [
@@ -236,6 +290,7 @@ export const planAwsRun = (
     { key: TAG_REPO, value: i.sourceRepoName },
     { key: TAG_TIMEOUT_HOURS, value: String(timeoutHours) },
     { key: TAG_STARTED_AT, value: i.startedAt },
+    ...(retain ? [{ key: TAG_RETAIN, value: "true" }] : []),
     { key: "Name", value: `afk-${i.sourceRepoName}-${i.runId.slice(0, 8)}` },
   ]
 
@@ -264,6 +319,8 @@ export const planAwsRun = (
       amiId: i.latestGoldenId,
       instanceType,
       spot,
+      retain,
+      shutdownBehavior: retain ? "stop" : "terminate",
       tags,
       userData,
       imageWasSkipped: built.skipped,

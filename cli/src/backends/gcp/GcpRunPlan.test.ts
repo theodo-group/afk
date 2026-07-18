@@ -11,6 +11,7 @@ import {
 import {
   GCP_LABEL_MANAGED,
   GCP_LABEL_OWNER,
+  GCP_LABEL_RETAIN,
   GCP_LABEL_RUN_ID,
 } from "../../constants.ts"
 
@@ -115,6 +116,32 @@ describe("planGcpRun", () => {
     }
   })
 
+  it("--retain implies On-Demand, retain flag, and the retain label", () => {
+    const result = planGcpRun(baseInput({ startInput: { retain: true } }))
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.spot).toBe(false)
+      expect(result.right.backendPlanBase.retain).toBe(true)
+      const labels = Object.fromEntries(
+        result.right.backendPlanBase.labels.map((l) => [l.key, l.value]),
+      )
+      expect(labels[GCP_LABEL_RETAIN]).toBe("true")
+    }
+  })
+
+  it("rejects --retain combined with explicit --spot", () => {
+    const result = planGcpRun(
+      baseInput({
+        startInput: { retain: true, backendOverrides: { spot: true } },
+      }),
+    )
+    expect(Either.isLeft(result)).toBe(true)
+    if (Either.isLeft(result)) {
+      expect(result.left._tag).toBe("UserError")
+      expect(result.left.message).toContain("--retain cannot be combined")
+    }
+  })
+
   it("is deterministic — same input, identical labels (no clock/randomness)", () => {
     const a = planGcpRun(baseInput())
     const b = planGcpRun(baseInput())
@@ -129,19 +156,22 @@ describe("planGcpRun", () => {
 
 describe("gceInstanceToRun", () => {
   it("maps labels back into a Run, collapsing GCE status", () => {
-    const run = gceInstanceToRun({
-      name: "afk-widget-11111111",
-      id: "42",
-      status: "RUNNING",
-      machineType: "e2-standard-4",
-      zone: "us-central1-a",
-      creationTimestamp: "2026-05-24T00:00:00.000Z",
-      labels: [
-        { key: GCP_LABEL_RUN_ID, value: "run-1" },
-        { key: GCP_LABEL_OWNER, value: "dev-acme-com" },
-        { key: "afk-branch", value: "main" },
-      ],
-    })
+    const run = gceInstanceToRun(
+      {
+        name: "afk-widget-11111111",
+        id: "42",
+        status: "RUNNING",
+        machineType: "e2-standard-4",
+        zone: "us-central1-a",
+        creationTimestamp: "2026-05-24T00:00:00.000Z",
+        labels: [
+          { key: GCP_LABEL_RUN_ID, value: "run-1" },
+          { key: GCP_LABEL_OWNER, value: "dev-acme-com" },
+          { key: "afk-branch", value: "main" },
+        ],
+      },
+      7,
+    )
     expect(run).not.toBeNull()
     expect(run?.status).toBe("RUNNING")
     expect(run?.backend).toBe("gcp")
@@ -150,15 +180,58 @@ describe("gceInstanceToRun", () => {
   })
 
   it("returns null when the run-id/owner labels are absent", () => {
-    const run = gceInstanceToRun({
-      name: "some-other-vm",
-      id: "7",
-      status: "RUNNING",
-      machineType: "e2-standard-4",
-      zone: "us-central1-a",
-      labels: [],
-    })
+    const run = gceInstanceToRun(
+      {
+        name: "some-other-vm",
+        id: "7",
+        status: "RUNNING",
+        machineType: "e2-standard-4",
+        zone: "us-central1-a",
+        labels: [],
+      },
+      7,
+    )
     expect(run).toBeNull()
+  })
+
+  it("sets retainedUntil for a stopped (TERMINATED), retained instance", () => {
+    const run = gceInstanceToRun(
+      {
+        name: "afk-widget-11111111",
+        id: "42",
+        status: "TERMINATED",
+        machineType: "e2-standard-4",
+        zone: "us-central1-a",
+        lastStopTimestamp: "2026-06-01T00:00:00.000Z",
+        labels: [
+          { key: GCP_LABEL_RUN_ID, value: "run-1" },
+          { key: GCP_LABEL_OWNER, value: "dev-acme-com" },
+          { key: GCP_LABEL_RETAIN, value: "true" },
+        ],
+      },
+      7,
+    )
+    expect(run?.status).toBe("STOPPED")
+    expect(run?.retainedUntil).toBe("2026-06-08T00:00:00.000Z")
+  })
+
+  it("omits retainedUntil for a stopped instance that was not retained", () => {
+    const run = gceInstanceToRun(
+      {
+        name: "afk-widget-11111111",
+        id: "42",
+        status: "TERMINATED",
+        machineType: "e2-standard-4",
+        zone: "us-central1-a",
+        lastStopTimestamp: "2026-06-01T00:00:00.000Z",
+        labels: [
+          { key: GCP_LABEL_RUN_ID, value: "run-1" },
+          { key: GCP_LABEL_OWNER, value: "dev-acme-com" },
+        ],
+      },
+      7,
+    )
+    expect(run?.retainedUntil).toBeUndefined()
   })
 
   it("sanitizeLabel lowercases and replaces disallowed chars", () => {

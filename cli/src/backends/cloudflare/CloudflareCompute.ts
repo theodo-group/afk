@@ -66,6 +66,19 @@ export const CloudflareComputeLive = Layer.effect(
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
+        // Cloudflare cannot retain: its Container instances are ephemeral, with
+        // no stop-preserve primitive, so a restarted one is a clean slate
+        // (CONTEXT.md "Retention"). Reject `--retain` rather than silently
+        // ignore it — post-mortem inspection needs AWS/GCP or a Session Artifact.
+        if (input.retain) {
+          return yield* Effect.fail(
+            new UserError({
+              message: "--retain is not supported on the Cloudflare Backend.",
+              hint: "Cloudflare Container instances are ephemeral and cannot be retained. Use the AWS or GCP Backend for post-mortem attach, or declare a Session Artifact to capture state past a Run's end.",
+            }),
+          )
+        }
+
         // Shell: gather the effectful inputs the core needs.
         const { config, envEntries, projectRoot, sourceRepoName } =
           yield* cfg.load

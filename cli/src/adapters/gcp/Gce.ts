@@ -23,7 +23,13 @@ export interface CreateInstanceInput {
   readonly startupScript: string
   /** Spot capacity (`provisioningModel: SPOT`) when true, else STANDARD on-demand. */
   readonly spot: boolean
-  /** Wall-clock cap; the instance self-deletes (instance_termination_action) at expiry. */
+  /**
+   * Retain the instance after exit: the maxRunDuration backstop and the
+   * instance's own self-reclaim then STOP it (preserving the boot disk for
+   * post-mortem `afk attach`) instead of DELETE-ing it. On-Demand only.
+   */
+  readonly retain: boolean
+  /** Wall-clock cap; at expiry GCE stops (retained) or deletes the instance. */
   readonly maxRunDurationSeconds: number
   readonly labels: ReadonlyArray<Label>
 }
@@ -35,6 +41,8 @@ export interface GceInstance {
   readonly machineType: string
   readonly zone: string
   readonly creationTimestamp?: string
+  /** When the instance last stopped (GCE field) — dates a retained Run's window. */
+  readonly lastStopTimestamp?: string
   readonly labels: ReadonlyArray<Label>
 }
 
@@ -171,11 +179,13 @@ export const GceLive = Layer.effect(
             `--subnet=${input.subnet}`,
             // No external IP: egress is via Cloud NAT, ingress via IAP only.
             "--no-address",
-            // Wall-clock backstop: GCE deletes the instance when the cap elapses.
+            // Wall-clock backstop: at the cap GCE applies the termination action.
             `--max-run-duration=${input.maxRunDurationSeconds}s`,
-            // DELETE governs both the cap and (on Spot) a preemption — either way
-            // the instance is gone, matching the no-retention self-delete model.
-            "--instance-termination-action=DELETE",
+            // STOP on a retained Run preserves the boot disk for post-mortem
+            // attach; DELETE (the default) reclaims it — governing both the cap
+            // and, on Spot, a preemption. Retention is On-Demand only, so STOP
+            // never combines with Spot.
+            `--instance-termination-action=${input.retain ? "STOP" : "DELETE"}`,
             ...(input.spot ? ["--provisioning-model=SPOT"] : []),
             "--scopes=https://www.googleapis.com/auth/cloud-platform",
             // Network tag required by the Terraform-managed IAP allow rule (and
@@ -206,6 +216,7 @@ export const GceLive = Layer.effect(
       machineType: string
       zone: string
       creationTimestamp?: string
+      lastStopTimestamp?: string
       labels?: Readonly<Record<string, string>>
     }): GceInstance => ({
       name: i.name,
@@ -214,6 +225,7 @@ export const GceLive = Layer.effect(
       machineType: lastSegment(i.machineType),
       zone: lastSegment(i.zone),
       creationTimestamp: i.creationTimestamp,
+      lastStopTimestamp: i.lastStopTimestamp,
       labels: labelsToMap(i.labels),
     })
 
@@ -227,6 +239,7 @@ export const GceLive = Layer.effect(
             machineType: string
             zone: string
             creationTimestamp?: string
+            lastStopTimestamp?: string
             labels?: Readonly<Record<string, string>>
           }>
         >("compute:instances:list", [
@@ -248,6 +261,7 @@ export const GceLive = Layer.effect(
           machineType: string
           zone: string
           creationTimestamp?: string
+          lastStopTimestamp?: string
           labels?: Readonly<Record<string, string>>
         }>("compute:instances:describe", [
           "compute",

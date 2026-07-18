@@ -24,7 +24,7 @@ afk ls
 afk logs <run-id>
 ```
 
-Teardown is manual — see the [Local backend doc](/backends/local/).
+Teardown is manual — see the [Local backend doc](/afk/backends/local/).
 
 ## On AWS
 
@@ -44,7 +44,7 @@ afk ls && afk logs <run-id>
 ```
 
 Teardown: `afk destroy` (dry-run) / `afk destroy --yes`. See the
-[AWS backend doc](/backends/aws/) for exactly what is removed.
+[AWS backend doc](/afk/backends/aws/) for exactly what is removed.
 
 ## On GCP
 
@@ -70,14 +70,14 @@ afk ls && afk logs <run-id>
 ```
 
 Teardown: `afk destroy` (dry-run) / `afk destroy --yes`. See the
-[GCP backend doc](/backends/gcp/) for exactly what is removed.
+[GCP backend doc](/afk/backends/gcp/) for exactly what is removed.
 
 ## On Cloudflare
 
 The CF Backend uses **rootless Docker-in-Docker** inside one Container instance
 per Run, gated by a customer-deployed **launcher Worker**. Different topology
 from AWS; same `afk` CLI surface. Skim the [Cloudflare backend
-doc](/backends/cloudflare/) before your first deploy.
+doc](/afk/backends/cloudflare/) before your first deploy.
 
 Prerequisites: a Workers Paid plan, `wrangler` on PATH, and a
 `CLOUDFLARE_API_TOKEN` in a gitignored `.env`.
@@ -105,4 +105,18 @@ application and use `afk team add`.
 :::
 
 Teardown: `afk destroy --yes` (golden images, launcher Worker + DOs, Container
-app, D1, KV). See the [Cloudflare backend doc](/backends/cloudflare/).
+app, D1, KV). See the [Cloudflare backend doc](/afk/backends/cloudflare/).
+
+## Interactive Runs and post-mortems
+
+Two variations once the basics work, both detailed in the
+[glossary](/afk/concepts/glossary/#interactive-run):
+
+- **`afk session`** launches an [Interactive
+  Run](/afk/concepts/glossary/#interactive-run) — a box with no command that you
+  attach into and drive by hand. On-Demand by default (a Spot reclaim would kill
+  your session); ends via `afk kill` or its timeout (default 24h).
+- **`afk run --retain`** (AWS/GCP, implies On-Demand) stops the instance instead
+  of terminating it when the Run ends, so `afk attach` can resume it later for
+  [post-mortem inspection](/afk/concepts/glossary/#retention). Reclaimed after the
+  retention period (default 7 days).

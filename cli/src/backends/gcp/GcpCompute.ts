@@ -21,11 +21,13 @@ import { injectGcpLogging } from "../../services/Compose.ts"
 import {
   COMPOSE_FILE,
   DEFAULT_MAIN_SERVICE,
+  DEFAULT_RETENTION_DAYS,
   GCP_DEFAULT_REGION,
   GCP_DEFAULT_ZONE,
   GCP_GOLDEN_IMAGE_FAMILY,
   GCP_LABEL_MANAGED,
   GCP_LABEL_OWNER,
+  VM_AFK_DIR,
 } from "../../constants.ts"
 import {
   type GcpBackendPlan,
@@ -59,10 +61,15 @@ export const GcpComputeLive = Layer.effect(
       })),
     )
 
+    const resolveRetentionDays = cfg.load.pipe(
+      Effect.map((r) => r.config.retentionDays ?? DEFAULT_RETENTION_DAYS),
+    )
+
     const fetchRuns = (ownerAccount?: string) =>
       Effect.gen(function* () {
         const project = yield* resolveProject
         const { zone } = yield* resolveRegionZone
+        const retentionDays = yield* resolveRetentionDays
         const labelFilters = [
           { key: GCP_LABEL_MANAGED, value: "true" },
           ...(ownerAccount
@@ -75,7 +82,7 @@ export const GcpComputeLive = Layer.effect(
           labelFilters,
         })
         return instances
-          .map(gceInstanceToRun)
+          .map((inst) => gceInstanceToRun(inst, retentionDays))
           .filter((r): r is Run => r !== null)
       })
 
@@ -156,6 +163,7 @@ export const GcpComputeLive = Layer.effect(
           subnet: gcp.subnet,
           startupScript: gcp.startupScript,
           spot: gcp.spot,
+          retain: gcp.retain,
           maxRunDurationSeconds: gcp.maxRunDurationSeconds,
           labels: gcp.labels,
         })
@@ -207,21 +215,26 @@ export const GcpComputeLive = Layer.effect(
             }),
           )
         }
-        // GCP reclaims immediately, so a non-RUNNING Run is gone — there is no
-        // retained state to resume into (mirrors the non-retained AWS path).
-        if (run.status !== "RUNNING") {
-          return yield* Effect.fail(
-            new UserError({
-              message: `Run ${runId} has ended.`,
-              hint: "GCP Runs are reclaimed when their command exits.",
-            }),
-          )
-        }
         const project = config.gcp?.projectId ?? (yield* auth.activeProject)
         const zone = config.gcp?.zone ?? GCP_DEFAULT_ZONE
         const mainService = config.mainService ?? DEFAULT_MAIN_SERVICE
         const service = opts.service ?? mainService
         const instanceName = run.resourceId
+
+        const live = run.status === "RUNNING"
+        // A stopped (TERMINATED) instance with a retention window is a retained
+        // Run we can resume for post-mortem inspection — `retainedUntil` is set
+        // only when it is genuinely stopped (not deleted), so it doubles as the
+        // resumability marker (mirrors the AWS path).
+        const resumable = !live && run.retainedUntil !== undefined
+        if (!live && !resumable) {
+          return yield* Effect.fail(
+            new UserError({
+              message: `Run ${runId} has ended.`,
+              hint: "It was not retained — only an On-Demand Run launched with --retain can be resumed. GCP otherwise reclaims a Run when its command exits.",
+            }),
+          )
+        }
 
         const ssh = (command: string) =>
           sub
@@ -245,23 +258,52 @@ export const GcpComputeLive = Layer.effect(
               ),
             )
 
-        if (opts.host) {
-          yield* ssh("bash -l")
-          return
+        // Resume a retained primitive (start the stopped instance; `gcloud
+        // compute ssh` then retries until sshd is back), and re-park it when the
+        // session ends so "stopped" stays the retained Run's only resting state.
+        const repark = gce
+          .stopInstance(project, zone, instanceName)
+          .pipe(Effect.catchAll(() => Effect.void))
+        if (resumable) {
+          yield* gce.startInstance(project, zone, instanceName)
         }
 
         // Locate the service container by its compose service label (name
-        // fallback for the no-compose Run), then exec a shell into it — the same
-        // shape as the AWS SSM path, run over the IAP SSH tunnel.
-        const findCid =
-          `C=$(docker ps -aqf "label=com.docker.compose.service=${service}" | head -n1); ` +
-          `[ -n "$C" ] || C=$(docker ps -aqf "name=^${service}$" | head -n1); ` +
-          `if [ -z "$C" ]; then echo "service ${service} not found" >&2; exit 1; fi; `
-        const cmd =
-          findCid +
+        // fallback for the no-compose Run), including exited containers (`-a`).
+        const findCid = (svc: string) =>
+          `C=$(docker ps -aqf "label=com.docker.compose.service=${svc}" | head -n1); ` +
+          `[ -n "$C" ] || C=$(docker ps -aqf "name=^${svc}$" | head -n1); ` +
+          `if [ -z "$C" ]; then echo "service ${svc} not found" >&2; exit 1; fi; `
+
+        const liveCmd = (svc: string) =>
+          findCid(svc) +
           `docker start "$C" >/dev/null 2>&1 || true; ` +
           `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
-        yield* ssh(cmd)
+
+        // Post-mortem: the container has exited, so commit its final filesystem
+        // and run a shell from it (commit-then-run; see CONTEXT.md "Retention").
+        // `--entrypoint` overrides the baked afk entrypoint (which would re-clone
+        // /workspace and fail). The main service's env file is preserved on the
+        // boot disk; pass it through.
+        const postMortemCmd = (svc: string) => {
+          const img = `afk-postmortem-${run.runId.slice(0, 8)}`
+          const envOpt =
+            svc === mainService ? `--env-file ${VM_AFK_DIR}/run.env ` : ""
+          const drun = (sh: string) =>
+            `docker run -it --rm --network host --entrypoint ${sh} ${envOpt}${img}`
+          return (
+            findCid(svc) +
+            `docker commit "$C" ${img} >/dev/null && ` +
+            `{ ${drun("bash")} 2>/dev/null || ${drun("sh")}; }; ` +
+            `docker image rm ${img} >/dev/null 2>&1 || true`
+          )
+        }
+
+        const dropIn = opts.host
+          ? ssh("bash -l")
+          : ssh(live ? liveCmd(service) : postMortemCmd(service))
+
+        yield* resumable ? dropIn.pipe(Effect.ensuring(repark)) : dropIn
       })
 
     const callerPrincipal = Effect.gen(function* () {

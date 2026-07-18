@@ -23,9 +23,11 @@ import {
   COMPOSE_FILE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
+  DEFAULT_RETENTION_DAYS,
   LOG_RETENTION_DAYS,
   TAG_MANAGED,
   TAG_OWNER,
+  VM_AFK_DIR,
 } from "../../constants.ts"
 import {
   type AwsBackendPlan,
@@ -53,8 +55,13 @@ export const AwsComputeLive = Layer.effect(
       Effect.map((r) => r.config.aws?.region ?? DEFAULT_REGION),
     )
 
+    const resolveRetentionDays = cfg.load.pipe(
+      Effect.map((r) => r.config.retentionDays ?? DEFAULT_RETENTION_DAYS),
+    )
+
     const fetchRunsAtRegion = (region: string, ownerUserId?: string) =>
       Effect.gen(function* () {
+        const retentionDays = yield* resolveRetentionDays
         const tagFilters = [
           { key: TAG_MANAGED, values: ["true"] },
           ...(ownerUserId ? [{ key: TAG_OWNER, values: [ownerUserId] }] : []),
@@ -72,7 +79,7 @@ export const AwsComputeLive = Layer.effect(
           ],
         })
         return instances
-          .map(ec2InstanceToRun)
+          .map((inst) => ec2InstanceToRun(inst, retentionDays))
           .filter((r): r is Run => r !== null)
       })
 
@@ -160,8 +167,10 @@ export const AwsComputeLive = Layer.effect(
           iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
           userData: aws.userData,
           spot: aws.spot,
-          // Cloud Runs are never retained — the instance terminates on exit.
-          shutdownBehavior: "terminate",
+          // `stop` on a retained Run (preserve the EBS root for post-mortem
+          // attach), `terminate` otherwise. The plan couples this to capacity —
+          // only On-Demand can stop (see AwsRunPlan).
+          shutdownBehavior: aws.shutdownBehavior,
           tags: aws.tags,
         })
 
@@ -215,24 +224,37 @@ export const AwsComputeLive = Layer.effect(
         const service = opts.service ?? mainService
         const instanceId = run.resourceId
 
-        // Cloud Runs are never retained, so attach only enters a *live* Run —
-        // a non-RUNNING Run has ended and its instance is gone.
-        if (run.status !== "RUNNING") {
+        const live = run.status === "RUNNING"
+        // A stopped instance with a retention window is a retained Run we can
+        // resume for post-mortem inspection (its EBS root was preserved).
+        // `retainedUntil` is set only when the instance is genuinely *stopped*
+        // (not terminated), so it doubles as the resumability marker.
+        const resumable = !live && run.retainedUntil !== undefined
+        if (!live && !resumable) {
           return yield* Effect.fail(
             new UserError({
               message: `Run ${runId} has ended.`,
-              hint: "Cloud Runs are not retained — declare a Session Artifact to capture state past a Run's end.",
+              hint: "It was not retained — only an On-Demand Run launched with --retain can be resumed. Declare a Session Artifact to capture state past a Run's end.",
             }),
           )
         }
 
-        if (opts.host) {
-          yield* ssm.startHostShell({ region, instanceId })
-          return
+        // Resume a retained primitive (start the stopped instance, wait for the
+        // SSM agent to re-register), and re-park it when the attach session ends
+        // so "stopped" stays the retained Run's only resting state. Re-park is
+        // best-effort so it always runs.
+        const repark = ec2
+          .stopInstances(region, [instanceId])
+          .pipe(Effect.catchAll(() => Effect.void))
+        if (resumable) {
+          yield* ec2.startInstances(region, [instanceId])
+          yield* ec2.waitForInstance(region, instanceId, "running")
+          yield* ssm.waitForAgent({ region, instanceId })
         }
 
         // Locate the service container by its compose service label (name
-        // fallback for the no-compose Run). Using the label avoids
+        // fallback for the no-compose Run), including exited containers (`-a`)
+        // so a retained Run's stopped containers resolve. Using the label avoids
         // `docker compose exec`, which re-interpolates compose.yml and warns on
         // the unset AFK_ENV_FILE.
         const findCid = (svc: string) =>
@@ -240,19 +262,42 @@ export const AwsComputeLive = Layer.effect(
           `[ -n "$C" ] || C=$(docker ps -aqf "name=^${svc}$" | head -n1); ` +
           `if [ -z "$C" ]; then echo "service ${svc} not found" >&2; exit 1; fi; `
 
-        const cmd =
-          findCid(service) +
+        // Post-mortem: the container has exited, so `exec` is impossible. Commit
+        // its final filesystem to an image and run a shell from it (commit-then-
+        // run; see CONTEXT.md "Retention"). `--entrypoint` overrides the baked
+        // afk entrypoint, which would re-clone /workspace and fail. The main
+        // service's env file is preserved on the root volume; pass it through.
+        const postMortemCmd = (svc: string) => {
+          const img = `afk-postmortem-${run.runId.slice(0, 8)}`
+          const envOpt =
+            svc === mainService ? `--env-file ${VM_AFK_DIR}/run.env ` : ""
+          const drun = (sh: string) =>
+            `docker run -it --rm --network host --entrypoint ${sh} ${envOpt}${img}`
+          return (
+            findCid(svc) +
+            `docker commit "$C" ${img} >/dev/null && ` +
+            `{ ${drun("bash")} 2>/dev/null || ${drun("sh")}; }; ` +
+            `docker image rm ${img} >/dev/null 2>&1 || true`
+          )
+        }
+
+        const liveCmd = (svc: string) =>
+          findCid(svc) +
           `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
 
         // The SSM session enters as `ssm-user`, who is not in the `docker`
         // group, so every docker call would hit the socket with EACCES. Run the
         // whole snippet under root — passwordless sudo is available on the AL
         // host, and the single PTY is preserved through to `docker exec -it`.
-        yield* ssm.startInteractiveCommand({
-          region,
-          instanceId,
-          command: `sudo bash -c ${shellQuote(cmd)}`,
-        })
+        const dropIn = opts.host
+          ? ssm.startHostShell({ region, instanceId })
+          : ssm.startInteractiveCommand({
+              region,
+              instanceId,
+              command: `sudo bash -c ${shellQuote(live ? liveCmd(service) : postMortemCmd(service))}`,
+            })
+
+        yield* resumable ? dropIn.pipe(Effect.ensuring(repark)) : dropIn
       })
 
     const callerPrincipal = Effect.gen(function* () {
