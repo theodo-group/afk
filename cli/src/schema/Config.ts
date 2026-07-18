@@ -16,6 +16,29 @@ export const AwsBackendConfig = Schema.Struct({
 export type AwsBackendConfig = typeof AwsBackendConfig.Type
 
 /**
+ * A custom Cloudflare Containers instance size: exact vCPU / memory / disk
+ * instead of a named tier. Rendered by `afk provision` into wrangler.toml's
+ * `instance_type` inline table (CF caps: 1–4 vCPU, ≤12 GiB memory, ≤20 GB
+ * disk, ≥3 GiB memory per vCPU — enforced by Cloudflare at deploy time).
+ */
+export const CloudflareInstanceSpec = Schema.Struct({
+  vcpu: Schema.Positive,
+  memoryMib: Schema.Positive,
+  diskMb: Schema.optional(Schema.Positive),
+})
+export type CloudflareInstanceSpec = typeof CloudflareInstanceSpec.Type
+
+/** Human/one-line label for a tier value that may be a custom spec. */
+export const cloudflareInstanceTierLabel = (
+  tier: string | CloudflareInstanceSpec,
+): string =>
+  typeof tier === "string"
+    ? tier
+    : `custom(${tier.vcpu}vcpu/${tier.memoryMib}MiB${
+        tier.diskMb !== undefined ? `/${tier.diskMb}MB` : ""
+      })`
+
+/**
  * Cloudflare-specific config block. Read only when `backend == "cloudflare"`.
  */
 export const CloudflareBackendConfig = Schema.Struct({
@@ -29,8 +52,13 @@ export const CloudflareBackendConfig = Schema.Struct({
   workerUrl: Schema.optional(Schema.String),
   /** Smart placement (auto) or a regional pin like "weur", "wnam", "enam". */
   placement: Schema.optional(Schema.String),
-  /** Container instance tier: dev | basic | standard-1 | standard-2 | standard-3 | standard-4. */
-  defaultInstanceTier: Schema.optional(Schema.String),
+  /** Container instance size: a named tier (lite | basic | standard-1 …
+   * standard-4) or a custom {vcpu, memoryMib, diskMb} spec. Deploy-time on CF:
+   * `afk provision` writes it into wrangler.toml's `instance_type`, so changing
+   * it requires a re-provision. */
+  defaultInstanceTier: Schema.optional(
+    Schema.Union(Schema.String, CloudflareInstanceSpec),
+  ),
   /**
    * Images pre-pulled into the CF Golden Container image by `afk golden build`.
    */

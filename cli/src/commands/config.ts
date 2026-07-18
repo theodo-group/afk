@@ -2,6 +2,7 @@ import { Command } from "@effect/cli"
 import { Effect } from "effect"
 import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
+import { cloudflareInstanceTierLabel } from "../schema/Config.ts"
 
 export const config = Command.make("config", {}, () =>
   Effect.gen(function* () {
@@ -38,7 +39,11 @@ export const config = Command.make("config", {}, () =>
             `  account id        ${c.cloudflare?.accountId ?? "(unset)"}`,
             `  worker name       ${c.cloudflare?.workerName ?? "(unset)"}`,
             `  placement         ${c.cloudflare?.placement ?? "(unset)"}`,
-            `  default tier      ${c.cloudflare?.defaultInstanceTier ?? "(unset)"}`,
+            `  default tier      ${
+              c.cloudflare?.defaultInstanceTier !== undefined
+                ? cloudflareInstanceTierLabel(c.cloudflare.defaultInstanceTier)
+                : "(unset)"
+            }`,
             `  cached images     ${(c.cloudflare?.cachedImages ?? []).join(", ") || "(none)"}`,
             ``,
             `env entries:`,

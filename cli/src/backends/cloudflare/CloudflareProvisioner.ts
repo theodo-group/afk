@@ -6,6 +6,7 @@ import { Subprocess } from "../../infra/Subprocess.ts"
 import { Output } from "../../infra/Output.ts"
 import { CloudflareError, UserError } from "../../infra/Errors.ts"
 import { patchWranglerToml, patchConfigWorkerUrl } from "../../infra/CfToml.ts"
+import { cloudflareInstanceTierLabel } from "../../schema/Config.ts"
 import { Provisioner } from "../../services/backend/Provisioner.ts"
 import { CONFIG_FILE } from "../../constants.ts"
 import { parseWranglerJsonArray } from "./wranglerJson.ts"
@@ -183,6 +184,18 @@ export const CloudflareProvisionerLive = Layer.effect(
               : Effect.fail(e),
         }),
       )
+
+      // Instance sizing is deploy-time on CF: the [[containers]] block's
+      // instance_type is fixed when the Worker deploys. Sync it from config so
+      // `defaultInstanceTier` (named tier or custom {vcpu, memoryMib, diskMb})
+      // is authoritative and a re-provision applies a size change.
+      const tier = config.cloudflare?.defaultInstanceTier
+      if (tier !== undefined) {
+        patchWranglerToml(tomlPath, { instanceType: tier })
+        yield* out.print(
+          `• instance_type ${cloudflareInstanceTierLabel(tier)} (from ${CONFIG_FILE})`,
+        )
+      }
 
       // Migration is CREATE IF NOT EXISTS — safe to re-run.
       yield* out.print("• applying D1 migration…")

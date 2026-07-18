@@ -93,6 +93,15 @@ export interface WranglerTomlPatch {
   readonly databaseId?: string
   readonly kvId?: string
   readonly imageUri?: string
+  /** Named tier ("standard-1") or a custom size, rendered as wrangler's
+   *  inline-table form. Structural type — infra can't import schema/. */
+  readonly instanceType?:
+    | string
+    | {
+        readonly vcpu: number
+        readonly memoryMib: number
+        readonly diskMb?: number
+      }
 }
 
 /**
@@ -133,6 +142,16 @@ export const patchWranglerToml = (
       /image = "registry\.cloudflare\.com\/[^"]*"/,
       `image = "${patch.imageUri}"`,
     )
+  }
+  if (patch.instanceType !== undefined) {
+    const t = patch.instanceType
+    const rendered =
+      typeof t === "string"
+        ? `instance_type = "${t}"`
+        : `instance_type = { vcpu = ${t.vcpu}, memory_mib = ${t.memoryMib}${
+            t.diskMb !== undefined ? `, disk_mb = ${t.diskMb}` : ""
+          } }`
+    toml = toml.replace(/instance_type = (?:"[^"]*"|\{[^}\n]*\})/, rendered)
   }
 
   writeFileSync(path, toml)
