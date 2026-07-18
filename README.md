@@ -364,7 +364,7 @@ Sidecars share the Run's Docker daemon and network. `/workspace` is mounted into
 - **Local-specific.** The `local:` block needs only `cachedImages` (the sidecar images baked into the local Golden Image). Everything else the Local Backend uses comes from the Backend-neutral top level (`gitUrl`, `mainService`, `defaultTimeoutHours`).
 
 - **AWS-specific.** `aws.region` selects the region for every AWS call the CLI makes; defaults to `us-east-1` if omitted. Resource and Golden-Image settings are optional. Most runtime values the CLI needs (VPC ID, subnet IDs, role ARNs) are derived from tags + IAM lookups against the configured region — not read from this file.
-- **Cloudflare-specific.** `cloudflare.accountId` and `cloudflare.workerUrl` are required for any CF command after `afk init`. `placement` (default `smart`) maps to Cloudflare Containers placement hints. `defaultInstanceTier` (default `standard-1`) is the CF Containers tier per Run. `cachedImages` is the list passed to `afk golden build` for inclusion in the Golden Container image.
+- **Cloudflare-specific.** `cloudflare.accountId` and `cloudflare.workerUrl` are required for any CF command after `afk init`. `placement` (default `smart`) maps to Cloudflare Containers placement hints. `defaultInstanceTier` (default `standard-1`) is the CF Containers instance size — a named tier, or a custom `{ "vcpu": 2, "memoryMib": 8192, "diskMb": 16000 }` spec (CF caps: 1–4 vCPU, ≤12 GiB memory, ≤20 GB disk). Sizing is deploy-time on CF: `afk provision` writes it into the launcher Worker's `wrangler.toml`, so changing it requires a re-provision. `cachedImages` is the list passed to `afk golden build` for inclusion in the Golden Container image.
 
 ### 4. `.afk.env` (gitignored)
 
