@@ -16,10 +16,12 @@
  * It starts root `dockerd` (`--bridge=none --iptables=false`, workloads on
  * `--network host` — CF's Firecracker microVM is the isolation boundary), loads
  * the baked sidecar cache, pulls the agent image, runs the workload (compose or
- * single container) under the wall-clock timeout, ships incremental per-service
- * log snapshots to the launcher while it runs, and POSTs the authoritative
- * per-service log map + exit code on completion. Absent `AFK_IMAGE` (e.g. an
- * `afk attach --host` debug boot) it falls back to the container's own CMD.
+ * single container) under the wall-clock timeout, ships per-service log chunks
+ * to the launcher while it runs (stored in R2 — live and untruncated), and
+ * POSTs the exit code plus a budgeted per-service log map on completion (the
+ * map is the fallback read path when no R2 chunks landed). Absent `AFK_IMAGE`
+ * (e.g. an `afk attach --host` debug boot) it falls back to the container's
+ * own CMD.
  *
  * `\${...}` is escaped so the JS template literal leaves shell expansions intact.
  */
@@ -113,8 +115,10 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
     fi
   }
 
-  # Build the {"<svc>":"<base64>"} object from the captured files. The main
-  # service gets a larger byte budget than the diagnostic sidecars.
+  # Build the {"<svc>":"<base64>"} object from the captured files. Fallback
+  # payload only (see /complete below): the live, untruncated copy ships as R2
+  # chunks via ship_deltas. The budgets keep the fallback within DO-storage
+  # value limits; the main service gets a larger budget than the sidecars.
   build_services_json() {
     printf '{'
     SEP=""
@@ -131,10 +135,37 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
 
   # POST a JSON body to the launcher, carrying the per-Run token so the Worker
   # can authenticate the callback (the container has no CF Access creds).
-  post_json() {
+  # post_json_ok reports failure to the caller; post_json is fire-and-forget.
+  post_json_ok() {
     wget -qO- --header="Content-Type: application/json" \\
       --header="X-AFK-Run-Token: \${AFK_COMPLETE_TOKEN:-}" \\
-      --post-data="\$2" "\$1" >/dev/null 2>&1 || true
+      --post-data="\$2" "\$1" >/dev/null 2>&1
+  }
+  post_json() {
+    post_json_ok "\$1" "\$2" || true
+  }
+
+  # Ship each service's not-yet-shipped log bytes to the launcher as a numbered
+  # chunk (stored in R2 by the Worker, concatenated on read — so \`afk logs\` is
+  # live and untruncated). Offsets and sequence numbers persist in files because
+  # the poller subshell and the final main-shell flush must share them. A failed
+  # POST leaves the offset untouched, so the same bytes re-ship next round.
+  ship_deltas() {
+    [ -n "\${AFK_LOGS_URL:-}" ] || return 0
+    for svc in \$SVCS; do
+      f="/var/afk/svc-\$svc.log"
+      [ -f "\$f" ] || continue
+      off=\$(cat "/var/afk/off-\$svc" 2>/dev/null || echo 0)
+      size=\$(wc -c < "\$f")
+      [ "\$size" -gt "\$off" ] || continue
+      seq=\$(( \$(cat "/var/afk/seq-\$svc" 2>/dev/null || echo 0) + 1 ))
+      B64=\$(tail -c +\$((off+1)) "\$f" | base64 | tr -d '\\n')
+      if post_json_ok "\$AFK_LOGS_URL" \\
+        "\$(printf '{"service":"%s","seq":%s,"b64":"%s"}' "\$svc" "\$seq" "\$B64")"; then
+        echo "\$seq" > "/var/afk/seq-\$svc"
+        echo "\$size" > "/var/afk/off-\$svc"
+      fi
+    done
   }
 
   # Session Artifact collection (see CONTEXT.md). Best-effort, at graceful exit:
@@ -165,18 +196,23 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
     fi
   }
 
-  # Incremental log push: while the workload runs, ship a growing per-service
-  # snapshot every few seconds so \`afk logs --follow\` streams a live Run rather
-  # than waiting for exit. The final /complete callback ships the authoritative
-  # copy. (The stored snapshot only grows, so the CLI prints byte deltas.)
+  # Incremental log push: while the workload runs, ship the per-service byte
+  # deltas every few seconds so \`afk logs --follow\` streams a live Run rather
+  # than waiting for exit. Chunks land in R2 via AFK_LOGS_URL; against an older
+  # launcher Worker (no AFK_LOGS_URL injected) fall back to the legacy growing
+  # budgeted snapshot on AFK_PROGRESS_URL.
   POLLER_PID=""
-  if [ -n "\${AFK_PROGRESS_URL:-}" ]; then
+  if [ -n "\${AFK_LOGS_URL:-}" ] || [ -n "\${AFK_PROGRESS_URL:-}" ]; then
     (
       set +e
       while true; do
         sleep "\${AFK_LOG_PUSH_INTERVAL:-5}"
         capture_services
-        post_json "\$AFK_PROGRESS_URL" "\$(printf '{"services":%s}' "\$(build_services_json)")"
+        if [ -n "\${AFK_LOGS_URL:-}" ]; then
+          ship_deltas
+        else
+          post_json "\$AFK_PROGRESS_URL" "\$(printf '{"services":%s}' "\$(build_services_json)")"
+        fi
       done
     ) &
     POLLER_PID=\$!
@@ -207,9 +243,11 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
   fi
 
   # Stop the poller and take a final snapshot BEFORE compose teardown removes
-  # the containers, so the per-service payload is complete.
+  # the containers, so the per-service payload is complete. Ship the last chunk
+  # now — after teardown the logs are gone.
   [ -n "\$POLLER_PID" ] && kill "\$POLLER_PID" 2>/dev/null || true
   capture_services
+  ship_deltas
   # Collect Session Artifacts before teardown removes the exited main container.
   if [ -n "\${AFK_COMPOSE_YML:-}" ]; then
     collect_and_upload_artifacts "\$(docker compose -f /etc/afk/compose.yml ps -aq "\$MAIN_SVC" 2>/dev/null)"
@@ -222,9 +260,9 @@ if [ -n "\${AFK_IMAGE:-}" ]; then
   cat "\$LOG" 2>/dev/null || true
   echo "afk-golden: workload exited \$RUN_EXIT"
 
-  # Authoritative final callback: per-service log map + exit code. The Worker
-  # stores the map (so \`afk logs\` default/--service/--all work) and flips the
-  # Run to STOPPED.
+  # Final callback: exit code + the budgeted per-service log map. The Worker
+  # flips the Run to STOPPED; the map is only the fallback read path — when R2
+  # chunks exist (ship_deltas above) the Worker serves those instead.
   if [ -n "\${AFK_COMPLETE_URL:-}" ]; then
     post_json "\$AFK_COMPLETE_URL" \\
       "\$(printf '{"exitCode":%s,"services":%s}' "\$RUN_EXIT" "\$(build_services_json)")"

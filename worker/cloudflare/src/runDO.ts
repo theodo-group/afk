@@ -64,6 +64,8 @@ export class RunDO extends DurableObject<Env> {
         return this.handleComplete(req)
       case "POST /logs-progress":
         return this.handleLogsProgress(req)
+      case "POST /logs-chunk":
+        return this.handleLogsChunk(req)
       case "POST /session-artifact":
         return this.handleSessionArtifactUpload(req)
       case "GET /session-artifact":
@@ -177,6 +179,9 @@ export class RunDO extends DurableObject<Env> {
       ...(body.workerUrl ? { AFK_COMPLETE_URL: `${body.workerUrl}/runs/${body.runId}/complete` } : {}),
       // Incremental log push while the workload runs (so `afk logs --follow`
       // streams a live Run instead of waiting for the final callback).
+      // AFK_LOGS_URL is the R2-chunk path (live + untruncated); AFK_PROGRESS_URL
+      // is kept so an older golden bootstrap still gets its snapshot push.
+      ...(body.workerUrl ? { AFK_LOGS_URL: `${body.workerUrl}/runs/${body.runId}/logs-chunk` } : {}),
       ...(body.workerUrl ? { AFK_PROGRESS_URL: `${body.workerUrl}/runs/${body.runId}/logs-progress` } : {}),
       // Session Artifact collection: bases to copy out + where to upload the
       // gzipped tar. Only set when the dev declared artifacts and we have a URL.
@@ -270,6 +275,85 @@ export class RunDO extends DurableObject<Env> {
     return `${meta.repoName}/${meta.runId}/session-artifacts.tar.gz`
   }
 
+  /** R2 prefix for this Run's log chunks: one object per shipped delta, keyed
+   *  `<prefix><service>/<zero-padded seq>` so a list concatenates in order. */
+  private logsPrefix(meta: RunMetadata): string {
+    return `${meta.repoName}/${meta.runId}/logs/`
+  }
+
+  /** Log-chunk push from the golden bootstrap (per-Run-token auth, like
+   *  /complete): one service's newly-produced log bytes, base64. Stored as an
+   *  R2 object so `afk logs` reads are live and untruncated — the DO-storage
+   *  snapshot written by /complete and /logs-progress remains only as the
+   *  fallback for Runs from a pre-chunk golden. Never touches Run status. */
+  private async handleLogsChunk(req: Request): Promise<Response> {
+    const denied = await this.checkRunToken(req)
+    if (denied) return denied
+    const state = await this.ctx.storage.get<PersistedState>("state")
+    if (!state) return Response.json({ error: "unknown run" }, { status: 404 })
+    const { service, seq, b64 } = (await req.json()) as {
+      service?: string
+      seq?: number
+      b64?: string
+    }
+    if (!service || typeof seq !== "number" || !b64) return Response.json({ ok: true })
+    const safeService = service.replace(/[^a-zA-Z0-9._-]/g, "_")
+    const key = `${this.logsPrefix(state.meta)}${safeService}/${String(seq).padStart(8, "0")}`
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+    await this.env.ARTIFACTS.put(key, bytes)
+    return Response.json({ ok: true })
+  }
+
+  /** Read this Run's logs from its R2 chunks — one service, or every service
+   *  concatenated behind `==> name <==` headers. Returns null when the Run has
+   *  no chunks at all (a pre-chunk golden), so the caller can fall back to the
+   *  budgeted DO-storage snapshot. */
+  private async readR2Logs(
+    meta: RunMetadata,
+    service: string | null,
+  ): Promise<string | null> {
+    const prefix = this.logsPrefix(meta)
+    const chunksByService = new Map<string, string[]>()
+    let cursor: string | undefined
+    do {
+      const page = await this.env.ARTIFACTS.list(
+        cursor !== undefined ? { prefix, cursor } : { prefix },
+      )
+      for (const obj of page.objects) {
+        const rest = obj.key.slice(prefix.length)
+        const slash = rest.indexOf("/")
+        if (slash < 0) continue
+        const name = rest.slice(0, slash)
+        const keys = chunksByService.get(name) ?? []
+        keys.push(obj.key)
+        chunksByService.set(name, keys)
+      }
+      cursor = page.truncated ? page.cursor : undefined
+    } while (cursor)
+    if (chunksByService.size === 0) return null
+
+    const readService = async (keys: ReadonlyArray<string>): Promise<string> => {
+      let out = ""
+      for (const key of keys) {
+        const obj = await this.env.ARTIFACTS.get(key)
+        if (obj) out += await obj.text()
+      }
+      return out
+    }
+
+    if (service !== null) {
+      const keys = chunksByService.get(service)
+      return keys ? readService(keys) : ""
+    }
+    const names = [...chunksByService.keys()].sort()
+    if (names.length === 1) return readService(chunksByService.get(names[0]!)!)
+    const parts: string[] = []
+    for (const name of names) {
+      parts.push(`==> ${name} <==\n${await readService(chunksByService.get(name)!)}`)
+    }
+    return parts.join("\n")
+  }
+
   /** Session Artifact upload from the golden bootstrap: a base64 gzipped tar of
    *  the collected base dirs. Authenticated by the per-Run token (like
    *  /complete), decoded, and stored in R2. Independent of /complete — it never
@@ -327,12 +411,21 @@ export class RunDO extends DurableObject<Env> {
     return decoded
   }
 
-  /** Returns captured logs (set by handleComplete). `?service=<name>` returns
-   * one service; without it, every service concatenated behind a header. */
+  /** Returns the Run's logs. `?service=<name>` returns one service; without
+   * it, every service concatenated behind a header. Serves the R2 chunks
+   * (live, untruncated) when any exist, else falls back to the budgeted
+   * DO-storage snapshot set by /complete and /logs-progress. */
   private async handleLogs(url: URL): Promise<Response> {
+    const service = url.searchParams.get("service")
+    const state = await this.ctx.storage.get<PersistedState>("state")
+    if (state) {
+      const fromR2 = await this.readR2Logs(state.meta, service)
+      if (fromR2 !== null) {
+        return new Response(fromR2, { headers: { "content-type": "text/plain" } })
+      }
+    }
     const logs =
       (await this.ctx.storage.get<Record<string, string>>("logs")) ?? {}
-    const service = url.searchParams.get("service")
     if (service !== null) {
       return new Response(logs[service] ?? "", {
         headers: { "content-type": "text/plain" },

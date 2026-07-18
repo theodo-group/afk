@@ -71,6 +71,39 @@ describe("planCloudflareRun", () => {
     }
   })
 
+  it("labels a custom {vcpu, memoryMib, diskMb} default tier", () => {
+    const result = planCloudflareRun(
+      baseInput({
+        config: {
+          cloudflare: {
+            defaultInstanceTier: { vcpu: 2, memoryMib: 8192, diskMb: 16000 },
+          },
+        },
+      }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const cf = result.right.prepared.backendPlan as CloudflareBackendPlan
+      expect(cf.instanceTier).toBe("custom(2vcpu/8192MiB/16000MB)")
+    }
+  })
+
+  it("a named-tier override beats a custom default", () => {
+    const result = planCloudflareRun(
+      baseInput({
+        config: {
+          cloudflare: { defaultInstanceTier: { vcpu: 2, memoryMib: 8192 } },
+        },
+        startInput: { backendOverrides: { instanceType: "standard-2" } },
+      }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const cf = result.right.prepared.backendPlan as CloudflareBackendPlan
+      expect(cf.instanceTier).toBe("standard-2")
+    }
+  })
+
   it("rejects an invalid compose graph with a UserError", () => {
     const result = planCloudflareRun(
       baseInput({ composeContent: "this: is: not: valid: yaml: : :" }),
