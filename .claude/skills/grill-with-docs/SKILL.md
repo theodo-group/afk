@@ -1,6 +1,6 @@
 ---
 name: grill-with-docs
-description: A relentless interview to sharpen a plan or design that also writes the project's domain docs — the CONTEXT.md glossary and ADRs — as decisions crystallize. Use when the user wants to grill a plan and capture the language and load-bearing decisions it produces.
+description: A relentless interview to sharpen a plan or design that also writes the project's domain docs — the CONTEXT.md glossary — as decisions crystallize. Use when the user wants to grill a plan and capture the language and load-bearing decisions it produces.
 disable-model-invocation: true
 ---
 
@@ -12,11 +12,11 @@ This is the _active_ discipline. Merely reading `CONTEXT.md` for vocabulary is a
 
 ## Where the docs live
 
-Most repos have a single context: a `CONTEXT.md` at the repo root (the glossary) and ADRs under `docs/adr/`.
+Most repos have a single context: a `CONTEXT.md` at the repo root (the glossary).
 
 If a `CONTEXT-MAP.md` exists at the root, the repo has multiple contexts and the map points to where each glossary lives — read it to find the right `CONTEXT.md` for the topic under discussion, and ask if it's unclear which one applies.
 
-Create files lazily — only when you have something to write. No `CONTEXT.md`? Create it when the first term is resolved. No `docs/adr/`? Create it when the first ADR is needed.
+Create files lazily — only when you have something to write. No `CONTEXT.md`? Create it when the first term is resolved. 
 
 ## During the session
 
@@ -40,12 +40,8 @@ When the user states how something works, check whether the code agrees. If it d
 
 ### Keep CONTEXT.md a glossary, nothing else
 
-`CONTEXT.md` is a glossary of canonical domain terms and **nothing else** — totally devoid of implementation details. Do not treat it as a spec, a scratchpad, or a home for implementation decisions. Those go in code, or in an ADR.
-
-### Offer ADRs sparingly
-
-Only offer to record an ADR when **all three** are true — hard to reverse, surprising without context, and the result of a real trade-off. If any one is missing, skip it. Use the format and the full test in [ADR-FORMAT.md](./ADR-FORMAT.md).
+`CONTEXT.md` is a glossary of canonical domain terms and **nothing else** — totally devoid of implementation details. Do not treat it as a spec, a scratchpad, or a home for implementation decisions. Those go in code.
 
 ## Stopping condition
 
-Same as a plain grilling: don't enact the plan until the user confirms a shared understanding. By then the glossary and any ADRs should already be written — that's the point of doing it inline.
+Same as a plain grilling: don't enact the plan until the user confirms a shared understanding. By then the glossary should already be written — that's the point of doing it inline.
