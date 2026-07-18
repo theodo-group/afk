@@ -262,7 +262,7 @@ export const planAwsRun = (
   // capacity: only On-Demand can be stopped without losing its disk, so
   // `--retain` requires On-Demand. We auto-upgrade a would-be Spot Run that asks
   // to retain, but reject an *explicit* `--spot --retain` as the documented hard
-  // error (CONTEXT.md "Retention", ADR-0001).
+  // error (CONTEXT.md "Retention").
   const explicitSpot =
     input.backendOverrides?.spot === true ||
     input.backendOverrides?.spot === "true"

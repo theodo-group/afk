@@ -200,7 +200,7 @@ export const planGcpRun = (
   // Spot is the default (cheaper); `--on-demand` opts up to STANDARD capacity.
   // Retention couples to capacity: only On-Demand can stop without losing its
   // disk, so `--retain` requires On-Demand — auto-upgrade a would-be Spot Run,
-  // reject explicit `--spot --retain` (CONTEXT.md "Retention", ADR-0001).
+  // reject explicit `--spot --retain` (CONTEXT.md "Retention").
   const explicitSpot =
     input.backendOverrides?.spot === true ||
     input.backendOverrides?.spot === "true"
