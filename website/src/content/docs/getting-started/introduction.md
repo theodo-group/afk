@@ -3,9 +3,20 @@ title: Introduction
 description: What AFK is, the base-layer model behind it, and why every Backend shares one CLI surface.
 ---
 
-**AFK** runs ephemeral containerized tasks in the cloud from a CLI. It was built
-for AI agents that work while you're AFK ("away from keyboard"), but it works for
-any command-runnable workload.
+**AFK** is a CLI to run AI development workloads inside your own cloud
+environment.
+
+We were among the first users of Claude Code, and our developers steadily moved
+from AI on their laptops toward workflows where the agent runs on a server.
+Claude Code ships native cloud environments — but they aren't configurable and
+don't live in your own infrastructure. We wanted our **entire dev environment**
+in the cloud, so the AI can run the tests, the database, the whole stack — and
+we didn't want to manage persistent cloud dev environments (GitHub Codespaces
+and friends) to get there.
+
+The result is AFK: a CLI that runs **ephemeral AI sessions in a configurable
+cloud environment you own**. Built for AI agents that work while you're AFK
+("away from keyboard") — but any command-runnable workload fits.
 
 The core unit is a **Run**: one ephemeral execution of a developer-defined
 command inside a container in the cloud. A Run starts when its entrypoint command
@@ -24,11 +35,26 @@ The CLI surface is **identical across Backends**. `afk run`, `afk attach`,
 - a **Docker container** on your own machine (Local).
 
 Each Run executes on a short-lived **compute primitive** that you own end to
-end. Either way the Run has Docker available — the host daemon on AWS/GCP,
-rootless `dind` on Cloudflare and Local — so `docker compose up` is the same
-surface across providers. That gives an agent first-class access to sidecar
-services (Postgres, Redis, etc.) without the limits of serverless container
-platforms.
+end. You configure it with the native dev tools you already use: a Dockerfile
+describes the environment your command runs in, and an optional compose file
+attaches sidecar services (Postgres, Redis, …).
+
+```mermaid
+architecture-beta
+  service cli(lucide:terminal)[afk run]
+
+  group vm(lucide:cloud)[Compute primitive in your cloud]
+  service docker(logos:docker-icon)[Docker] in vm
+  group stack(lucide:layers)[Compose stack] in vm
+  service agent(lucide:bot)[Your command] in stack
+  service pg(logos:postgresql)[Postgres] in stack
+  service rd(logos:redis)[Redis] in stack
+
+  cli:R -- L:docker
+  docker:R -- L:agent
+  agent:B -- T:pg
+  agent:R -- L:rd
+```
 
 ## What this repository is
 
@@ -41,15 +67,15 @@ This repository is the **base layer**. It ships:
 
 You install the CLI once, then any repo that provides an `afk.Dockerfile` (and,
 optionally, an `afk.compose.yml` and an `afk.config.json`) can launch Runs. See
-the [Consumer contract](/reference/consumer-contract/) for the exact files a repo
+the [Consumer contract](/afk/reference/consumer-contract/) for the exact files a repo
 must provide.
 
 ## Where to go next
 
-- **[How it works](/getting-started/how-it-works/)** — the shape every Backend
+- **[How it works](/afk/getting-started/how-it-works/)** — the shape every Backend
   follows, from `afk run` to self-termination.
-- **[Installation](/getting-started/installation/)** — get the CLI on your PATH
+- **[Installation](/afk/getting-started/installation/)** — get the CLI on your PATH
   and satisfy per-Backend prerequisites.
-- **[Quickstart](/getting-started/quickstart/)** — stand up your first Run.
-- **[Glossary](/concepts/glossary/)** — the canonical vocabulary used throughout
+- **[Quickstart](/afk/getting-started/quickstart/)** — stand up your first Run.
+- **[Glossary](/afk/concepts/glossary/)** — the canonical vocabulary used throughout
   these docs.

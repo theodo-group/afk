@@ -1,14 +1,14 @@
 ---
 title: AFK
-description: Run ephemeral containerized tasks in the cloud from a CLI — one identical surface across AWS, GCP, Cloudflare, and your own Docker daemon.
+description: A CLI to run AI development workloads inside your cloud environment — AWS, GCP, or Cloudflare.
 template: splash
 hero:
-  tagline: Run ephemeral containerized tasks in the cloud from a CLI. Built for AI agents that work while you're AFK — but works for any command-runnable workload.
+  tagline: A CLI to run AI development workloads inside your cloud environment. Launch a coding agent in your own AWS, GCP, or Cloudflare account and come back to the results.
   image:
     file: ../../assets/logo.svg
   actions:
     - text: Get started
-      link: /getting-started/introduction/
+      link: /afk/getting-started/introduction/
       icon: right-arrow
       variant: primary
     - text: View on GitHub
@@ -19,41 +19,39 @@ hero:
 
 import { Card, CardGrid, LinkCard, Code } from "@astrojs/starlight/components"
 
-export const quickstart = `# In any repo with an afk.Dockerfile — no cloud account, just Docker:
-afk init --provider local                                  # configure (writes backend=local)
-afk golden build                                           # one-time: build the local runtime image
-afk run "claude -p 'fix the failing test and open a PR'"   # launch an agent in a container
+export const quickstart = `# In any repo with an afk.Dockerfile:
+afk init --provider aws                                    # point AFK at your cloud
+afk golden build                                           # one-time: build the boot image
+afk secrets put github-token <PAT>                         # so the Run can clone your repo
+echo "GITHUB_TOKEN=secret:github-token" >> .afk.env
+afk run "claude -p 'fix the failing test and open a PR'"   # launch an agent in your cloud
 afk ls                                                     # see it running
 afk logs <run-id>                                          # tail its output`
 
 <Code code={quickstart} lang="sh" title="Your first Run" />
 
-That Run executes on your own Docker daemon. Point the same project at a cloud
-Backend and the **identical** commands launch the work on ephemeral cloud
-compute instead.
+That Run boots an ephemeral instance in your own AWS account, does the work,
+and terminates. The same commands work unchanged on GCP and Cloudflare.
 
 ## Why AFK
 
 <CardGrid stagger>
-  <Card title="One CLI, four Backends" icon="laptop">
-    `afk run`, `afk attach`, `afk ls`, `afk kill` mean the same thing on AWS
-    EC2, GCP Compute Engine, Cloudflare Containers, and your local Docker
-    daemon. Switch providers without changing a command.
+  <Card title="One CLI to rule your clouds" icon="laptop">
+    The same `afk run`, `afk attach`, `afk ls`, `afk kill` on AWS, GCP, and
+    Cloudflare. Switch providers without changing a command.
   </Card>
   <Card title="Ephemeral by design" icon="rocket">
-    Each Run is one short-lived compute primitive that boots, runs your
-    workload, and self-terminates on exit. No always-on infrastructure, no
-    resident CLI — a dead laptop never affects a live Run.
+    Each Run boots, does its work, and self-terminates. No always-on
+    infrastructure to maintain or pay for.
   </Card>
-  <Card title="Real Docker, real sidecars" icon="puzzle">
-    Every Run has Docker available, so `docker compose up` is the same surface
-    everywhere. Give an agent first-class Postgres, Redis, and friends without
-    serverless container limits.
+  <Card title="Your dev environment, ported" icon="puzzle">
+    A Dockerfile and compose file describe the Run — so your entire dev and
+    test environment (toolchain, Postgres, Redis, …) travels to the cloud and
+    is available to the agent.
   </Card>
-  <Card title="What runs is what's on origin" icon="approve-check">
-    A Run refuses to launch on a dirty tree or an unpushed ref. Images cache
-    the toolchain, source is cloned fresh at Run start — fast, reproducible,
-    no surprise branches.
+  <Card title="Stay in the loop" icon="approve-check">
+    Tail an agent's logs live, attach a shell into its container to steer it,
+    or kill it — from wherever you are.
   </Card>
 </CardGrid>
 
@@ -63,21 +61,21 @@ compute instead.
   <LinkCard
     title="Introduction"
     description="What AFK is, the model behind it, and how a Run flows end to end."
-    href="/getting-started/introduction/"
+    href="/afk/getting-started/introduction/"
   />
   <LinkCard
     title="Installation"
     description="Clone, bun link, and the per-Backend prerequisites."
-    href="/getting-started/installation/"
+    href="/afk/getting-started/installation/"
   />
   <LinkCard
     title="Quickstart"
-    description="Stand up your first Run on Local, AWS, GCP, or Cloudflare."
-    href="/getting-started/quickstart/"
+    description="Stand up your first Run on AWS, GCP, or Cloudflare."
+    href="/afk/getting-started/quickstart/"
   />
   <LinkCard
     title="Glossary"
     description="The canonical vocabulary — Run, Backend, Golden Image, Ref, and more."
-    href="/concepts/glossary/"
+    href="/afk/concepts/glossary/"
   />
 </CardGrid>
