@@ -40,6 +40,7 @@ app.use("/*", async (c, next) => {
     c.req.method === "POST" &&
     (c.req.path.endsWith("/complete") ||
       c.req.path.endsWith("/logs-progress") ||
+      c.req.path.endsWith("/logs-chunk") ||
       c.req.path.endsWith("/session-artifact"))
   ) {
     return next()
@@ -74,6 +75,22 @@ app.post("/runs/:id/logs-progress", async (c) => {
   const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
   return stub.fetch(
     new Request("https://run/logs-progress", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-AFK-Run-Token": c.req.header("X-AFK-Run-Token") ?? "",
+      },
+      body: await c.req.text(),
+    }),
+  )
+})
+
+// Log-chunk push from the running container: one service's newly-produced log
+// bytes, stored in R2 by the RunDO. Same per-Run-token auth as /complete.
+app.post("/runs/:id/logs-chunk", async (c) => {
+  const stub = c.env.RUN_DO.get(c.env.RUN_DO.idFromName(c.req.param("id")))
+  return stub.fetch(
+    new Request("https://run/logs-chunk", {
       method: "POST",
       headers: {
         "content-type": "application/json",

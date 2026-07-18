@@ -29,6 +29,10 @@ mode = "{{placement}}"
 class_name = "RunContainer"
 image = "{{golden_image_uri}}"
 max_instances = 200
+# Synced from afk.config.json's cloudflare.defaultInstanceTier by `afk provision`
+# (before deploy). A named tier ("standard-1") or a custom size — the config
+# form { "vcpu": 2, "memoryMib": 8192, "diskMb": 16000 } renders here as
+# instance_type = { vcpu = 2, memory_mib = 8192, disk_mb = 16000 }.
 instance_type = "{{default_instance_tier}}"
 # No sleepAfter — we control termination via the RunDO alarm + explicit stop.
 # `afk attach` shells out to `wrangler containers ssh <instance-id>`, so it needs

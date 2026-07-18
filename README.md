@@ -210,7 +210,17 @@ afk run <command…>                             # launch a Run
   --on-demand                                  #   AWS/GCP: on-demand capacity (pricier, not preemptible; Spot by default)
   --instance-tier <tier>                       #   CF only: overrides project default CF Containers tier
   --timeout <hours>                            #   overrides default (4h)
+  --retain                                     #   AWS/GCP: keep the instance (stopped) after the Run ends so
+                                               #     `afk attach` can resume it for post-mortem inspection; implies
+                                               #     --on-demand (Spot can't retain), reclaimed after the retention period
   --follow / -f                                #   stream logs until the Run ends (default: launch and exit)
+afk session                                    # launch an Interactive Run: a box with no command that you attach into
+  --ref <branch|sha|tag>                       #   same source-clone as `afk run`
+  --instance-type <type>                       #   AWS/GCP machine size
+  --spot                                       #   use Spot (On-Demand by default — a reclaim would kill your session)
+  --timeout <hours>                            #   wall-clock cap before reclaim (default 24h)
+  --retain                                     #   keep the box (stopped) past its timeout so you can `afk attach` later
+  --detach / -d                                #   launch without attaching (default: auto-attach once RUNNING)
 afk ls [--all] [--status <s>]                  # list Runs (yours by default; --all = team-wide if permitted)
 afk attach <run-id> [--service <name>] [--host]
                                                # interactive shell. Default: docker exec into main service.
@@ -354,7 +364,7 @@ Sidecars share the Run's Docker daemon and network. `/workspace` is mounted into
 - **Local-specific.** The `local:` block needs only `cachedImages` (the sidecar images baked into the local Golden Image). Everything else the Local Backend uses comes from the Backend-neutral top level (`gitUrl`, `mainService`, `defaultTimeoutHours`).
 
 - **AWS-specific.** `aws.region` selects the region for every AWS call the CLI makes; defaults to `us-east-1` if omitted. Resource and Golden-Image settings are optional. Most runtime values the CLI needs (VPC ID, subnet IDs, role ARNs) are derived from tags + IAM lookups against the configured region — not read from this file.
-- **Cloudflare-specific.** `cloudflare.accountId` and `cloudflare.workerUrl` are required for any CF command after `afk init`. `placement` (default `smart`) maps to Cloudflare Containers placement hints. `defaultInstanceTier` (default `standard-1`) is the CF Containers tier per Run. `cachedImages` is the list passed to `afk golden build` for inclusion in the Golden Container image.
+- **Cloudflare-specific.** `cloudflare.accountId` and `cloudflare.workerUrl` are required for any CF command after `afk init`. `placement` (default `smart`) maps to Cloudflare Containers placement hints. `defaultInstanceTier` (default `standard-1`) is the CF Containers instance size — a named tier, or a custom `{ "vcpu": 2, "memoryMib": 8192, "diskMb": 16000 }` spec (CF caps: 1–4 vCPU, ≤12 GiB memory, ≤20 GB disk). Sizing is deploy-time on CF: `afk provision` writes it into the launcher Worker's `wrangler.toml`, so changing it requires a re-provision. `cachedImages` is the list passed to `afk golden build` for inclusion in the Golden Container image.
 
 ### 4. `.afk.env` (gitignored)
 

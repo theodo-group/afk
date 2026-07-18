@@ -1,5 +1,6 @@
 import { Either } from "effect"
 import type { AfkConfig, EnvEntry } from "../../schema/Config.ts"
+import { cloudflareInstanceTierLabel } from "../../schema/Config.ts"
 import type { Run, RunStatus } from "../../schema/Run.ts"
 import type {
   PreparedRun,
@@ -124,9 +125,15 @@ export const planCloudflareRun = (
     typeof input.backendOverrides?.instanceType === "string"
       ? input.backendOverrides.instanceType
       : undefined
+  // A custom {vcpu, memoryMib, diskMb} default collapses to its label here:
+  // the actual sizing is deploy-time (wrangler.toml, synced by `afk provision`),
+  // so the Run only records what it launched under.
+  const configuredTier = config.cloudflare?.defaultInstanceTier
   const instanceTier =
     tierOverride ??
-    config.cloudflare?.defaultInstanceTier ??
+    (configuredTier !== undefined
+      ? cloudflareInstanceTierLabel(configuredTier)
+      : undefined) ??
     config.defaultInstanceType ??
     DEFAULT_INSTANCE_TIER
 

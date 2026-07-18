@@ -38,6 +38,13 @@ export interface Ec2Instance {
   readonly tags: ReadonlyArray<Tag>
   readonly spotInstanceRequestId?: string
   readonly stateReason?: string
+  /**
+   * Free-form transition note from EC2, e.g.
+   * `"User initiated (2026-06-28 14:00:00 GMT)"` on a stopped instance. The
+   * parenthesised timestamp is the only signal DescribeInstances gives for when
+   * an instance stopped — used to date a retained Run's reclamation window.
+   */
+  readonly stateTransitionReason?: string
 }
 
 export interface Ec2Image {
@@ -366,6 +373,7 @@ export const Ec2Live = Layer.effect(
               PrivateIpAddress?: string
               State?: { Name?: string }
               StateReason?: { Message?: string }
+              StateTransitionReason?: string
               SpotInstanceRequestId?: string
               Tags?: ReadonlyArray<{ Key?: string; Value?: string }>
             }>
@@ -385,6 +393,7 @@ export const Ec2Live = Layer.effect(
                 tags: parseTags(i.Tags),
                 spotInstanceRequestId: i.SpotInstanceRequestId,
                 stateReason: i.StateReason?.Message,
+                stateTransitionReason: i.StateTransitionReason,
               })),
             ),
           ),

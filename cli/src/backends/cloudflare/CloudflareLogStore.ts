@@ -7,10 +7,11 @@ import { CfWorker } from "./CfWorker.ts"
  *
  * Both read paths share one source: the launcher Worker's
  * `GET /runs/:id/logs`. The CF Backend has no live log-driver — instead the
- * container's golden bootstrap pushes a growing per-service snapshot to
- * `POST /runs/:id/logs-progress` every few seconds while the workload runs, and
- * ships the authoritative copy to `/runs/:id/complete` on exit. The Worker
- * stores the latest snapshot (keyed `<service>`) and serves it back here. So:
+ * container's golden bootstrap pushes per-service log chunks to
+ * `POST /runs/:id/logs-chunk` every few seconds while the workload runs; the
+ * Worker stores them in R2 and serves the ordered concatenation back here,
+ * live and untruncated. (Runs from a pre-chunk golden fall back Worker-side to
+ * the budgeted snapshot shipped with `/complete`.) So:
  *  - historical (non-follow): one fetch, print, done.
  *  - `--follow`: poll the same endpoint and print incrementally as the stored
  *    snapshot grows (live, not only at completion).

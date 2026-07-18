@@ -19,7 +19,7 @@ See the [README quickstart](../../README.md#quickstart-on-cloudflare) for the se
 
 **Compose rules the CLI auto-injects.** Every service in your `afk.compose.yml` gets `network_mode: host` plus `extra_hosts:` entries cross-mapping every sibling service name to `127.0.0.1`. Inter-service DNS keeps working (`postgres:5432` → `127.0.0.1:5432`) but two sidecars cannot bind the same port — a hard error at submit time.
 
-**Logs.** Workers Logs only — **3 days retention on Workers Free, 7 days on Workers Paid**. No AFK-managed R2 mirror; for >7d use Cloudflare Logpush. `afk logs <run-id>` reads the per-Run logs the container ships to the Worker on exit (`GET /runs/:id/logs`); `--follow` polls until they appear.
+**Logs.** While the workload runs, the golden bootstrap ships each service's new log bytes to the Worker every few seconds (`POST /runs/:id/logs-chunk`, per-Run-token auth); the RunDO stores them in R2 keyed `<repo>/<runId>/logs/<service>/<seq>`. `afk logs <run-id>` reads the ordered concatenation (`GET /runs/:id/logs`) — live under `--follow`, untruncated, and available after the Run ends for as long as the objects live in R2. A budgeted per-service snapshot still rides the `/complete` callback as the fallback read path for Runs launched from a pre-chunk Golden Image. Workers Logs additionally captures the Container's raw stdout/stderr (3 days retention on Free, 7 on Paid) for platform-side debugging.
 
 **Maturity caveats.** Two behaviours to know before a first deploy: the per-Run _wrapper_ image cache check is stubbed (the wrapper image always rebuilds), and WSS `afk attach` is written but not yet exercised against a live deployment (it may need SIGWINCH / header tweaks). Current status of both lives in [`IMPROVEMENTS.md`](../../IMPROVEMENTS.md), not here.
 
@@ -46,7 +46,7 @@ Run `afk provision` (or `wrangler deploy` from `worker/afk/`) once per account.
 
 - **D1** (`afk-launcher-history`) — historical rows for `afk history`. Schema in `worker/cloudflare/migrations/0001_runs.sql`.
 - **KV** (`DEVELOPERS_KV`) — Access service-token client-ids → display names. Written by `afk team add`.
-- **R2** (`afk-launcher-session-artifacts`, binding `ARTIFACTS`) — per-Run Session Artifacts, created by `afk provision` before deploy.
+- **R2** (`afk-launcher-session-artifacts`, binding `ARTIFACTS`) — per-Run Session Artifacts plus the per-Run log chunks (`<repo>/<runId>/logs/…`), created by `afk provision` before deploy.
 
 ## Session Artifacts
 

@@ -23,6 +23,14 @@ export interface StartInput {
   readonly command: ReadonlyArray<string>
   readonly ref?: string
   readonly timeoutHours?: number
+  /**
+   * Retain the compute primitive after the Run ends (stop instead of reclaim)
+   * so `afk attach` can resume it for post-mortem inspection. Cloud-only and
+   * On-Demand-only: a Spot Run cannot be retained (see CONTEXT.md "Retention").
+   * The active backend enforces the capacity coupling and rejects it where
+   * retention is impossible (Cloudflare).
+   */
+  readonly retain?: boolean
   /** Generic per-invocation overrides keyed by backend, validated by the active backend. */
   readonly backendOverrides?: Record<string, string | boolean | number>
   /**
