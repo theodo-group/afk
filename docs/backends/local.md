@@ -2,7 +2,7 @@
 
 The Local Backend runs each Run on the developer's **own Docker daemon** instead of the cloud — a faithful rehearsal of the cloud path (same image build, same entrypoint, same compose file, same secret resolution, same lifecycle). It mirrors the **Cloudflare** shape with the Cloudflare Container instance swapped for a Docker container on your machine: each Run is one outer container running **rootless `dockerd`**, booted from a local Golden Image, hosting the `docker compose` stack inside it. It is **fully self-contained** — it makes no cloud API calls and needs no cloud credentials.
 
-See the [README quickstart](../../README.md#quickstart-on-local) for the setup commands.
+See the [quickstart](https://theodo-group.github.io/afk/getting-started/quickstart/#on-local) for the setup commands.
 
 ## Selection — two channels
 

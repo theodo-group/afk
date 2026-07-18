@@ -2,7 +2,7 @@
 
 Each Run is one EC2 instance booted from the project's Golden AMI, configured via `user_data`, and self-terminated on exit. Full Compose Contract supported (host Docker daemon, real bridge networking, privileged-capable).
 
-See the [README quickstart](../../README.md#quickstart-on-aws) for the setup commands. This document covers what the backend provisions and how its attach / lifecycle / cost specifics work.
+See the [quickstart](https://theodo-group.github.io/afk/getting-started/quickstart/#on-aws) for the setup commands. This document covers what the backend provisions and how its attach / lifecycle / cost specifics work.
 
 ## End-to-end flow
 

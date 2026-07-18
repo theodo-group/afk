@@ -2,7 +2,7 @@
 
 Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. The Container runs rootless `dockerd` to host the workload. The Compose Contract is honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
 
-See the [README quickstart](../../README.md#quickstart-on-cloudflare) for the setup commands. This document covers the topology, limitations, provisioning, and attach / lifecycle / cost specifics. See also [`worker/cloudflare/README.md`](../../worker/cloudflare/README.md) for the launcher Worker's internals.
+See the [quickstart](https://theodo-group.github.io/afk/getting-started/quickstart/#on-cloudflare) for the setup commands. This document covers the topology, limitations, provisioning, and attach / lifecycle / cost specifics. See also [`worker/cloudflare/README.md`](../../worker/cloudflare/README.md) for the launcher Worker's internals.
 
 ## Topology and limitations
 
