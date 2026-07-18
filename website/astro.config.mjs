@@ -1,13 +1,23 @@
 // @ts-check
 import starlight from "@astrojs/starlight"
 import { defineConfig } from "astro/config"
+import mermaid from "astro-mermaid"
 
 // https://astro.build/config
 export default defineConfig({
-  // Update `site` (and set `base` if hosting under a sub-path, e.g. GitHub
-  // Pages at /afk) once the production URL is known.
+  // GitHub Pages project site: served at https://theodo-group.github.io/afk/.
+  // Internal links in content must carry the /afk prefix; dev mode serves
+  // under /afk/ too, so links behave identically locally and deployed.
   site: "https://theodo-group.github.io",
+  base: "/afk",
   integrations: [
+    mermaid({
+      autoTheme: true,
+      iconPacks: [
+        { name: "logos", url: "https://unpkg.com/@iconify-json/logos@1/icons.json" },
+        { name: "lucide", url: "https://unpkg.com/@iconify-json/lucide@1/icons.json" },
+      ],
+    }),
     starlight({
       title: "AFK",
       description:

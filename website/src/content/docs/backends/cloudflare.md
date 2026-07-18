@@ -6,26 +6,40 @@ description: "One Container instance per Run via a customer-deployed launcher Wo
 
 Each Run is one Cloudflare Container instance bound to a Durable Object inside a customer-deployed launcher Worker. The Container runs rootless `dockerd` to host the workload. The Compose Contract is honored under additional per-backend rules (rootless-only images, `network_mode: host`, no privileged).
 
-See the [Quickstart](/getting-started/quickstart/#on-cloudflare) for the setup commands. This document covers the topology, limitations, provisioning, and attach / lifecycle / cost specifics. See also [`worker/cloudflare/README.md`](https://github.com/theodo-group/afk/blob/main/worker/cloudflare/README.md) for the launcher Worker's internals.
+See the [Quickstart](/afk/getting-started/quickstart/#on-cloudflare) for the setup commands. This document covers the topology, limitations, provisioning, and attach / lifecycle / cost specifics. See also [`worker/cloudflare/README.md`](https://github.com/theodo-group/afk/blob/main/worker/cloudflare/README.md) for the launcher Worker's internals.
 
 ## Topology and limitations
 
-**Topology you're paying for.** Each Run gets its own Cloudflare Container instance (~a tiny VM you don't see), bound to a Durable Object inside the launcher Worker. The Container boots from the Golden Container image (rootless dind + pre-pulled sidecars), the dind spins up, and `docker compose up` runs the dev's `afk.compose.yml` inside it. On exit the Container stops; the Worker's DO records the row in D1 and unregisters from the in-memory index.
+### The topology you're paying for
 
-**Two auth boundaries.**
+Each Run gets its own Cloudflare Container instance (~a tiny VM you don't see), bound to a Durable Object inside the launcher Worker. The Container boots from the Golden Container image (rootless dind + pre-pulled sidecars), the dind spins up, and `docker compose up` runs the dev's `afk.compose.yml` inside it. On exit the Container stops; the Worker's DO records the row in D1 and unregisters from the in-memory index.
+
+**No retention.** Cloudflare Container instances are ephemeral: a restarted instance is a clean slate, not preserved state, so [Retention](/afk/concepts/glossary/#retention) (`--retain`) is impossible here. `afk attach` only enters a *live* Run; declare a Session Artifact to capture post-Run state.
+
+### Two auth boundaries
 
 - **CLI → Worker** uses `Cf-Access-Client-Id` + `Cf-Access-Client-Secret` headers (CF Access service tokens). For single-dev mode the CLI also emits `Authorization: Bearer <AFK_SHARED_TOKEN>` when `AFK_SHARED_TOKEN` is set and no Access service token is configured (precedence: Access token → shared bearer → none). Production deploys should use Access service tokens.
 - **Worker → CF API** uses the `CF_API_TOKEN` Worker secret (set during `afk provision`). Admin-scoped; never leaves the Worker.
 
-**What `afk team add` does.** Calls the Worker's `/team` route, which uses `CF_API_TOKEN` to create a real CF Access service token and stores the `client_id → display_name` mapping in `DEVELOPERS_KV`. The `client_secret` is shown **once**; export it as `AFK_CF_CLIENT_SECRET` + `AFK_CF_CLIENT_ID` for subsequent CLI calls. Losing it means re-running `afk team add` under a new name.
+### What `afk team add` does
 
-**Cloudflare Access application setup.** For Access service tokens to actually gate the Worker, wrap the deployed Worker URL in a Cloudflare Access application (Zero Trust dashboard), allow service tokens, and add the ones from `afk team add` to its policy. Without this the Worker is publicly reachable and `authenticate()` falls back to the shared-bearer path (or rejects every request if `AFK_SHARED_TOKEN` isn't set).
+Calls the Worker's `/team` route, which uses `CF_API_TOKEN` to create a real CF Access service token and stores the `client_id → display_name` mapping in `DEVELOPERS_KV`. The `client_secret` is shown **once**; export it as `AFK_CF_CLIENT_SECRET` + `AFK_CF_CLIENT_ID` for subsequent CLI calls. Losing it means re-running `afk team add` under a new name.
 
-**Compose rules the CLI auto-injects.** Every service in your `afk.compose.yml` gets `network_mode: host` plus `extra_hosts:` entries cross-mapping every sibling service name to `127.0.0.1`. Inter-service DNS keeps working (`postgres:5432` → `127.0.0.1:5432`) but two sidecars cannot bind the same port — a hard error at submit time.
+### Cloudflare Access application setup
 
-**Logs.** Workers Logs only — **3 days retention on Workers Free, 7 days on Workers Paid**. No AFK-managed R2 mirror; for >7d use Cloudflare Logpush. `afk logs <run-id>` reads the per-Run logs the container ships to the Worker on exit (`GET /runs/:id/logs`); `--follow` polls until they appear.
+For Access service tokens to actually gate the Worker, wrap the deployed Worker URL in a Cloudflare Access application (Zero Trust dashboard), allow service tokens, and add the ones from `afk team add` to its policy. Without this the Worker is publicly reachable and `authenticate()` falls back to the shared-bearer path (or rejects every request if `AFK_SHARED_TOKEN` isn't set).
 
-**Maturity caveats.** Two behaviours to know before a first deploy: the per-Run _wrapper_ image cache check is stubbed (the wrapper image always rebuilds), and WSS `afk attach` is written but not yet exercised against a live deployment (it may need SIGWINCH / header tweaks). Current status of both lives in [`IMPROVEMENTS.md`](https://github.com/theodo-group/afk/blob/main/IMPROVEMENTS.md), not here.
+### Compose rules the CLI auto-injects
+
+Every service in your `afk.compose.yml` gets `network_mode: host` plus `extra_hosts:` entries cross-mapping every sibling service name to `127.0.0.1`. Inter-service DNS keeps working (`postgres:5432` → `127.0.0.1:5432`) but two sidecars cannot bind the same port — a hard error at submit time.
+
+### Logs
+
+Workers Logs only — **3 days retention on Workers Free, 7 days on Workers Paid**. No AFK-managed R2 mirror; for >7d use Cloudflare Logpush. `afk logs <run-id>` reads the per-Run logs the container ships to the Worker on exit (`GET /runs/:id/logs`); `--follow` polls until they appear.
+
+### Maturity caveats
+
+Two behaviours to know before a first deploy: the per-Run _wrapper_ image cache check is stubbed (the wrapper image always rebuilds), and WSS `afk attach` is written but not yet exercised against a live deployment (it may need SIGWINCH / header tweaks).
 
 ## What `wrangler deploy` provisions
 
@@ -54,7 +68,13 @@ Run `afk provision` (or `wrangler deploy` from `worker/afk/`) once per account.
 
 ## Session Artifacts
 
-If `sessionArtifacts` is declared in `afk.config.json`, the golden bootstrap `docker cp`s the declared base dirs out of the main service at graceful exit, drops files over the ~25 MB cap (skip, never truncate), tars + gzips the staged tree, and POSTs it base64-encoded to `POST /runs/:id/session-artifact` (per-Run-token auth, like the log callbacks — the Container has no CF Access creds). The RunDO stores the tarball in R2 keyed `<repo>/<runId>/session-artifacts.tar.gz`. `afk session-artifact <run-id>` GETs `/runs/:id/session-artifact` (CF-Access-authed, Owner-scoped CLI-side), base64-decodes and extracts the tarball, applies the precise globs + cap, and writes the survivors to `--out`. Best-effort: a killed or hard-timed-out Run never reaches the upload. R2's lifecycle window is the dev's to set; teardown deletes the bucket if it is empty (otherwise `afk destroy` reports it for manual removal).
+Collection mechanics are Backend-neutral — see [Session Artifacts](/afk/reference/configuration/#session-artifacts). The Cloudflare-specific transport:
+
+1. At graceful exit the golden bootstrap tars + gzips the staged artifact tree and POSTs it base64-encoded to `POST /runs/:id/session-artifact` (per-Run-token auth, like the log callbacks — the Container has no CF Access creds).
+2. The RunDO stores the tarball in R2 keyed `<repo>/<runId>/session-artifacts.tar.gz`.
+3. `afk session-artifact <run-id>` GETs `/runs/:id/session-artifact` (CF-Access-authed, Owner-scoped CLI-side) and extracts it locally.
+
+R2's lifecycle window is the dev's to set; teardown deletes the bucket if it is empty (otherwise `afk destroy` reports it for manual removal).
 
 ### Not created by `wrangler deploy`
 

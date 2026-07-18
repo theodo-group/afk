@@ -12,7 +12,7 @@ other Dockerfile the project uses for its own deployment.
 
 - Installs the toolchain and dependencies needed by the Run's command.
 - **Does not `COPY` source code.** Source is cloned at Run start — see [How it
-  works](/getting-started/how-it-works/#source-code-handling).
+  works](/afk/getting-started/how-it-works/#source-code-handling).
 - **Does not declare `ENTRYPOINT`.** The CLI injects one at build time.
 - Leaves `/workspace` writable. The entrypoint clones source there.
 
@@ -84,9 +84,9 @@ services need source access.
 ## 3. `afk.config.json` (required)
 
 Declares the Backend, git URL, and per-Backend settings. See
-[Configuration](/reference/configuration/) for the full schema.
+[Configuration](/afk/reference/configuration/) for the full schema.
 
 ## 4. `.afk.env` (gitignored)
 
 Environment variables for Runs — plain strings or `secret:<name>` references. See
-[Configuration](/reference/configuration/#afkenv-gitignored).
+[Configuration](/afk/reference/configuration/#afkenv-gitignored).
