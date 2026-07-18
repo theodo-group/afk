@@ -80,11 +80,12 @@ const local = Options.boolean("local").pipe(
 // Layer composition (bottom to top):
 //
 //   Subprocess (infra)
-//     └── adapter layer (Git, Docker, AWS SDK clients, Terraform, …)
+//     └── adapter layer (Git, Docker, Terraform, AWS SDK clients, gcloud, …)
 //           └── ConfigService
-//                 └── Backend layer (AwsBackendLive picks an Aws*Live for every
-//                      abstract service tag — Compute, ImageRegistry,
-//                      SecretStore, LogStore, RunHistory, GoldenImageStore)
+//                 └── Backend layer (<Backend>BackendLive — aws, cloudflare,
+//                      gcp, or local, picked by pickBackendName() — provides
+//                      every abstract service tag: Compute, ImageRegistry,
+//                      SecretStore, LogStore, RunHistory, GoldenImageStore, …)
 //                      └── BuildService (cross-cutting, uses ImageRegistry)
 //                            └── orchestrating services (RunService,
 //                                 HistoryService) + Bootstrap
@@ -92,8 +93,8 @@ const local = Options.boolean("local").pipe(
 // Developer-facing secret CRUD goes straight to the SecretStore tag the Backend
 // provides — there is no SecretService facade.
 //
-// To add another Backend (e.g. Cloudflare), replace `AwsBackendLive` with
-// `CloudflareBackendLive` (or dispatch at runtime based on `config.backend`).
+// To add another Backend, write its `<New>BackendLive` aggregate and add one
+// branch to the `backendLayer` dispatch below.
 
 const infraLayer = SubprocessLive
 
