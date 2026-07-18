@@ -80,7 +80,8 @@ export const DEFAULT_SESSION_TIMEOUT_HOURS = 24
 export const SESSION_KEEPALIVE_COMMAND = ["tail", "-f", "/dev/null"] as const
 export const DEFAULT_MAIN_SERVICE = "agent"
 /** Days a finished Run's compute primitive is retained before reclamation.
- * Honoured by the Local Backend only; cloud Backends self-reclaim on exit. */
+ * Always honoured by the Local Backend; on AWS/GCP it applies to Runs launched
+ * with `--retain` (the sweeper reaps retained instances past this window). */
 export const DEFAULT_RETENTION_DAYS = 7
 export const DEFAULT_REGION = "us-east-1"
 
