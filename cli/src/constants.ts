@@ -192,7 +192,9 @@ export const GCP_ARTIFACTS_BUCKET_PREFIX = "afk-artifacts"
 export const GCP_STATE_BUCKET_PREFIX = "afk-tf-state"
 
 // The afk-developer custom role and the per-Run instance service account.
-export const GCP_DEVELOPER_ROLE = "afkDeveloper"
+// The role id must track terraform's `${replace(project_name, "-", "_")}_developer`
+// (project_name defaults to "afk"), same assumption GCP_VM_SERVICE_ACCOUNT makes.
+export const GCP_DEVELOPER_ROLE = "afk_developer"
 export const GCP_VM_SERVICE_ACCOUNT = "afk-vm"
 
 // IAP brokers the SSH tunnel; this is the env var the startup-script exports so
