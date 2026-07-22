@@ -1,12 +1,15 @@
-import { Args, Command, Options } from "@effect/cli"
+import { Args, Command } from "@effect/cli"
 import { Effect } from "effect"
 import { Team } from "../../services/backend/Team.ts"
 import { Output } from "../../infra/Output.ts"
 
 const name = Args.text({ name: "name" })
-const principal = Options.text("principal").pipe(
-  Options.optional,
-  Options.withDescription(
+// A positional (not an --option): @effect/cli rejects any option that follows a
+// positional arg, so a flag here would force the unnatural `add --principal X name`.
+// As a trailing positional, `add <name> [principal]` parses in the order users type.
+const principal = Args.text({ name: "principal" }).pipe(
+  Args.optional,
+  Args.withDescription(
     "ARN of an existing principal to trust on the afk-developer role (default: create a new IAM user)",
   ),
 )
