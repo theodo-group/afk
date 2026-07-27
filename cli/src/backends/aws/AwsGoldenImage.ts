@@ -10,12 +10,12 @@ import {
 } from "../../services/backend/GoldenImage.ts"
 import { AwsError } from "../../infra/Errors.ts"
 import {
-  AFK_VM_INSTANCE_PROFILE,
   DEFAULT_REGION,
   TAG_GOLDEN,
   TAG_GOLDEN_BUILT_AT,
   TAG_GOLDEN_CACHED_IMAGES,
   TAG_GOLDEN_VERSION,
+  vmInstanceProfileName,
 } from "../../constants.ts"
 
 const tagToGolden = (img: {
@@ -93,6 +93,10 @@ export const AwsGoldenImageLive = Layer.effect(
       const { subnetIds, securityGroupId } = yield* resolveAfkNetworkPlacement(
         ec2,
         region,
+        {
+          subnetIds: config.aws?.subnetIds,
+          securityGroupId: config.aws?.securityGroupId,
+        },
       )
       const baseAmi = yield* ec2.findLatestAmazonLinuxAmi(region)
 
@@ -102,7 +106,9 @@ export const AwsGoldenImageLive = Layer.effect(
         instanceType: "t3.medium",
         subnetId: subnetIds[0]!,
         securityGroupIds: [securityGroupId],
-        iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
+        iamInstanceProfileName: vmInstanceProfileName(
+          config.aws?.resourcePrefix,
+        ),
         userData: plan.builderUserData,
         spot: false,
         // The builder VM is not a Run; it is terminated once the AMI is baked.

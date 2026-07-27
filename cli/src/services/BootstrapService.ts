@@ -27,13 +27,13 @@ import { Subprocess } from "../infra/Subprocess.ts"
 import {
   AFK_STATE_BUCKET_PREFIX,
   CONFIG_FILE,
-  ECR_REPO_PREFIX,
+  ecrRepoPrefix,
   ENV_FILE,
   GCP_DEFAULT_ALLOWED_MACHINE_TYPES,
   GCP_DEFAULT_MACHINE_TYPE,
   GCP_STATE_BUCKET_PREFIX,
   SESSION_ARTIFACT_DIR,
-  SSM_SECRET_PREFIX,
+  ssmSecretPrefix,
   TAG_GOLDEN,
 } from "../constants.ts"
 
@@ -93,6 +93,8 @@ export interface DestroyInput {
   readonly sourceRepoName: string
   /** When false (default), report what would be deleted without touching anything. */
   readonly execute: boolean
+  /** Overrides the literal `afk` resource-name prefix. Absent ⇒ "afk". */
+  readonly resourcePrefix?: string
 }
 
 export interface DestroyResult {
@@ -475,7 +477,9 @@ export const BootstrapServiceLive = Layer.effect(
       input: DestroyInput,
     ): Effect.Effect<DestroyResult, AwsError | UserError | SubprocessError> =>
       Effect.gen(function* () {
-        const { region, projectDir, sourceRepoName, execute } = input
+        const { region, projectDir, sourceRepoName, execute, resourcePrefix } =
+          input
+        const secretPrefix = ssmSecretPrefix(resourcePrefix)
         const identity = yield* sts.callerIdentity
         const stateBucket = `${AFK_STATE_BUCKET_PREFIX}-${identity.Account}-${region}`
         const terraformDir = resolve(projectDir, "terraform", "afk")
@@ -483,7 +487,7 @@ export const BootstrapServiceLive = Layer.effect(
           terraformDir,
           configRegion: region,
         })
-        const ecrRepo = `${ECR_REPO_PREFIX}/${sourceRepoName}`
+        const ecrRepo = `${ecrRepoPrefix(resourcePrefix)}/${sourceRepoName}`
 
         const goldenImages = yield* ec2
           .describeImages({
@@ -496,7 +500,7 @@ export const BootstrapServiceLive = Layer.effect(
         const snapshotIds = goldenImages.flatMap((i) => i.snapshotIds)
 
         const secrets = yield* ssm
-          .listByPrefix(region, SSM_SECRET_PREFIX)
+          .listByPrefix(region, secretPrefix)
           .pipe(Effect.catchAll(() => Effect.succeed([])))
 
         const bucketExists = yield* s3
@@ -521,8 +525,8 @@ export const BootstrapServiceLive = Layer.effect(
         )
         actions.push(
           secrets.length > 0
-            ? `delete ${secrets.length} SSM secret(s) under ${SSM_SECRET_PREFIX}: ${secrets.map((s) => s.name).join(", ")}`
-            : `no SSM secrets under ${SSM_SECRET_PREFIX}`,
+            ? `delete ${secrets.length} SSM secret(s) under ${secretPrefix}: ${secrets.map((s) => s.name).join(", ")}`
+            : `no SSM secrets under ${secretPrefix}`,
         )
         actions.push(`delete ECR repository ${ecrRepo} (if present)`)
         actions.push(

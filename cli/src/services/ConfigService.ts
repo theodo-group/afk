@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve, basename } from "node:path"
 import { AfkConfig, EnvEntry } from "../schema/Config.ts"
 import { ConfigError, UserError } from "../infra/Errors.ts"
-import { CONFIG_FILE, ENV_FILE, SSM_SECRET_PREFIX } from "../constants.ts"
+import { CONFIG_FILE, ENV_FILE, ssmSecretPrefix } from "../constants.ts"
 
 export interface ResolvedConfig {
   readonly config: AfkConfig
@@ -34,6 +34,7 @@ const findProjectRoot = (dir: string): string | null => {
  */
 const parseEnvLine = (
   raw: string,
+  secretPrefix: string,
 ): EnvEntry | { _malformed: true; reason: string; name: string } | null => {
   const line = raw.trim()
   if (!line || line.startsWith("#")) return null
@@ -46,21 +47,21 @@ const parseEnvLine = (
     return { kind: "secret", name, secretName: value.slice("secret:".length) }
   }
   if (value.startsWith("ssm:")) {
-    // Legacy form: SSM absolute path. Strip the `/afk/secrets/` prefix to
-    // recover the canonical short name. Reject anything outside the AFK
-    // namespace — that was already a hard rule.
+    // Legacy form: SSM absolute path. Strip the `<secretPrefix>/` prefix (default
+    // `/afk/secrets/`) to recover the canonical short name. Reject anything
+    // outside the AFK namespace — that was already a hard rule.
     const path = value.slice("ssm:".length)
-    if (!path.startsWith(`${SSM_SECRET_PREFIX}/`)) {
+    if (!path.startsWith(`${secretPrefix}/`)) {
       return {
         _malformed: true,
         name,
-        reason: `legacy ssm: reference must start with '${SSM_SECRET_PREFIX}/' (got '${path}')`,
+        reason: `legacy ssm: reference must start with '${secretPrefix}/' (got '${path}')`,
       }
     }
     return {
       kind: "secret",
       name,
-      secretName: path.slice(SSM_SECRET_PREFIX.length + 1),
+      secretName: path.slice(secretPrefix.length + 1),
     }
   }
   return { kind: "plain", name, value }
@@ -107,6 +108,7 @@ export const ConfigServiceLive = Layer.succeed(
         ),
       )
 
+      const secretPrefix = ssmSecretPrefix(config.aws?.resourcePrefix)
       const envPath = resolve(root, ENV_FILE)
       const envEntries: EnvEntry[] = []
       if (existsSync(envPath)) {
@@ -119,7 +121,7 @@ export const ConfigServiceLive = Layer.succeed(
             }),
         })
         for (const line of envRaw.split("\n")) {
-          const entry = parseEnvLine(line)
+          const entry = parseEnvLine(line, secretPrefix)
           if (!entry) continue
           if ("_malformed" in entry) {
             return yield* Effect.fail(
