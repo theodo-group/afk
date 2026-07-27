@@ -2,7 +2,8 @@ import { Effect, Layer } from "effect"
 import { Iam } from "../../adapters/aws/Iam.ts"
 import { Sts } from "../../adapters/aws/Sts.ts"
 import { AwsError, UserError } from "../../infra/Errors.ts"
-import { AFK_DEVELOPER_POLICY, AFK_DEVELOPER_ROLE } from "../../constants.ts"
+import { developerRoleName } from "../../constants.ts"
+import { ConfigService } from "../../services/ConfigService.ts"
 import { Team } from "../../services/backend/Team.ts"
 import type { AddMemberResult } from "../../services/backend/Team.ts"
 import type { TeamMember } from "../../schema/TeamMember.ts"
@@ -46,6 +47,18 @@ export const AwsTeamLive = Layer.effect(
   Effect.gen(function* () {
     const iam = yield* Iam
     const sts = yield* Sts
+    const cfg = yield* ConfigService
+
+    // The IAM developer role and its attached policy share one name
+    // (`<prefix>-developer`, historically `afk-developer`). Surface a config
+    // load failure as a UserError so `add`/`rm` keep their AwsError|UserError
+    // error surface.
+    const developerName = cfg.load.pipe(
+      Effect.map((r) => developerRoleName(r.config.aws?.resourcePrefix)),
+      Effect.mapError((e) =>
+        e._tag === "ConfigError" ? new UserError({ message: String(e) }) : e,
+      ),
+    )
 
     const userMembers = iam.listUsersByPathPrefix("/afk/").pipe(
       Effect.map((users) =>
@@ -58,7 +71,8 @@ export const AwsTeamLive = Layer.effect(
       ),
     )
 
-    const trustedMembers = iam.getRole(AFK_DEVELOPER_ROLE).pipe(
+    const trustedMembers = developerName.pipe(
+      Effect.flatMap((role) => iam.getRole(role)),
       Effect.map((r) => {
         const principals = principalSet(r.assumeRolePolicy as AssumeRolePolicy)
         // Filter out the same-account "root" self-trust if present
@@ -86,15 +100,16 @@ export const AwsTeamLive = Layer.effect(
     }): Effect.Effect<AddMemberResult, AwsError | UserError> =>
       Effect.gen(function* () {
         const identity = yield* sts.callerIdentity
-        const policyArn = `arn:aws:iam::${identity.Account}:policy/${AFK_DEVELOPER_POLICY}`
+        const developer = yield* developerName
+        const policyArn = `arn:aws:iam::${identity.Account}:policy/${developer}`
 
         if (principal) {
-          const role = yield* iam.getRole(AFK_DEVELOPER_ROLE)
+          const role = yield* iam.getRole(developer)
           const policy = role.assumeRolePolicy as AssumeRolePolicy
           const principals = principalSet(policy)
           principals.add(principal)
           yield* iam.updateAssumeRolePolicy(
-            AFK_DEVELOPER_ROLE,
+            developer,
             setAllPrincipals(policy, [...principals]),
           )
           return {
@@ -125,7 +140,8 @@ export const AwsTeamLive = Layer.effect(
     const rmAws = (name: string): Effect.Effect<void, AwsError | UserError> =>
       Effect.gen(function* () {
         const identity = yield* sts.callerIdentity
-        const policyArn = `arn:aws:iam::${identity.Account}:policy/${AFK_DEVELOPER_POLICY}`
+        const developer = yield* developerName
+        const policyArn = `arn:aws:iam::${identity.Account}:policy/${developer}`
         const members = yield* lsAws
         const match = members.find((m) => m.name === name || m.arn === name)
         if (!match) {
@@ -144,12 +160,12 @@ export const AwsTeamLive = Layer.effect(
             .pipe(Effect.catchAll(() => Effect.void))
           yield* iam.deleteUser(match.name)
         } else {
-          const role = yield* iam.getRole(AFK_DEVELOPER_ROLE)
+          const role = yield* iam.getRole(developer)
           const policy = role.assumeRolePolicy as AssumeRolePolicy
           const principals = principalSet(policy)
           principals.delete(match.arn)
           yield* iam.updateAssumeRolePolicy(
-            AFK_DEVELOPER_ROLE,
+            developer,
             setAllPrincipals(policy, [...principals]),
           )
         }

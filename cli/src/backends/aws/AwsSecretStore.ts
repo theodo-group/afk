@@ -2,19 +2,18 @@ import { Effect, Layer } from "effect"
 import { SecretStore } from "../../services/backend/SecretStore.ts"
 import { Ssm } from "../../adapters/aws/Ssm.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
-import { DEFAULT_REGION, SSM_SECRET_PREFIX } from "../../constants.ts"
+import { DEFAULT_REGION, ssmSecretPrefix } from "../../constants.ts"
 import type { Secret } from "../../schema/Secret.ts"
 
-const fullName = (name: string) => `${SSM_SECRET_PREFIX}/${name}`
-const shortName = (full: string) =>
-  full.startsWith(`${SSM_SECRET_PREFIX}/`)
-    ? full.slice(SSM_SECRET_PREFIX.length + 1)
-    : full
+const fullName = (prefix: string, name: string) => `${prefix}/${name}`
+const shortName = (prefix: string, full: string) =>
+  full.startsWith(`${prefix}/`) ? full.slice(prefix.length + 1) : full
 
 /**
  * AWS implementation of SecretStore. Backed by SSM Parameter Store SecureString
- * entries under `/afk/secrets/*`. Reference syntax in `.afk.env` is
- * `secret:<name>` (canonical) or `ssm:<absolute-path>` (legacy AWS-only).
+ * entries under `<ssmSecretPrefix>/*` (default `/afk/secrets/*`). Reference
+ * syntax in `.afk.env` is `secret:<name>` (canonical) or `ssm:<absolute-path>`
+ * (legacy AWS-only).
  */
 export const AwsSecretStoreLive = Layer.effect(
   SecretStore,
@@ -26,24 +25,31 @@ export const AwsSecretStoreLive = Layer.effect(
       Effect.map((r) => r.config.aws?.region ?? DEFAULT_REGION),
     )
 
+    const secretPrefix = cfg.load.pipe(
+      Effect.map((r) => ssmSecretPrefix(r.config.aws?.resourcePrefix)),
+    )
+
     return SecretStore.of({
       put: (name, value) =>
         Effect.gen(function* () {
           const r = yield* region
-          yield* ssm.putSecret(r, fullName(name), value)
+          const prefix = yield* secretPrefix
+          yield* ssm.putSecret(r, fullName(prefix, name), value)
         }),
 
       delete: (name) =>
         Effect.gen(function* () {
           const r = yield* region
-          yield* ssm.deleteParameter(r, fullName(name))
+          const prefix = yield* secretPrefix
+          yield* ssm.deleteParameter(r, fullName(prefix, name))
         }),
 
       list: Effect.gen(function* () {
         const r = yield* region
-        const params = yield* ssm.listByPrefix(r, SSM_SECRET_PREFIX)
+        const prefix = yield* secretPrefix
+        const params = yield* ssm.listByPrefix(r, prefix)
         return params.map<Secret>((p) => ({
-          name: shortName(p.name),
+          name: shortName(prefix, p.name),
           reference: p.name,
           lastModified: p.lastModifiedDate,
         }))

@@ -15,7 +15,7 @@ import {
   GitError,
   ConfigError,
 } from "../infra/Errors.ts"
-import { ECR_REPO_PREFIX } from "../constants.ts"
+import { ecrRepoPrefix } from "../constants.ts"
 
 const ENTRYPOINT_SOURCE = resolve(
   import.meta.dir,
@@ -115,7 +115,7 @@ export const BuildServiceLive = Layer.effect(
             }),
           )
 
-          const repoName = `${ECR_REPO_PREFIX}/${sourceRepoName}`
+          const repoName = `${ecrRepoPrefix(config.aws?.resourcePrefix)}/${sourceRepoName}`
           // Docker tags allow only [A-Za-z0-9_.-]; collapse anything else to '-'
           // so refs with slashes ('refactor/afk'), colons, or other punctuation
           // don't break `docker build -t`.

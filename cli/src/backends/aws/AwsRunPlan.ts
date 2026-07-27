@@ -13,11 +13,12 @@ import { buildUserData } from "../../services/UserData.ts"
 import { collectionBases } from "../../services/SessionArtifact.ts"
 import { retainedUntilIso } from "../../services/retention.ts"
 import {
-  AFK_ARTIFACTS_BUCKET_PREFIX,
+  artifactsBucketPrefix,
   DEFAULT_INSTANCE_TYPE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
-  LOG_GROUP_PREFIX,
+  logGroupPrefix,
+  ssmSecretPrefix,
   SESSION_ARTIFACT_MAX_BYTES,
   TAG_BRANCH,
   TAG_MANAGED,
@@ -187,6 +188,7 @@ export const planAwsRun = (
 ): Either.Either<AwsRunCore, UserError> => {
   const { config, identity, input } = i
   const region = config.aws?.region ?? DEFAULT_REGION
+  const prefix = config.aws?.resourcePrefix
 
   const instanceTypeOverride =
     typeof input.backendOverrides?.instanceType === "string"
@@ -234,7 +236,7 @@ export const planAwsRun = (
     composeUsed,
   } = assembled
 
-  const logGroup = `${LOG_GROUP_PREFIX}/${i.sourceRepoName}`
+  const logGroup = `${logGroupPrefix(prefix)}/${i.sourceRepoName}`
 
   const userData = buildUserData({
     runId: i.runId,
@@ -250,12 +252,13 @@ export const planAwsRun = (
     // entrypoint which dereferences via the VM's instance profile.
     secrets: secrets.map((s) => ({
       name: s.name,
-      ssmName: `/afk/secrets/${s.secretName}`,
+      ssmName: `${ssmSecretPrefix(prefix)}/${s.secretName}`,
     })),
     compose: composeContent,
     sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
-    sessionArtifactBucket: `${AFK_ARTIFACTS_BUCKET_PREFIX}-${identity.Account}-${region}`,
+    sessionArtifactBucket: `${artifactsBucketPrefix(prefix)}-${identity.Account}-${region}`,
     sessionArtifactMaxBytes: SESSION_ARTIFACT_MAX_BYTES,
+    logGroupPrefix: logGroupPrefix(prefix),
   })
 
   // Spot is the default (cheaper); on-demand is opt-in. Retention couples to

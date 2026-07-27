@@ -32,6 +32,11 @@ export interface UserDataInput {
   readonly sessionArtifactBucket: string
   /** Per-file size cap; matched files larger than this are skipped, not truncated. */
   readonly sessionArtifactMaxBytes: number
+  /**
+   * CloudWatch log-group path prefix (`/<prefix>`); the group is
+   * `<logGroupPrefix>/<repo>`. Absent ⇒ the default `LOG_GROUP_PREFIX` ("/afk").
+   */
+  readonly logGroupPrefix?: string
 }
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
@@ -135,7 +140,7 @@ const renderArtifactCollection = (
 }
 
 export const buildUserData = (input: UserDataInput): string => {
-  const logGroup = `${LOG_GROUP_PREFIX}/${input.repoName}`
+  const logGroup = `${input.logGroupPrefix ?? LOG_GROUP_PREFIX}/${input.repoName}`
   const daemonJson = renderDaemonJson(logGroup, input.region, input.runId)
   const cmdShell = renderCommandShellString(input.command)
 

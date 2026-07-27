@@ -14,9 +14,7 @@ import {
   RunHistory,
   type HistoryRow,
 } from "../../services/backend/RunHistory.ts"
-import { DEFAULT_REGION } from "../../constants.ts"
-
-const TABLE_NAME = "afk-runs"
+import { DEFAULT_REGION, runsTableName } from "../../constants.ts"
 
 const rowFromItem = (item: Item): HistoryRow | null => {
   const runId = readS(item, "run_id")
@@ -60,10 +58,15 @@ export const AwsRunHistoryLive = Layer.effect(
       Effect.map((r) => r.config.aws?.region ?? DEFAULT_REGION),
     )
 
+    const tableName = cfg.load.pipe(
+      Effect.map((r) => runsTableName(r.config.aws?.resourcePrefix)),
+    )
+
     return RunHistory.of({
       recordStart: (input) =>
         Effect.gen(function* () {
           const r = yield* region
+          const table = yield* tableName
           const item: Item = {
             run_id: S(input.runId),
             status: S("running"),
@@ -78,12 +81,13 @@ export const AwsRunHistoryLive = Layer.effect(
             started_at: S(input.startedAt),
             timeout_hours: N(input.timeoutHours),
           }
-          yield* ddb.putItem({ region: r, table: TABLE_NAME, item })
+          yield* ddb.putItem({ region: r, table, item })
         }),
 
       recordComplete: ({ runId, stoppedAt, exitCode }) =>
         Effect.gen(function* () {
           const r = yield* region
+          const table = yield* tableName
           const names: Record<string, string> = { "#s": "status" }
           const values: Record<string, ReturnType<typeof S>> = {
             ":s": S(exitCode === 0 ? "stopped" : "failed"),
@@ -97,7 +101,7 @@ export const AwsRunHistoryLive = Layer.effect(
           }
           yield* ddb.updateItem({
             region: r,
-            table: TABLE_NAME,
+            table,
             key: { run_id: S(runId) },
             updateExpression: expr,
             expressionAttributeNames: names,
@@ -108,6 +112,7 @@ export const AwsRunHistoryLive = Layer.effect(
       query: ({ since, owner, branch, limit }) =>
         Effect.gen(function* () {
           const r = yield* region
+          const table = yield* tableName
           const sinceIsoUtc = since ? DateTime.formatIso(since) : undefined
 
           if (owner) {
@@ -122,7 +127,7 @@ export const AwsRunHistoryLive = Layer.effect(
             }
             const items = yield* ddb.query({
               region: r,
-              table: TABLE_NAME,
+              table,
               indexName: "by-owner",
               keyConditionExpression: keyExpr,
               expressionAttributeNames: names,
@@ -137,7 +142,7 @@ export const AwsRunHistoryLive = Layer.effect(
           }
           const items = yield* ddb.scan({
             region: r,
-            table: TABLE_NAME,
+            table,
             ...(sinceIsoUtc
               ? {
                   filterExpression: "started_at >= :t",

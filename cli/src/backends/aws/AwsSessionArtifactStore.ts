@@ -9,7 +9,7 @@ import { Sts } from "../../adapters/aws/Sts.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { UserError } from "../../infra/Errors.ts"
 import {
-  AFK_ARTIFACTS_BUCKET_PREFIX,
+  artifactsBucketPrefix,
   DEFAULT_REGION,
   SESSION_ARTIFACT_DIR,
 } from "../../constants.ts"
@@ -37,7 +37,7 @@ export const AwsSessionArtifactStoreLive = Layer.effect(
           const { config } = yield* cfg.load
           const region = config.aws?.region ?? DEFAULT_REGION
           const identity = yield* sts.callerIdentity
-          const bucket = `${AFK_ARTIFACTS_BUCKET_PREFIX}-${identity.Account}-${region}`
+          const bucket = `${artifactsBucketPrefix(config.aws?.resourcePrefix)}-${identity.Account}-${region}`
           const prefix = `${input.repoName}/${input.runId}/${SESSION_ARTIFACT_DIR}/`
 
           const stage = yield* Effect.try({

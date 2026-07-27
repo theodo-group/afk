@@ -19,7 +19,6 @@ import {
 import { ConfigError, UserError } from "../../infra/Errors.ts"
 import type { Run } from "../../schema/Run.ts"
 import {
-  AFK_VM_INSTANCE_PROFILE,
   COMPOSE_FILE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
@@ -28,6 +27,7 @@ import {
   TAG_MANAGED,
   TAG_OWNER,
   VM_AFK_DIR,
+  vmInstanceProfileName,
 } from "../../constants.ts"
 import {
   type AwsBackendPlan,
@@ -57,6 +57,10 @@ export const AwsComputeLive = Layer.effect(
 
     const resolveRetentionDays = cfg.load.pipe(
       Effect.map((r) => r.config.retentionDays ?? DEFAULT_RETENTION_DAYS),
+    )
+
+    const resolveVmInstanceProfile = cfg.load.pipe(
+      Effect.map((r) => vmInstanceProfileName(r.config.aws?.resourcePrefix)),
     )
 
     const fetchRunsAtRegion = (region: string, ownerUserId?: string) =>
@@ -149,13 +153,17 @@ export const AwsComputeLive = Layer.effect(
           core.preparedBase.logChannel,
           LOG_RETENTION_DAYS,
         )
-        const placement = yield* resolveAfkNetworkPlacement(ec2, core.region)
+        const placement = yield* resolveAfkNetworkPlacement(ec2, core.region, {
+          subnetIds: config.aws?.subnetIds,
+          securityGroupId: config.aws?.securityGroupId,
+        })
         return finalizeAwsPlan(core, placement)
       })
 
     const launch = (plan: PreparedRun) =>
       Effect.gen(function* () {
         const aws = plan.backendPlan as AwsBackendPlan
+        const iamInstanceProfileName = yield* resolveVmInstanceProfile
 
         const { instanceId } = yield* ec2.runInstance({
           region: aws.region,
@@ -164,7 +172,7 @@ export const AwsComputeLive = Layer.effect(
           subnetId:
             aws.subnetIds[Math.floor(Math.random() * aws.subnetIds.length)]!,
           securityGroupIds: [aws.securityGroupId],
-          iamInstanceProfileName: AFK_VM_INSTANCE_PROFILE,
+          iamInstanceProfileName,
           userData: aws.userData,
           spot: aws.spot,
           // `stop` on a retained Run (preserve the EBS root for post-mortem

@@ -12,6 +12,27 @@ export const AwsBackendConfig = Schema.Struct({
    * On Cloudflare, see `cloudflare.cachedImages`.
    */
   cachedImages: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Overrides the literal `afk` prefix in every AWS resource NAME afk
+   * builds/looks-up (instance profile, DynamoDB table, S3 artifacts bucket, SSM
+   * secret path, CloudWatch log group, ECR repo, developer role/policy). Absent
+   * ⇒ "afk" (historical behavior). Lets afk run inside an account with a
+   * different naming scheme (e.g. CDA). Does NOT affect the `afk:*` tag keys.
+   */
+  resourcePrefix: Schema.optional(Schema.String),
+  /**
+   * Explicit subnets a Run/golden-builder VM launches into. When set together
+   * with `securityGroupId`, afk skips VPC/subnet discovery and uses these
+   * verbatim — for running inside an existing (e.g. CDA-managed) private VPC.
+   * Absent ⇒ discover all subnets of the `afk-vpc` tagged VPC (historical).
+   */
+  subnetIds: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Explicit security group for Run/golden-builder VMs. Paired with
+   * `subnetIds` to bypass network discovery. Absent ⇒ look up the
+   * `afk-runs-sg` security group in the discovered VPC (historical).
+   */
+  securityGroupId: Schema.optional(Schema.String),
 })
 export type AwsBackendConfig = typeof AwsBackendConfig.Type
 

@@ -26,6 +26,53 @@ export const ECR_LIFECYCLE_DAYS = 7
 export const LOG_GROUP_PREFIX = "/afk"
 export const LOG_RETENTION_DAYS = 30
 
+// ---------- Configurable resource prefix ----------
+//
+// Every AWS resource NAME afk builds/looks-up is prefixed with `afk` by default
+// (the `AFK_*`/`*_PREFIX` literals above). A project may override that literal
+// via `aws.resourcePrefix` in afk.config.json — e.g. to run inside a CDA account
+// whose resources follow a different naming scheme. The builders below turn a
+// resolved prefix into the concrete name; called with no argument they reproduce
+// the historical `afk-*` names byte-for-byte, so absent-config behavior is
+// unchanged. NOTE: this governs resource *names* only — the `afk:*` tag KEYS
+// (TAG_OWNER, TAG_MANAGED, …) are a fixed contract and stay literal.
+export const DEFAULT_RESOURCE_PREFIX = "afk"
+
+/** EC2 instance profile the Run/golden-builder VMs assume (`<prefix>-vm-instance-profile`). */
+export const vmInstanceProfileName = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `${prefix}-vm-instance-profile`
+
+/** DynamoDB table holding the Run index (`<prefix>-runs`). */
+export const runsTableName = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `${prefix}-runs`
+
+/** S3 Session-Artifacts bucket prefix (`<prefix>-artifacts`, suffixed `-<account>-<region>`). */
+export const artifactsBucketPrefix = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `${prefix}-artifacts`
+
+/** SSM Parameter Store path prefix for secrets (`/<prefix>/secrets`). */
+export const ssmSecretPrefix = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `/${prefix}/secrets`
+
+/** CloudWatch log-group path prefix (`/<prefix>`, suffixed `/<repo>`). */
+export const logGroupPrefix = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `/${prefix}`
+
+/** ECR repository namespace (`<prefix>`, suffixed `/<repo>`). */
+export const ecrRepoPrefix = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => prefix
+
+/** IAM developer role/policy name (`<prefix>-developer`). */
+export const developerRoleName = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `${prefix}-developer`
+
 // ---------- Session Artifacts ----------
 //
 // A matched file larger than this is skipped with a warning rather than

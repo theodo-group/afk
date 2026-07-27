@@ -27,6 +27,7 @@ export const destroy = Command.make("destroy", { yes }, ({ yes }) =>
       projectDir: process.cwd(),
       sourceRepoName,
       execute: yes,
+      resourcePrefix: config.aws?.resourcePrefix,
     })
 
     yield* out.emit({
