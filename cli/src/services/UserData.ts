@@ -1,5 +1,6 @@
 import { LOG_GROUP_PREFIX, VM_AFK_DIR, VM_COMPOSE_PATH } from "../constants.ts"
 import { injectAwsLogging } from "./Compose.ts"
+import { gzipSync } from "node:zlib"
 
 export interface UserDataInput {
   readonly runId: string
@@ -40,6 +41,25 @@ export interface UserDataInput {
 }
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
+
+/**
+ * EC2's hard ceiling on user-data. AWS counts the base64-encoded form, so the
+ * raw script may be at most ~3/4 of this.
+ */
+export const USER_DATA_MAX_BASE64_BYTES = 16384
+
+/**
+ * Encode a boot script the way `RunInstances` wants it: gzip, then base64.
+ *
+ * Gzip is not an optimisation, it is what keeps real projects under the
+ * ceiling: the whole Run recipe travels in user-data — the developer's compose
+ * file included — and a compose file with a few sidecars and their comments
+ * pushes a plain-base64 payload past 16 KB, where the launch fails with a
+ * message that names none of that. cloud-init decompresses gzipped user-data
+ * itself, so nothing on the VM changes. Typical ratio on these scripts: 4-5x.
+ */
+export const encodeUserData = (script: string): string =>
+  gzipSync(Buffer.from(script, "utf8")).toString("base64")
 
 const renderEnvFileWrites = (
   env: ReadonlyArray<{ name: string; value: string }>,
