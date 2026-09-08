@@ -19,6 +19,35 @@ import {
 
 export type GoldenTag = { readonly key: string; readonly value: string }
 
+/**
+ * An ECR image reference: `<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`.
+ * Matched so the builder can authenticate before pulling — a private image is
+ * otherwise refused, and the pre-pull only warns, leaving the developer with a
+ * Golden Image that silently lacks the very image they asked to cache.
+ */
+const ECR_IMAGE_REF = /^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com\//
+
+/**
+ * `docker login` for every distinct ECR registry the cached images live in,
+ * using the builder's instance profile. Public images need none, so a list
+ * without ECR references renders no login at all.
+ */
+const renderEcrLogins = (cachedImages: ReadonlyArray<string>): string => {
+  const registries = new Map<string, string>()
+  for (const img of cachedImages) {
+    const m = ECR_IMAGE_REF.exec(img)
+    if (m) registries.set(`${m[1]}.dkr.ecr.${m[2]}.amazonaws.com`, m[2]!)
+  }
+  if (registries.size === 0)
+    return "# (no private registry to authenticate against)"
+  return Array.from(registries)
+    .map(
+      ([host, region]) =>
+        `aws --region ${region} ecr get-login-password | docker login --username AWS --password-stdin ${host}`,
+    )
+    .join("\n")
+}
+
 /** The pre-pull script run on the builder VM via SSM. Pure. */
 export const buildScript = (cachedImages: ReadonlyArray<string>): string => {
   const pulls = cachedImages
@@ -39,6 +68,8 @@ export const buildScript = (cachedImages: ReadonlyArray<string>): string => {
     "curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose \\",
     "  https://github.com/docker/compose/releases/download/$DOCKER_COMPOSE_VERSION/docker-compose-linux-x86_64",
     "chmod +x /usr/libexec/docker/cli-plugins/docker-compose",
+    "echo 'afk-image-build: authenticating against private registries'",
+    renderEcrLogins(cachedImages),
     "echo 'afk-image-build: pre-pulling cached images'",
     pulls || "echo '(no cached images requested)'",
     "echo 'afk-image-build: cleaning docker apt cache to reduce AMI size'",
