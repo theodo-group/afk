@@ -150,6 +150,8 @@ export type AwsBackendPlan = {
   readonly userData: string
   readonly imageWasSkipped: boolean
   readonly startedAt: string
+  /** Root EBS size (GiB) to launch with; absent ⇒ the Golden AMI's own size. */
+  readonly rootVolumeSizeGb: number | undefined
 }
 
 export interface PlanAwsRunInput {
@@ -328,6 +330,7 @@ export const planAwsRun = (
       userData,
       imageWasSkipped: built.skipped,
       startedAt: i.startedAt,
+      rootVolumeSizeGb: config.aws?.rootVolumeSizeGb,
     },
   })
 }

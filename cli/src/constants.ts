@@ -23,6 +23,11 @@ export const SSM_RUNTIME_PREFIX = "/afk/runs"
 export const ECR_REPO_PREFIX = "afk"
 export const ECR_LIFECYCLE_DAYS = 7
 
+// Root block device of the Amazon Linux AMIs the Golden Image is built from.
+// Named explicitly because overriding the root volume's size at launch requires
+// naming the device the AMI maps its root to.
+export const ROOT_DEVICE_NAME = "/dev/xvda"
+
 export const LOG_GROUP_PREFIX = "/afk"
 export const LOG_RETENTION_DAYS = 30
 

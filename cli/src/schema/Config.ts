@@ -33,6 +33,13 @@ export const AwsBackendConfig = Schema.Struct({
    * `afk-runs-sg` security group in the discovered VPC (historical).
    */
   securityGroupId: Schema.optional(Schema.String),
+  /**
+   * Root EBS volume size (GiB) for Run and golden-builder VMs. The Golden AMI
+   * inherits Amazon Linux's 8 GiB root, which a substantial agent image plus a
+   * cloned workspace, its dependencies and a database sidecar's data fill —
+   * ENOSPC mid-Run. Absent ⇒ the AMI's own size (historical behavior).
+   */
+  rootVolumeSizeGb: Schema.optional(Schema.Number),
 })
 export type AwsBackendConfig = typeof AwsBackendConfig.Type
 

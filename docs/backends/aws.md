@@ -50,6 +50,28 @@ Run once per AWS account/team.
 - **ECR repositories** — created lazily by the CLI on first `afk build`, with a 7-day untagged-image lifecycle.
 - **CloudWatch log groups** (`/afk/<source-repo>`) — created lazily with 30-day retention.
 
+## Root volume
+
+The Golden AMI is snapshotted from Amazon Linux, so it inherits that AMI's **8 GiB**
+root. A Run's workload lands on that same volume — the agent image, the cloned
+workspace, its installed dependencies, and any sidecar's data (a database's
+datadir included) — which fills 8 GiB quickly; the failure mode is a mid-Run
+`ENOSPC` that surfaces as a crashing sidecar rather than as a disk error.
+
+Set `aws.rootVolumeSizeGb` in `afk.config.json` to launch Runs (and the
+golden-image builder) with a larger gp3 root. Amazon Linux grows the filesystem
+to the volume on boot, so an existing Golden AMI needs no rebuild — the override
+applies at launch. Absent ⇒ the AMI's own size (historical behavior). The value
+can only grow the AMI's size; AWS rejects a shrink.
+
+```json
+{ "aws": { "rootVolumeSizeGb": 100 } }
+```
+
+The volume is deleted with the instance, so it only bills for the Run's
+lifetime — except on a `--retain`ed Run, whose stopped instance keeps its EBS
+root until the retention period reclaims it.
+
 ## Secrets
 
 Stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The `user_data` script resolves references at boot via the VM's instance profile and exports them into the compose stack. Values never appear in `DescribeInstances`, CloudTrail (beyond the parameter name), or instance tags.

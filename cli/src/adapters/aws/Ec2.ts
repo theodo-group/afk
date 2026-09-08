@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
 import { makeAwsCli } from "./awsCli.ts"
+import { ROOT_DEVICE_NAME } from "../../constants.ts"
 
 export interface Tag {
   readonly key: string
@@ -25,6 +26,13 @@ export interface RunInstanceInput {
   readonly shutdownBehavior: "stop" | "terminate"
   /** Tags applied to the instance + volumes at launch. */
   readonly tags: ReadonlyArray<Tag>
+  /**
+   * Root EBS volume size in GiB, overriding the AMI's own (a Golden AMI
+   * snapshotted from Amazon Linux inherits its 8 GiB root, which a real agent
+   * image plus a cloned workspace fills). Absent ⇒ the AMI's size, unchanged.
+   * Must be >= the AMI snapshot's size; AWS rejects a shrink.
+   */
+  readonly rootVolumeSizeGb?: number
 }
 
 export interface Ec2Instance {
@@ -311,6 +319,21 @@ export const Ec2Live = Layer.effect(
         "1",
         "--associate-public-ip-address",
       ]
+      if (input.rootVolumeSizeGb) {
+        args.push(
+          "--block-device-mappings",
+          JSON.stringify([
+            {
+              DeviceName: ROOT_DEVICE_NAME,
+              Ebs: {
+                VolumeSize: input.rootVolumeSizeGb,
+                VolumeType: "gp3",
+                DeleteOnTermination: true,
+              },
+            },
+          ]),
+        )
+      }
       if (input.spot) {
         args.push(
           "--instance-market-options",
