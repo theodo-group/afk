@@ -1,0 +1,25 @@
+cli/src/backends/gcp/GcpRunPlan.test.ts
+  s_8ca365fdc15b20::t_8b555104a52df2 132-154
+cli/src/backends/gcp/GcpRunPlan.ts
+  s_8ca365fdc15b20::t_6da972700981f5 200-201,220-222
+cli/src/commands/run.ts
+  s_8ca365fdc15b20::t_c1e33d8b759980 11-16,48-59,69
+cli/src/schema/Config.ts
+  s_8ca365fdc15b20::t_b773016775d3ab 122-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6ff6e5162826c44fcd775f4b340500704fe23fbf",
+  "prompts": {},
+  "sessions": {
+    "s_8ca365fdc15b20": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63feeb04-9927-4391-a9c4-58a0035b2b51",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Theo Rodrigues <theo.rodrigues@theodo.com>"
+    }
+  }
+}
