@@ -245,6 +245,10 @@ export const GcpComputeLive = Layer.effect(
               `--project=${project}`,
               `--zone=${zone}`,
               "--tunnel-through-iap",
+              // Every command this helper runs is a shell or `docker exec -it`, and
+              // `gcloud compute ssh --command` allocates no remote PTY: docker then
+              // refuses with "stdin is not a terminal". `-tt` forces one.
+              "--ssh-flag=-tt",
               "--command",
               command,
             ])
