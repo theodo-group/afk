@@ -1,0 +1,19 @@
+cli/src/backends/gcp/GcpCompute.ts
+  s_8ca365fdc15b20::t_e7ffb07eda82d5 248-251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "543f6bf06fe65c0c522bf911e7a3f7b1e42e191c",
+  "prompts": {},
+  "sessions": {
+    "s_8ca365fdc15b20": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63feeb04-9927-4391-a9c4-58a0035b2b51",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Theo Rodrigues <theo.rodrigues@theodo.com>"
+    }
+  }
+}
