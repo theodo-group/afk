@@ -8,7 +8,12 @@ const ref = Options.text("ref").pipe(Options.optional)
 const instanceType = Options.text("instance-type").pipe(Options.optional)
 const onDemand = Options.boolean("on-demand").pipe(
   Options.withDescription(
-    "use on-demand capacity (pricier, but not preemptible mid-Run; Spot by default)",
+    "use on-demand capacity (pricier, but not preemptible mid-Run; Spot by default, unless gcp.defaultCapacity says otherwise)",
+  ),
+)
+const spot = Options.boolean("spot").pipe(
+  Options.withDescription(
+    "use interruptible Spot capacity (cheaper, but a reclaim ends the Run mid-task); only needed where the project pins on-demand as its default",
   ),
 )
 const timeout = Options.integer("timeout").pipe(
@@ -40,8 +45,18 @@ const formatBackendDetails = (d: Record<string, string>): string => {
 
 export const run = Command.make(
   "run",
-  { ref, instanceType, onDemand, timeout, follow, dryRun, retain, command },
-  ({ ref, instanceType, onDemand, timeout, follow, dryRun, retain, command }) =>
+  { ref, instanceType, onDemand, spot, timeout, follow, dryRun, retain, command },
+  ({
+    ref,
+    instanceType,
+    onDemand,
+    spot,
+    timeout,
+    follow,
+    dryRun,
+    retain,
+    command,
+  }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       const cfg = yield* ConfigService
@@ -51,6 +66,7 @@ export const run = Command.make(
       if (instanceType._tag === "Some")
         backendOverrides.instanceType = instanceType.value
       if (onDemand) backendOverrides.onDemand = true
+      if (spot) backendOverrides.spot = true
 
       const planInput = {
         command,

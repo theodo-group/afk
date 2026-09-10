@@ -119,6 +119,13 @@ export const GcpBackendConfig = Schema.Struct({
   zone: Schema.optional(Schema.String),
   defaultMachineType: Schema.optional(Schema.String),
   allowedMachineTypes: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Capacity a Run takes when the dev passes neither `--spot` nor
+   * `--on-demand`. Absent ⇒ "spot", the cheaper default. A project whose Runs
+   * must not be reclaimed mid-task sets "on-demand" here rather than teaching
+   * every developer a flag.
+   */
+  defaultCapacity: Schema.optional(Schema.Literal("spot", "on-demand")),
   /** Images pre-pulled into the GCE Golden custom image by `afk golden build`. */
   cachedImages: Schema.optional(Schema.Array(Schema.String)),
 })

@@ -197,7 +197,8 @@ export const planGcpRun = (
     config.gcp?.defaultMachineType ??
     GCP_DEFAULT_MACHINE_TYPE
 
-  // Spot is the default (cheaper); `--on-demand` opts up to STANDARD capacity.
+  // Spot is the default (cheaper) unless the project pins `gcp.defaultCapacity`;
+  // either way `--spot` and `--on-demand` win over it.
   // Retention couples to capacity: only On-Demand can stop without losing its
   // disk, so `--retain` requires On-Demand — auto-upgrade a would-be Spot Run,
   // reject explicit `--spot --retain` (CONTEXT.md "Retention").
@@ -216,7 +217,9 @@ export const planGcpRun = (
       }),
     )
   }
-  const onDemand = explicitOnDemand || retain
+  const onDemandByConfig = config.gcp?.defaultCapacity === "on-demand"
+  const onDemand =
+    explicitOnDemand || retain || (onDemandByConfig && !explicitSpot)
   const spot = !onDemand
   const whitelist = config.gcp?.allowedMachineTypes
   if (whitelist && whitelist.length > 0 && !whitelist.includes(machineType)) {

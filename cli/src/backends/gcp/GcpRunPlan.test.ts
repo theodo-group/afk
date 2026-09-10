@@ -129,6 +129,29 @@ describe("planGcpRun", () => {
     }
   })
 
+  it("takes On-Demand when the project pins gcp.defaultCapacity", () => {
+    const result = planGcpRun(
+      baseInput({ config: { gcp: { defaultCapacity: "on-demand" } } }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.spot).toBe(false)
+    }
+  })
+
+  it("lets --spot override a project pinned to On-Demand", () => {
+    const result = planGcpRun(
+      baseInput({
+        config: { gcp: { defaultCapacity: "on-demand" } },
+        startInput: { backendOverrides: { spot: true } },
+      }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.spot).toBe(true)
+    }
+  })
+
   it("rejects --retain combined with explicit --spot", () => {
     const result = planGcpRun(
       baseInput({
