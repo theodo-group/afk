@@ -2,6 +2,11 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
 import { makeAwsCli } from "./awsCli.ts"
+import { ROOT_DEVICE_NAME } from "../../constants.ts"
+import {
+  encodeUserData,
+  USER_DATA_MAX_BASE64_BYTES,
+} from "../../services/UserData.ts"
 
 export interface Tag {
   readonly key: string
@@ -25,6 +30,13 @@ export interface RunInstanceInput {
   readonly shutdownBehavior: "stop" | "terminate"
   /** Tags applied to the instance + volumes at launch. */
   readonly tags: ReadonlyArray<Tag>
+  /**
+   * Root EBS volume size in GiB, overriding the AMI's own (a Golden AMI
+   * snapshotted from Amazon Linux inherits its 8 GiB root, which a real agent
+   * image plus a cloned workspace fills). Absent ⇒ the AMI's size, unchanged.
+   * Must be >= the AMI snapshot's size; AWS rejects a shrink.
+   */
+  readonly rootVolumeSizeGb?: number
 }
 
 export interface Ec2Instance {
@@ -274,6 +286,18 @@ export const Ec2Live = Layer.effect(
         .pipe(Effect.map((r) => r.Parameter.Value))
 
     const runInstance = (input: RunInstanceInput) => {
+      // Refuse before AWS does. `RunInstances` rejects an oversized payload with
+      // "User data is limited to 16384 bytes" and names nothing that produced
+      // it; the compose file is almost always what grew.
+      const encodedUserData = encodeUserData(input.userData)
+      if (encodedUserData.length > USER_DATA_MAX_BASE64_BYTES) {
+        return Effect.fail(
+          new AwsError({
+            operation: "ec2:RunInstances",
+            message: `boot payload too large: ${encodedUserData.length} base64 bytes (gzipped from ${input.userData.length}), over EC2's ${USER_DATA_MAX_BASE64_BYTES}-byte user-data limit. The Run's compose file and command both travel in it — shorten the command (run a committed script instead of inlining one) or trim afk.compose.yml.`,
+          }),
+        )
+      }
       const tagSpec = [
         {
           ResourceType: "instance",
@@ -300,7 +324,7 @@ export const Ec2Live = Layer.effect(
         "--iam-instance-profile",
         `Name=${input.iamInstanceProfileName}`,
         "--user-data",
-        Buffer.from(input.userData, "utf8").toString("base64"),
+        encodedUserData,
         "--instance-initiated-shutdown-behavior",
         input.shutdownBehavior,
         "--metadata-options",
@@ -311,6 +335,21 @@ export const Ec2Live = Layer.effect(
         "1",
         "--associate-public-ip-address",
       ]
+      if (input.rootVolumeSizeGb) {
+        args.push(
+          "--block-device-mappings",
+          JSON.stringify([
+            {
+              DeviceName: ROOT_DEVICE_NAME,
+              Ebs: {
+                VolumeSize: input.rootVolumeSizeGb,
+                VolumeType: "gp3",
+                DeleteOnTermination: true,
+              },
+            },
+          ]),
+        )
+      }
       if (input.spot) {
         args.push(
           "--instance-market-options",

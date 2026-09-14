@@ -178,6 +178,9 @@ export const AwsComputeLive = Layer.effect(
           iamInstanceProfileName,
           userData: aws.userData,
           spot: aws.spot,
+          ...(aws.rootVolumeSizeGb
+            ? { rootVolumeSizeGb: aws.rootVolumeSizeGb }
+            : {}),
           // `stop` on a retained Run (preserve the EBS root for post-mortem
           // attach), `terminate` otherwise. The plan couples this to capacity —
           // only On-Demand can stop (see AwsRunPlan).

@@ -111,6 +111,9 @@ export const AwsGoldenImageLive = Layer.effect(
         ),
         userData: plan.builderUserData,
         spot: false,
+        ...(config.aws?.rootVolumeSizeGb
+          ? { rootVolumeSizeGb: config.aws.rootVolumeSizeGb }
+          : {}),
         // The builder VM is not a Run; it is terminated once the AMI is baked.
         shutdownBehavior: "terminate",
         tags: [...plan.builderTags],

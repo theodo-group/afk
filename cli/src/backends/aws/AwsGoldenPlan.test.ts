@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test"
 import type { AfkConfig } from "../../schema/Config.ts"
-import { planAwsGolden } from "./AwsGoldenPlan.ts"
+import { buildScript, planAwsGolden } from "./AwsGoldenPlan.ts"
 import { goldenVersionHash } from "../../services/GoldenImageVersion.ts"
 import {
   TAG_GOLDEN,
@@ -100,5 +100,29 @@ describe("planAwsGolden", () => {
   it("notes when no cached images are requested", () => {
     const plan = planAwsGolden({ config: config(), builtAt })
     expect(plan.script).toContain("(no cached images requested)")
+  })
+})
+
+describe("buildScript", () => {
+  it("authenticates against each ECR registry before pulling from it", () => {
+    const script = buildScript([
+      "mysql:8.0",
+      "111122223333.dkr.ecr.eu-west-1.amazonaws.com/team/sv2-legacy:abc123",
+      "111122223333.dkr.ecr.eu-west-1.amazonaws.com/team/other:latest",
+    ])
+    const logins = script.split("\n").filter((l) => l.includes("docker login"))
+    expect(logins).toEqual([
+      "aws --region eu-west-1 ecr get-login-password | docker login --username AWS --password-stdin 111122223333.dkr.ecr.eu-west-1.amazonaws.com",
+    ])
+    // The login must precede every pull, or the private pull is refused.
+    expect(script.indexOf("docker login")).toBeLessThan(
+      script.indexOf("docker pull"),
+    )
+  })
+
+  it("renders no login when every cached image is public", () => {
+    const script = buildScript(["mysql:8.0", "redis:7-alpine"])
+    expect(script).not.toContain("docker login")
+    expect(script).toContain("docker pull mysql:8.0")
   })
 })

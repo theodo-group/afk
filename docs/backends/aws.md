@@ -50,6 +50,43 @@ Run once per AWS account/team.
 - **ECR repositories** — created lazily by the CLI on first `afk build`, with a 7-day untagged-image lifecycle.
 - **CloudWatch log groups** (`/afk/<source-repo>`) — created lazily with 30-day retention.
 
+## Root volume
+
+The Golden AMI is snapshotted from Amazon Linux, so it inherits that AMI's **8 GiB**
+root. A Run's workload lands on that same volume — the agent image, the cloned
+workspace, its installed dependencies, and any sidecar's data (a database's
+datadir included) — which fills 8 GiB quickly; the failure mode is a mid-Run
+`ENOSPC` that surfaces as a crashing sidecar rather than as a disk error.
+
+Set `aws.rootVolumeSizeGb` in `afk.config.json` to launch Runs (and the
+golden-image builder) with a larger gp3 root. Amazon Linux grows the filesystem
+to the volume on boot, so an existing Golden AMI needs no rebuild — the override
+applies at launch. Absent ⇒ the AMI's own size (historical behavior). The value
+can only grow the AMI's size; AWS rejects a shrink.
+
+```json
+{ "aws": { "rootVolumeSizeGb": 100 } }
+```
+
+The volume is deleted with the instance, so it only bills for the Run's
+lifetime — except on a `--retain`ed Run, whose stopped instance keeps its EBS
+root until the retention period reclaims it.
+
+## Boot payload (user-data)
+
+The whole Run recipe travels in the instance's `user_data`: docker daemon
+config, ECR login, the agent-image pull, the SSM secret fetches, **the
+developer's compose file**, the command, and the shutdown path. EC2 caps that at
+16 KB (counted base64-encoded), which a compose file with a few sidecars can
+reach on its own.
+
+afk therefore **gzips** the script before base64-encoding it — cloud-init
+decompresses gzipped user-data itself, so nothing on the VM changes, and the
+typical ratio on these scripts is 4-5x. If even the compressed payload would
+exceed the ceiling, the CLI refuses before AWS does, with a message that names
+the compose file and the command as the things to shorten (AWS's own error names
+nothing).
+
 ## Secrets
 
 Stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The `user_data` script resolves references at boot via the VM's instance profile and exports them into the compose stack. Values never appear in `DescribeInstances`, CloudTrail (beyond the parameter name), or instance tags.
