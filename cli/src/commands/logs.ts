@@ -2,6 +2,7 @@ import { Args, Command, Options } from "@effect/cli"
 import { Effect, Option } from "effect"
 import { RunService } from "../services/RunService.ts"
 import { LogStore } from "../services/backend/LogStore.ts"
+import { Compute } from "../services/backend/Compute.ts"
 import { ConfigService } from "../services/ConfigService.ts"
 import { HistoryService } from "../services/HistoryService.ts"
 import { pickRunId } from "./pickRun.ts"
@@ -32,6 +33,7 @@ export const logs = Command.make(
       const runs = yield* RunService
       // LogStore is the active backend's tailer, not a fixed provider adapter.
       const logStore = yield* LogStore
+      const compute = yield* Compute
       const cfg = yield* ConfigService
       const hist = yield* HistoryService
 
@@ -62,8 +64,11 @@ export const logs = Command.make(
               if (matches.length === 0) {
                 return Effect.fail(
                   new UserError({
-                    message: `Run ${picked.value} not found.`,
-                    hint: "Use `afk history` to list past Runs.",
+                    message: `Run ${picked.value} not found on backend ${compute.backendName}.`,
+                    // A Run started under a DIFFERENT backend is invisible here:
+                    // the backend comes from the working directory's
+                    // afk.config.json, so a branch switch silently repoints it.
+                    hint: "Use `afk history` to list past Runs. If the Run was started on another backend, check `backend` in this directory's afk.config.json.",
                   }),
                 )
               }
