@@ -65,6 +65,27 @@ const extractServicePorts = (svc: YAMLMap): string[] => {
   return out
 }
 
+/** Whether a service hands `${AFK_COMMAND}` to the container at all — spliced into `command:`, or
+ *  passed as an environment value for a wrapper to run. Both are honoured; see the refusal below. */
+const referencesAfkCommand = (main: YAMLMap): boolean => {
+  const scalarText = (node: unknown): string =>
+    node instanceof Scalar && typeof node.value === "string" ? node.value : typeof node === "string" ? node : ""
+
+  const command = main.get("command")
+  const commandItems =
+    command instanceof YAMLSeq ? command.items.map(scalarText) : [scalarText(command)]
+  if (commandItems.some((item) => item.includes("${AFK_COMMAND}"))) return true
+
+  const env = main.get("environment")
+  const envValues =
+    env instanceof YAMLMap
+      ? env.items.map((pair) => scalarText(pair.value))
+      : env instanceof YAMLSeq
+        ? env.items.map(scalarText)
+        : []
+  return envValues.some((value) => value.includes("${AFK_COMMAND}"))
+}
+
 export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
   const doc = (() => {
     try {
@@ -139,15 +160,16 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
       hint: `Add: env_file: ["\${AFK_ENV_FILE}"] — without it the container will not see .afk.env values or AFK_GIT_*/GITHUB_TOKEN, and the entrypoint will fail.`,
     })
   }
-  const command = main.get("command")
-  const commandStr = command instanceof Scalar ? command.value : command
-  if (
-    typeof commandStr !== "string" ||
-    !commandStr.includes("${AFK_COMMAND}")
-  ) {
+  // The developer's command must REACH the container. `command:` is the obvious way, and the
+  // common one — but not the only correct one: a project whose main service runs a wrapper (setup,
+  // then the command, then a publication step) is better served handing the command over through
+  // the ENVIRONMENT, because compose then interpolates it as a value and no shell re-quotes it on
+  // the way in. A command carrying quotes survives that; spliced into a shell string it may not.
+  // So accept either, and refuse only when `${AFK_COMMAND}` appears nowhere in the service.
+  if (!referencesAfkCommand(main)) {
     throw new UserError({
-      message: `main service '${input.mainService}' does not declare 'command: \${AFK_COMMAND}'.`,
-      hint: `Add: command: \${AFK_COMMAND} — otherwise the args you pass to 'afk run' are silently ignored in favour of any static command:, or the container runs with no command at all.`,
+      message: `main service '${input.mainService}' never references '\${AFK_COMMAND}'.`,
+      hint: `Add: command: \${AFK_COMMAND} — or, if the service runs a wrapper, pass it through the environment (e.g. environment: AFK_COMMAND_INNER: "\${AFK_COMMAND}") and have the wrapper run that. Otherwise the args you pass to 'afk run' are silently ignored in favour of any static command:, or the container runs with no command at all.`,
     })
   }
 
