@@ -12,6 +12,7 @@ import { assembleRunPlan } from "../../services/RunPlan.ts"
 import { buildUserData } from "../../services/UserData.ts"
 import { collectionBases } from "../../services/SessionArtifact.ts"
 import { retainedUntilIso } from "../../services/retention.ts"
+import { stableOwnerId } from "./OwnerId.ts"
 import {
   artifactsBucketPrefix,
   DEFAULT_INSTANCE_TYPE,
@@ -285,7 +286,7 @@ export const planAwsRun = (
   const spot = !onDemand
 
   const tags: ReadonlyArray<Ec2Tag> = [
-    { key: TAG_OWNER, value: identity.UserId },
+    { key: TAG_OWNER, value: stableOwnerId(identity.UserId) },
     { key: TAG_RUN_ID, value: i.runId },
     { key: TAG_BRANCH, value: built.branch },
     { key: TAG_SHA, value: built.sha },
@@ -310,7 +311,7 @@ export const planAwsRun = (
       mainService,
       timeoutHours,
       timeoutSeconds,
-      owner: identity.UserId,
+      owner: stableOwnerId(identity.UserId),
       repoName: i.sourceRepoName,
       env,
       secrets,

@@ -37,6 +37,7 @@ import {
   toRunStarted,
 } from "./AwsRunPlan.ts"
 import { resolveRunByIdPrefix } from "../../services/RunIdPrefix.ts"
+import { ownerTagValues, stableOwnerId } from "./OwnerId.ts"
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 
@@ -68,7 +69,9 @@ export const AwsComputeLive = Layer.effect(
         const retentionDays = yield* resolveRetentionDays
         const tagFilters = [
           { key: TAG_MANAGED, values: ["true"] },
-          ...(ownerUserId ? [{ key: TAG_OWNER, values: [ownerUserId] }] : []),
+          ...(ownerUserId
+            ? [{ key: TAG_OWNER, values: ownerTagValues(ownerUserId) }]
+            : []),
         ]
         const instances = yield* ec2.describeInstances({
           region,
@@ -311,7 +314,9 @@ export const AwsComputeLive = Layer.effect(
     const callerPrincipal = Effect.gen(function* () {
       const identity = yield* sts.callerIdentity
       return {
-        id: identity.UserId,
+        // Stable across credential refreshes — see OwnerId.ts. The Arn still
+        // carries the session name, so the human stays visible in `displayName`.
+        id: stableOwnerId(identity.UserId),
         displayName: identity.Arn,
       }
     })
