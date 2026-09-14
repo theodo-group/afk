@@ -38,54 +38,67 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
     yield* out.emit({
       data: filtered,
       human: () =>
-        out.printTable(filtered, [
-          { header: "RUN ID", value: (r) => r.runId },
-          { header: "STATUS", value: (r) => r.status },
-          {
-            // A retained (STOPPED) Run is still resumable via `afk attach` until
-            // this window closes; blank for Runs that aren't retained.
-            header: "RETAINED",
-            value: (r) => {
-              if (!r.retainedUntil) return "-"
-              const ms = Date.parse(r.retainedUntil) - Date.now()
-              if (ms <= 0) return "expiring"
-              const days = Math.ceil(ms / 86_400_000)
-              return `~${days}d`
+        Effect.gen(function* () {
+          // Name the backend the listing came from. An empty table is otherwise
+          // indistinguishable from a listing of the WRONG cloud — the backend is
+          // resolved from the config file in the working directory, so a branch
+          // switch can silently repoint it (afk.config.json's `backend`).
+          // `region` is the aws config field; naming it under another backend
+          // would print a region that backend never uses.
+          yield* out.print(
+            compute.backendName === "aws"
+              ? `backend: aws (${region})`
+              : `backend: ${compute.backendName}`,
+          )
+          yield* out.printTable(filtered, [
+            { header: "RUN ID", value: (r) => r.runId },
+            { header: "STATUS", value: (r) => r.status },
+            {
+              // A retained (STOPPED) Run is still resumable via `afk attach` until
+              // this window closes; blank for Runs that aren't retained.
+              header: "RETAINED",
+              value: (r) => {
+                if (!r.retainedUntil) return "-"
+                const ms = Date.parse(r.retainedUntil) - Date.now()
+                if (ms <= 0) return "expiring"
+                const days = Math.ceil(ms / 86_400_000)
+                return `~${days}d`
+              },
             },
-          },
-          { header: "BRANCH", value: (r) => r.branch },
-          { header: "SHA", value: (r) => r.sha.slice(0, 12) },
-          {
-            header: "TYPE",
-            value: (r) => {
-              const t =
-                r.backendDetails?.instanceType ??
-                r.backendDetails?.instanceTier ??
-                "-"
-              const spot = r.backendDetails?.spot === "true"
-              return `${t}${spot ? "/spot" : ""}`
+            { header: "BRANCH", value: (r) => r.branch },
+            { header: "SHA", value: (r) => r.sha.slice(0, 12) },
+            {
+              header: "TYPE",
+              value: (r) => {
+                const t =
+                  r.backendDetails?.instanceType ??
+                  r.backendDetails?.instanceTier ??
+                  "-"
+                const spot = r.backendDetails?.spot === "true"
+                return `${t}${spot ? "/spot" : ""}`
+              },
             },
-          },
-          { header: "OWNER", value: (r) => r.owner },
-          { header: "STARTED", value: (r) => r.startedAt ?? "-" },
-          {
-            header: "COST",
-            value: (r) => {
-              if (!r.startedAt) return "-"
-              if (r.backend !== "aws") return "-"
-              const instanceType = r.backendDetails?.instanceType ?? ""
-              const spot = r.backendDetails?.spot === "true"
-              const c = estimateCost(
-                region,
-                instanceType,
-                spot,
-                r.startedAt,
-                r.stoppedAt,
-              )
-              return c ? formatUsd(c.usd) : "-"
+            { header: "OWNER", value: (r) => r.owner },
+            { header: "STARTED", value: (r) => r.startedAt ?? "-" },
+            {
+              header: "COST",
+              value: (r) => {
+                if (!r.startedAt) return "-"
+                if (r.backend !== "aws") return "-"
+                const instanceType = r.backendDetails?.instanceType ?? ""
+                const spot = r.backendDetails?.spot === "true"
+                const c = estimateCost(
+                  region,
+                  instanceType,
+                  spot,
+                  r.startedAt,
+                  r.stoppedAt,
+                )
+                return c ? formatUsd(c.usd) : "-"
+              },
             },
-          },
-        ]),
+          ])
+        }),
     })
   }),
 )

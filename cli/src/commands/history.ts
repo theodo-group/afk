@@ -72,7 +72,14 @@ export const history = Command.make(
         data: filtered,
         human: () =>
           filtered.length === 0
-            ? out.print("(no Runs matched)")
+            ? // Name the backend: "no Runs" and "you queried the wrong cloud"
+              // look identical otherwise. The backend comes from the working
+              // directory's afk.config.json, so a branch switch can repoint it.
+              out.print(
+                compute.backendName === "aws"
+                  ? `(no Runs matched on backend aws / ${region})`
+                  : `(no Runs matched on backend ${compute.backendName})`,
+              )
             : out.printTable(filtered, [
                 { header: "RUN ID", value: (r) => r.runId },
                 { header: "STATUS", value: (r) => r.status },
