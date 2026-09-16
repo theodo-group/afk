@@ -66,7 +66,9 @@ Backends:
 
 ## Owner
 
-The developer principal that launched a Run. The form of the principal is [[backend]]-specific — an IAM userid on AWS, a Cloudflare Access service-token client-id on Cloudflare, the authenticated gcloud account (user or service-account email) on GCP — but the role is the same: it scopes what the developer can see, attach to, or terminate. The Owner is recorded on the underlying compute primitive (an `afk:owner` EC2 tag on AWS, a metadata field on the launcher Worker's [[run-registry]] on Cloudflare, an `afk-owner` label on the Compute Engine instance on GCP). A developer is normally only permitted to act on Runs whose Owner matches their own principal; team-wide views (`afk ls --all`) are a separate, broader permission.
+The developer principal that launched a Run. The form of the principal is [[backend]]-specific — on AWS the whole `sts:GetCallerIdentity` `UserId`, which for an assumed role is `<principal-id>:<session-name>`; a Cloudflare Access service-token client-id on Cloudflare; the authenticated gcloud account (user or service-account email) on GCP — but the role is the same: it scopes what the developer can see, attach to, or terminate. The Owner is recorded on the underlying compute primitive (an `afk:owner` EC2 tag on AWS, a metadata field on the launcher Worker's [[run-registry]] on Cloudflare, an `afk-owner` label on the Compute Engine instance on GCP). A developer is normally only permitted to act on Runs whose Owner matches their own principal; team-wide views (`afk ls --all`) are a separate, broader permission.
+
+On AWS the session name is the only half that differs between two developers sharing one role, so it is what makes them distinct Owners. A session nobody named — the aws CLI's `botocore-session-<epoch>`, minted afresh on every credential refresh — cannot be tagged, since the Run would drop out of its own `afk ls` within the hour; such a caller falls back to the role itself as Owner, sees every Run the role launched as if it were theirs, and is warned.
 
 ## Dockerfile Contract
 
