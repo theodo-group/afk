@@ -187,9 +187,18 @@ export class Compute extends Context.Tag("Compute")<
     /**
      * Get the caller's principal id for this Backend. AWS: STS UserId.
      * Cloudflare: Access service-token client-id (or "local" in single-dev mode).
+     *
+     * `ownerWarning` is set when the principal does not identify a person, so
+     * several developers resolve to the same [[owner]] and see each other's
+     * Runs. The text is Backend-specific and ready to print — the remedy is too
+     * — so commands log it and carry on rather than interpret it.
      */
     readonly callerPrincipal: Effect.Effect<
-      { readonly id: string; readonly displayName: string },
+      {
+        readonly id: string
+        readonly displayName: string
+        readonly ownerWarning?: string
+      },
       AwsError | CloudflareError | GcpError | UserError | ConfigError
     >
   }

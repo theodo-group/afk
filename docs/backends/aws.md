@@ -37,6 +37,7 @@ Run once per AWS account/team.
   - `ec2:CreateTags` at launch; `ec2:DescribeInstances` (read-only); `ec2:TerminateInstances` and `ssm:StartSession`/`TerminateSession` conditioned on `ec2:ResourceTag/afk:owner = ${aws:userid}`.
   - `ecr:*` on `afk/*`; `ssm:{Put,Get,Delete}Parameter` on `/afk/*`; `logs:{CreateLogGroup,PutRetentionPolicy,GetLogEvents}` on `/afk/*`.
 - An admin attaches `afk-developer` to whichever IAM users/roles get access.
+- **Name your role session.** Both conditions above compare a tag to `${aws:userid}` with `StringEquals`, and for an assumed role that expands to `<principal-id>:<session-name>` — so they only hold when the session name is stable across credential refreshes. Set it once per profile: `aws configure set role_session_name firstname.lastname --profile <profile>`. Leave it unset and the aws CLI mints `botocore-session-<epoch>` afresh each refresh, which no tag can keep equalling: `RunInstances` is denied at launch, and `TerminateInstances` / `StartSession` an hour later. It is also what makes an Owner a person — on a role several developers assume, the session name is the only half that differs between them, so without it `afk ls` shows each of them the whole team's Runs. `afk run` warns when it sees one.
 
 ### Storage / state
 
@@ -112,6 +113,8 @@ Stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The 
 ## Run state and querying
 
 - `afk ls` → `ec2:DescribeInstances` filtered by tags + instance-state. EC2 retains terminated instances for ~1 hour, so recent Runs stay visible.
+- The owner filter matches the `afk:owner` tag **exactly** — no wildcard — so two developers on one shared role see different Runs, provided each has named their session (see Identity). A caller who has not sees only Runs tagged with the bare role.
+- Runs launched before named sessions are tagged with the role rather than a person, so they no longer match a named caller's `afk ls`. They are still reachable with `afk ls --all` and `afk kill <run-id>`, and the sweeper still reaps them; the gap closes as they expire.
 - `afk ls --all` drops the owner filter (requires broader IAM).
 - `afk history` reads the DynamoDB `afk-runs` table for older Runs.
 

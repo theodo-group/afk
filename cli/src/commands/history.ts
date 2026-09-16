@@ -56,7 +56,9 @@ export const history = Command.make(
         yield* DateTime.now,
         duration,
       )
-      const owner = all ? undefined : (yield* compute.callerPrincipal).id
+      const me = all ? undefined : yield* compute.callerPrincipal
+      if (me?.ownerWarning) yield* Effect.logWarning(me.ownerWarning)
+      const owner = me?.id
 
       const rows = yield* hist.query({
         owner,

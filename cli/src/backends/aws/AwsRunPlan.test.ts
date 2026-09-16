@@ -19,6 +19,7 @@ const baseInput = (
   overrides: {
     readonly config?: Partial<AfkConfig>
     readonly startInput?: Partial<StartInput>
+    readonly identity?: Partial<PlanAwsRunInput["identity"]>
   } = {},
 ): PlanAwsRunInput => ({
   config: {
@@ -27,7 +28,11 @@ const baseInput = (
   } as AfkConfig,
   envEntries: [],
   sourceRepoName: "widget",
-  identity: { Account: "111122223333", UserId: "AIDAEXAMPLE" },
+  identity: {
+    Account: "111122223333",
+    UserId: "AIDAEXAMPLE",
+    ...overrides.identity,
+  },
   latestGoldenId: "ami-0abc",
   composeContent: undefined,
   input: {
@@ -64,6 +69,42 @@ describe("planAwsRun", () => {
       expect(tags[TAG_OWNER]).toBe("AIDAEXAMPLE")
       expect(tags[TAG_RUN_ID]).toBe("11111111-2222-3333-4444-555555555555")
     }
+  })
+
+  it("tags a Run with the whole userid, so afk:owner names a developer", () => {
+    const result = planAwsRun(
+      baseInput({ identity: { UserId: "AROAEXAMPLE:alice.martin" } }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const core = result.right
+      expect(core.preparedBase.owner).toBe("AROAEXAMPLE:alice.martin")
+      const tags = Object.fromEntries(
+        core.backendPlanBase.tags.map((t) => [t.key, t.value]),
+      )
+      expect(tags[TAG_OWNER]).toBe("AROAEXAMPLE:alice.martin")
+      expect(core.warnings).toEqual([])
+    }
+  })
+
+  it("falls back to the role, and warns, when the session names nobody", () => {
+    const result = planAwsRun(
+      baseInput({
+        identity: { UserId: "AROAEXAMPLE:botocore-session-1789562608" },
+      }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const core = result.right
+      expect(core.preparedBase.owner).toBe("AROAEXAMPLE")
+      expect(core.warnings.join(" ")).toContain("botocore-session-1789562608")
+    }
+  })
+
+  it("launches an IAM user's Run unwarned — there is no session to name", () => {
+    const result = planAwsRun(baseInput())
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) expect(result.right.warnings).toEqual([])
   })
 
   it("rejects an instance type outside allowedInstanceTypes", () => {

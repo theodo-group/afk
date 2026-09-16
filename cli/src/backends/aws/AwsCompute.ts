@@ -37,7 +37,11 @@ import {
   toRunStarted,
 } from "./AwsRunPlan.ts"
 import { resolveRunByIdPrefix } from "../../services/RunIdPrefix.ts"
-import { ownerTagValues, stableOwnerId } from "./OwnerId.ts"
+import {
+  anonymousOwnerWarning,
+  ownerTagValues,
+  resolveOwner,
+} from "./OwnerId.ts"
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 
@@ -316,11 +320,13 @@ export const AwsComputeLive = Layer.effect(
 
     const callerPrincipal = Effect.gen(function* () {
       const identity = yield* sts.callerIdentity
+      const owner = resolveOwner(identity.UserId)
       return {
-        // Stable across credential refreshes — see OwnerId.ts. The Arn still
-        // carries the session name, so the human stays visible in `displayName`.
-        id: stableOwnerId(identity.UserId),
+        id: owner.id,
         displayName: identity.Arn,
+        ...(owner.anonymous
+          ? { ownerWarning: anonymousOwnerWarning(identity.UserId) }
+          : {}),
       }
     })
 

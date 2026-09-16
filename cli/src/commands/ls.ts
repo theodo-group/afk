@@ -25,6 +25,7 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
     const region = config.aws?.region ?? DEFAULT_REGION
 
     const me = yield* compute.callerPrincipal
+    if (!all && me.ownerWarning) yield* Effect.logWarning(me.ownerWarning)
     const list = all ? yield* runs.listAll : yield* runs.listMine(me.id)
 
     const filtered = list.filter((r) =>
