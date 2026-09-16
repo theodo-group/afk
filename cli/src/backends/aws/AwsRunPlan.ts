@@ -12,7 +12,7 @@ import { assembleRunPlan } from "../../services/RunPlan.ts"
 import { buildUserData } from "../../services/UserData.ts"
 import { collectionBases } from "../../services/SessionArtifact.ts"
 import { retainedUntilIso } from "../../services/retention.ts"
-import { stableOwnerId } from "./OwnerId.ts"
+import { anonymousOwnerWarning, resolveOwner } from "./OwnerId.ts"
 import {
   artifactsBucketPrefix,
   DEFAULT_INSTANCE_TYPE,
@@ -287,8 +287,10 @@ export const planAwsRun = (
   const onDemand = explicitOnDemand || retain
   const spot = !onDemand
 
+  const owner = resolveOwner(identity.UserId)
+
   const tags: ReadonlyArray<Ec2Tag> = [
-    { key: TAG_OWNER, value: stableOwnerId(identity.UserId) },
+    { key: TAG_OWNER, value: owner.id },
     { key: TAG_RUN_ID, value: i.runId },
     { key: TAG_BRANCH, value: built.branch },
     { key: TAG_SHA, value: built.sha },
@@ -302,7 +304,9 @@ export const planAwsRun = (
 
   return Either.right({
     region,
-    warnings: assembled.warnings,
+    warnings: owner.anonymous
+      ? [...assembled.warnings, anonymousOwnerWarning(identity.UserId)]
+      : assembled.warnings,
     preparedBase: {
       runId: i.runId,
       command: input.command,
@@ -313,7 +317,7 @@ export const planAwsRun = (
       mainService,
       timeoutHours,
       timeoutSeconds,
-      owner: stableOwnerId(identity.UserId),
+      owner: owner.id,
       repoName: i.sourceRepoName,
       env,
       secrets,
