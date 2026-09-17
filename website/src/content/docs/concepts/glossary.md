@@ -228,6 +228,15 @@ pre-pull list from the active Backend's section of `afk.config.json`. A Run
 refuses to start if no Golden Image exists for the active Backend; there is no
 implicit on-demand build.
 
+## Local Inputs
+
+The files a Run takes from the developer's working tree rather than from the
+clone of origin: `afk.Dockerfile` (the image), `afk.compose.yml` (the sidecar
+graph) and `afk.config.json` (the project configuration). They are the only path
+by which local state reaches a Run, so `afk run` refuses to start while any of
+them carries uncommitted changes — and lets the rest of the tree stay dirty,
+since the source is cloned at the [Ref](#ref) regardless.
+
 ## Ref
 
 The git reference a Run executes against — a branch name, tag, or commit sha.

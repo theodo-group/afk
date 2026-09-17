@@ -15,7 +15,7 @@ import {
   GitError,
   ConfigError,
 } from "../infra/Errors.ts"
-import { ecrRepoPrefix } from "../constants.ts"
+import { LOCAL_INPUTS, ecrRepoPrefix } from "../constants.ts"
 
 const ENTRYPOINT_SOURCE = resolve(
   import.meta.dir,
@@ -81,14 +81,15 @@ export const BuildServiceLive = Layer.effect(
         Effect.gen(function* () {
           const { config, projectRoot, sourceRepoName } = yield* cfg.load
 
-          // Clean tree + a ref that resolves on origin together guarantee the
-          // cloud build is exactly what's on origin — no dirty or unpushed state.
-          const clean = yield* git.isClean
-          if (!clean) {
+          // The Run clones origin at the ref, so work in progress in the tree never
+          // reaches it — except through the Local Inputs, which are read from disk.
+          // Those must be committed; the rest of the tree is free to be dirty.
+          const dirty = yield* git.uncommittedChanges(LOCAL_INPUTS)
+          if (dirty.length > 0) {
             return yield* Effect.fail(
               new UserError({
-                message: "Working tree is dirty.",
-                hint: "Commit or stash your changes before building.",
+                message: `Uncommitted changes in ${dirty.join(", ")}.`,
+                hint: "These files are read from your working tree. Commit or stash them before building.",
               }),
             )
           }

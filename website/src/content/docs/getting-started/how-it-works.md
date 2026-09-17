@@ -7,7 +7,9 @@ Every Backend follows the same shape: `afk run` launches a compute primitive in
 your cloud, clones your repo at your current branch, and runs the command you
 gave it. In steps, the CLI:
 
-1. **Refuses** if the working tree is dirty or the ref isn't pushed to origin.
+1. **Refuses** if the ref isn't pushed to origin, or if a Local Input
+   (`afk.Dockerfile`, `afk.compose.yml`, `afk.config.json`) has uncommitted
+   changes.
 2. **Builds** your `afk.Dockerfile` into an agent image, wrapped with a
    CLI-owned entrypoint (skipped if the `<branch>-<sha>` image already exists).
 3. **Launches one compute primitive** for the Run — an EC2 VM on AWS, a Compute
@@ -56,9 +58,14 @@ flowchart LR
 - Code changes (constant) don't trigger a rebuild — `afk run` stays fast.
 - The image at a given tag is reproducible from the `afk.Dockerfile` alone.
 
-This is also why step 1 refuses to launch unless the working tree is clean and
-the ref is pushed to origin: it buys the invariant that **what runs in the
-cloud is exactly what's on origin** — no auto-push, no dirty-tag, no surprise
-branches. The same guards make `afk.Dockerfile` and `afk.compose.yml`
-trustworthy: both are read from the local working tree, and clean-tree +
-pushed-ref guarantee they match origin's content at the ref.
+This is also why step 1 refuses to launch unless the ref is pushed to origin:
+it buys the invariant that **what runs in the cloud is exactly what's on
+origin** — no auto-push, no dirty-tag, no surprise branches. Because the
+source is cloned rather than copied, the rest of your working tree can hold
+work in progress: `afk run --ref main` from a dirty checkout is fine. The
+exception is the three [Local Inputs](/afk/concepts/glossary/#local-inputs) —
+`afk.Dockerfile`, `afk.compose.yml`, `afk.config.json` — which afk reads from
+disk. Those must be committed, so the image and the Run Plan can be traced to
+a commit. Keep `afk.Dockerfile` free of `COPY`/`ADD` from the build context
+for the same reason: the toolchain is the image's job, the source is the
+clone's.

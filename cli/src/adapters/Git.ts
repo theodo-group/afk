@@ -2,10 +2,24 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../infra/Subprocess.ts"
 import { GitError, UserError } from "../infra/Errors.ts"
 
+/**
+ * Paths named by `git status --porcelain` output: two status columns, a space,
+ * then the path. A rename names both sides (`old -> new`); the new one is kept.
+ */
+export const changedPaths = (porcelain: string): ReadonlyArray<string> =>
+  porcelain
+    .split("\n")
+    .filter((line) => line.length > 3)
+    .map((line) => line.slice(3))
+    .map((path) => path.split(" -> ").at(-1) ?? path)
+
 export class Git extends Context.Tag("Git")<
   Git,
   {
-    readonly isClean: Effect.Effect<boolean, GitError>
+    /** Paths among `paths` that are modified, staged or untracked in the working tree. */
+    readonly uncommittedChanges: (
+      paths: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyArray<string>, GitError>
     readonly currentBranch: Effect.Effect<string, GitError>
     readonly headSha: Effect.Effect<string, GitError>
     /** Resolve a ref against origin (fetches metadata; never mutates working tree). */
@@ -37,9 +51,10 @@ export const GitLive = Layer.effect(
         )
 
     return Git.of({
-      isClean: exec(["status", "--porcelain"]).pipe(
-        Effect.map((r) => r.stdout.trim().length === 0),
-      ),
+      uncommittedChanges: (paths) =>
+        exec(["status", "--porcelain", "--", ...paths]).pipe(
+          Effect.map((r) => changedPaths(r.stdout)),
+        ),
       currentBranch: exec(["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
         Effect.map((r) => r.stdout.trim()),
       ),

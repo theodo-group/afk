@@ -142,6 +142,13 @@ export const CONFIG_FILE = "afk.config.json"
 export const ENV_FILE = ".afk.env"
 export const COMPOSE_FILE = "afk.compose.yml"
 export const DOCKERFILE = "afk.Dockerfile"
+// Local Inputs: the only files a Run takes from the developer's working tree.
+// Everything else reaches the Run through the clone of origin at the Ref.
+export const LOCAL_INPUTS: ReadonlyArray<string> = [
+  DOCKERFILE,
+  COMPOSE_FILE,
+  CONFIG_FILE,
+]
 
 // Substitution token the dev places in afk.compose.yml for the main-service image.
 export const AFK_IMAGE_PLACEHOLDER = "${AFK_IMAGE}"

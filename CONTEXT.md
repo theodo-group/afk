@@ -93,6 +93,10 @@ Despite the artifact difference, the role is identical: it's the layer below the
 
 Golden Images are built explicitly by `afk golden build`, which reads the pre-pull list from the active backend's section of `afk.config.json`. A Run refuses to start if no Golden Image exists for the active Backend; there is no implicit on-demand build.
 
+## Local Inputs
+
+The files a [[run]] takes from the developer's working tree rather than from the clone of origin: `afk.Dockerfile` (the image), `afk.compose.yml` (the sidecar graph) and `afk.config.json` (the project configuration). They are the only path by which local state reaches a Run, so `afk run` refuses to start while any of them carries uncommitted changes — and lets the rest of the tree stay dirty, since the source is cloned at the [[ref]] regardless.
+
 ## Ref
 
 The git reference a Run executes against — a branch name, tag, or commit sha. Resolved against the project's configured `AFK_GIT_URL` at Run start. Passed via `afk run --ref <ref>`; defaults to the developer's current local branch name. A Run refuses to start if the resolved ref isn't reachable on origin.
