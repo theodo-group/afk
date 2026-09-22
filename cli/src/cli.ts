@@ -4,7 +4,7 @@ import { Effect, Layer, Logger, LogLevel } from "effect"
 import { FetchHttpClient } from "@effect/platform"
 import { BunContext, BunRuntime } from "@effect/platform-bun"
 
-import { SubprocessLive } from "./infra/Subprocess.ts"
+import { makeSubprocessLive } from "./infra/Subprocess.ts"
 import { renderCause } from "./infra/Errors.ts"
 import { makeOutputLive, Output } from "./infra/Output.ts"
 import { consoleLogger } from "./infra/Logger.ts"
@@ -96,7 +96,13 @@ const local = Options.boolean("local").pipe(
 // To add another Backend, write its `<New>BackendLive` aggregate and add one
 // branch to the `backendLayer` dispatch below.
 
-const infraLayer = SubprocessLive
+// The mode is read off argv here rather than taken from the parsed options: the
+// layers are built before @effect/cli parses anything, and `makeSubprocessLive`
+// needs it to decide where an inherited child's stdout goes (Subprocess.ts).
+// `program` below reads the same argv for `makeOutputLive`.
+const outputMode = process.argv.includes("--json") ? "json" : "table"
+
+const infraLayer = makeSubprocessLive(outputMode)
 
 const adaptersLayer = Layer.mergeAll(
   GitLive,
@@ -179,7 +185,6 @@ const cli = Command.run(rootCommand, {
 
 const program = Effect.gen(function* () {
   const rawArgv = process.argv
-  const isJson = rawArgv.includes("--json")
   const isVerbose = rawArgv.includes("--verbose") || rawArgv.includes("-v")
   const isQuiet = rawArgv.includes("--quiet") || rawArgv.includes("-q")
 
@@ -190,7 +195,7 @@ const program = Effect.gen(function* () {
   // without a variadic-args command swallowing it as a literal argument.
   const argv = rawArgv.filter((a) => a !== "--local")
 
-  const OutputLive = makeOutputLive(isJson ? "json" : "table")
+  const OutputLive = makeOutputLive(outputMode)
   const level = isQuiet
     ? LogLevel.Error
     : isVerbose
