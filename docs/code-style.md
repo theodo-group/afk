@@ -104,7 +104,7 @@ const probeAll = Effect.all(services.map(probe))
 
 ## 5. Shelling out
 
-All subprocess execution through the `Subprocess` tag — `Bun.spawn` only in `infra/Subprocess.ts`. `run`/`runJson` for captured output, `runInteractive` for TTY shells, `stream` for long-lived follows killed on interruption (registers a kill finalizer; `runInteractive` does not).
+All subprocess execution through the `Subprocess` tag — `Bun.spawn` only in `infra/Subprocess.ts`. `run`/`runJson` for captured output, `runInteractive` for TTY shells, `stream` for long-lived follows killed on interruption (registers a kill finalizer; `runInteractive` does not). Under `--json` an inherited child's stdout is redirected to stderr, so stdout stays parseable; `stream` is exempt, since there the child's output is the payload.
 
 ## 6. Schemas
 

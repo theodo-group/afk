@@ -108,6 +108,9 @@ const spawn = (
   args: ReadonlyArray<string>,
   options: RunOptions = {},
   capture: boolean,
+  // Where an INHERITED child's stdout goes. "inherit" is our own stdout, 2 is
+  // our stderr — see `makeSubprocessLive`. Ignored when `capture` is true.
+  inheritedStdout: "inherit" | 2 = "inherit",
 ): Effect.Effect<RunResult, SubprocessError> =>
   Effect.tryPromise({
     try: async () => {
@@ -116,7 +119,7 @@ const spawn = (
         cwd: options.cwd,
         env: options.env ? { ...process.env, ...options.env } : process.env,
         stdin: options.stdin ? "pipe" : capture ? "ignore" : "inherit",
-        stdout: capture ? "pipe" : "inherit",
+        stdout: capture ? "pipe" : inheritedStdout,
         stderr: capture ? "pipe" : "inherit",
       })
       if (options.stdin && proc.stdin) {
@@ -124,7 +127,11 @@ const spawn = (
         proc.stdin.end()
       }
       const [stdout, stderr, exitCode] = await Promise.all([
-        capture ? new Response(proc.stdout).text() : Promise.resolve(""),
+        // `capture` is what made stdout a "pipe" above, but the stdio union now
+        // admits a file descriptor, which Bun's types no longer narrow for us.
+        capture
+          ? new Response(proc.stdout as ReadableStream<Uint8Array>).text()
+          : Promise.resolve(""),
         capture ? new Response(proc.stderr).text() : Promise.resolve(""),
         proc.exited,
       ])
@@ -154,32 +161,55 @@ const spawn = (
     ),
   )
 
-export const SubprocessLive = Layer.succeed(
-  Subprocess,
-  Subprocess.of({
-    run: (command, args, options) => spawn(command, args, options, true),
-    runJson: <T = unknown>(
-      command: string,
-      args: ReadonlyArray<string>,
-      options?: RunOptions,
-    ) =>
-      spawn(command, args, options, true).pipe(
-        Effect.flatMap((result) =>
-          Effect.try({
-            try: () => JSON.parse(result.stdout) as T,
-            catch: (cause) =>
-              new ParseError({
-                source: `${command} ${args.join(" ")}`,
-                cause,
-              }),
-          }),
+/**
+ * `--json` promises a stdout that parses. But `runInteractive` hands the child
+ * our own stdout, and build tooling writes to it: `docker push` opens with "The
+ * push refers to repository [...]", which lands ahead of the JSON and makes the
+ * whole stream unparseable for any programmatic caller.
+ *
+ * So in json mode an inherited child's stdout is redirected to fd 2 — the
+ * developer still sees the build, and stdout carries nothing but our payload.
+ *
+ * `stream` is deliberately left alone: there the child's output IS the answer
+ * (`afk logs --follow`), so diverting it would empty the stdout it exists to
+ * fill.
+ */
+export const makeSubprocessLive = (
+  mode: "table" | "json",
+): Layer.Layer<Subprocess> => {
+  const inheritedStdout = mode === "json" ? 2 : "inherit"
+  return Layer.succeed(
+    Subprocess,
+    Subprocess.of({
+      run: (command, args, options) => spawn(command, args, options, true),
+      runJson: <T = unknown>(
+        command: string,
+        args: ReadonlyArray<string>,
+        options?: RunOptions,
+      ) =>
+        spawn(command, args, options, true).pipe(
+          Effect.flatMap((result) =>
+            Effect.try({
+              try: () => JSON.parse(result.stdout) as T,
+              catch: (cause) =>
+                new ParseError({
+                  source: `${command} ${args.join(" ")}`,
+                  cause,
+                }),
+            }),
+          ),
         ),
-      ),
-    runInteractive: (command, args, options) =>
-      spawn(command, args, options, false).pipe(Effect.asVoid),
-    stream,
-  }),
-)
+      runInteractive: (command, args, options) =>
+        spawn(command, args, options, false, inheritedStdout).pipe(
+          Effect.asVoid,
+        ),
+      stream,
+    }),
+  )
+}
+
+/** Human mode: every inherited child writes to the terminal it was given. */
+export const SubprocessLive = makeSubprocessLive("table")
 
 /** Helper for use inside services: succeed if the program is on PATH. */
 export const checkBinary = (
