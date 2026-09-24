@@ -1,47 +1,54 @@
 dev: "<b>Développeur</b><br><small>CLI afk · compte Google STIME</small>" { shape: person }
 
-iap: "<b>Identity-Aware Proxy</b><br><small>accès conditionné :<br>IP du VPN STIME uniquement</small>"
+arImages: "<b>Artifact Registry · Docker</b><br><small>europe-docker.pkg.dev<br>image agent (base : builder jdk-21 CI)</small>"
+arMaven: "<b>Artifact Registry · stime-proxy</b><br><small>europe-maven.pkg.dev<br>dépendances Gradle (déjà utilisé)</small>"
 
-arStime: "<b>Artifact Registry STIME</b><br><small>images agent + golden<br>proxys npm / PyPI [option]</small>"
+iap: "<b>Identity-Aware Proxy</b><br><small>tunnel conditionné :<br>IP de sortie du VPN STIME</small>"
 
-golden: "<b>Golden Image</b><br><small>image GCE custom</small>"
-secrets: "<b>Secret Manager</b><br><small>tokens Claude et GitLab<br>comptes homologation</small>"
+golden: "<b>Golden Image</b><br><small>Debian 12 + Docker + gcloud</small>"
+secrets: "<b>Secret Manager</b><br><small>jeton Claude par dév.<br>tokens GitLab, JitPack, GitHub</small>"
 logging: "<b>Cloud Logging</b><br><small>logs des Runs</small>"
-artifacts: "<b>Cloud Storage</b><br><small>Session Artifacts</small>"
+artifacts: "<b>Cloud Storage</b><br><small>transcripts de session</small>"
 
-host: "<b>VM Run</b> (Compute Engine)<br><small>sans IP publique · éphémère<br>max_run_duration</small>"
-agent: "<b>Agent Claude Code</b><br><small>conteneur · /workspace</small>"
-sidecars: "<b>Sidecars</b><br><small>docker compose</small>"
-firewall: "<b>Firewall</b><br><small>in : tcp/22 depuis IAP uniquement<br>out : deny par défaut + allowlist</small>"
-hybrid: "<b>Cloud VPN / Interconnect</b><br><small>connectivité STIME<br>[existante ?]</small>"
-nat: "<b>Cloud NAT</b><br><small>IP statiques<br>allowlist de domaines</small>"
+host: "<b>VM Run</b> (n2-standard-8)<br><small>sans IP publique · Spot<br>100 Go · 4 h max</small>"
+agent: "<b>Agent Claude Code</b><br><small>conteneur · JDK 21 · SDK Android<br>Gradle, detekt, tests JVM</small>"
+firewall: "<b>Firewall</b><br><small>in : tcp/22 depuis IAP seulement<br>out : deny par défaut + allowlist</small>"
+nat: "<b>Cloud NAT</b><br><small>IP statiques (MANUAL_ONLY)<br>filtrage FQDN</small>"
+hybrid: "<b>Lien privé STIME</b><br><small>option B : Shared VPC,<br>peering ou Interconnect</small>"
 
-gitlab: "<b>GitLab STIME</b><br><small>HTTPS 443 (clone, push)</small>"
-homolo: "<b>Homologation</b><br><small>[CIDR et ports à définir]</small>"
-anthropic: "<b>API Anthropic</b><br><small>licences Claude Team/Enterprise<br>api.anthropic.com · platform.claude.com</small>"
+gitlab: "<b>GitLab STIME</b><br><small>gitlab-ecommerce.intermarche.com<br>HTTPS 443 · clone, push, MR</small>"
+ci: "<b>CI GitLab STIME</b><br><small>runners existants : tests iOS,<br>Firebase Test Lab, Sonar</small>"
+homolo: "<b>Homologation</b> (phase 2)<br><small>homologation-api (liste blanche)<br>ou hml-api.internal (privé)</small>"
+
+anthropic: "<b>API Anthropic</b><br><small>licences Claude existantes<br>api.anthropic.com · platform.claude.com</small>"
+maven: "<b>Dépôts publics</b><br><small>Maven Central, Google, JitPack,<br>GitHub Packages… (à proxifier)</small>"
 
 firestore: "<b>Firestore</b><br><small>historique des Runs</small>"
 sweeper: "<b>Cloud Function sweeper</b><br><small>nettoyage</small>"
 scheduler: "<b>Cloud Scheduler</b><br><small>toutes les 5 min</small>"
 
-dev -> arStime: "docker push"
+dev -> arImages: "docker push"
 dev -> iap: "afk attach (SSH)"
 dev -> host: "instances.create"
 dev -> firestore: "afk history"
 iap -> firewall
-firewall -> host: "SSH"
+firewall -> host: "tcp/22"
 golden -> host: "boot"
 host -> agent: "docker run"
-agent -- sidecars
-host -> arStime: "pull"
+host -> arImages: "pull"
 host -> secrets: "au boot"
 host -> logging
 host -> artifacts
-agent -> hybrid: "réseau privé"
-hybrid -> gitlab
-hybrid -> homolo
-agent -> nat
-nat -> anthropic: "HTTPS 443"
+agent -> arMaven: "Gradle (ADC)"
+agent -> nat: "HTTPS 443"
+nat -> anthropic
+nat -> maven
+nat -> gitlab: "clone, push"
+nat -> homolo { style.stroke-dash: 4 }
+agent -> hybrid { style.stroke-dash: 4 }
+hybrid -> homolo { style.stroke-dash: 4 }
+hybrid -> gitlab { style.stroke-dash: 4 }
+gitlab -> ci: "pipeline de MR"
 scheduler -> sweeper
 sweeper -> firestore
 sweeper -> host { style.stroke-dash: 4 }
@@ -49,8 +56,9 @@ sweeper -> host { style.stroke-dash: 4 }
 vpn: "VPN STIME" {
   dev
 }
-stimeRegistry: "Projet GCP STIME (registre)" {
-  arStime
+stimeRegistry: "Projet GCP stime-red-automation" {
+  arImages
+  arMaven
 }
 apis: "Services Google (Private Google Access)" {
   golden
@@ -58,32 +66,33 @@ apis: "Services Google (Private Google Access)" {
   logging
   artifacts
 }
-vm: "VM Run (une par Run)" {
+vm: "VM Run (une par Run, jetable)" {
   host
   agent
-  sidecars
 }
-vpc: "Subnet AFK · Shared VPC STIME [à confirmer]" {
+vpc: "Subnet AFK · VPC dédié ou Shared VPC STIME" {
   vm
   firewall
-  hybrid
   nat
+  hybrid
 }
 sweep: "Historique & nettoyage" {
   firestore
   sweeper
   scheduler
 }
-gcp: "Projet GCP AFK (STIME)" {
+gcp: "Projet GCP AFK dédié · europe-west9 (Paris)" {
   iap
   apis
   vpc
   sweep
 }
+stime: "Services STIME" {
+  gitlab
+  ci
+  homolo
+}
 internet: "Internet (liste blanche)" {
   anthropic
-}
-onprem: "Réseau interne STIME" {
-  gitlab
-  homolo
+  maven
 }
