@@ -1,0 +1,89 @@
+dev: "<b>Développeur</b><br><small>CLI afk · compte Google STIME</small>" { shape: person }
+
+iap: "<b>Identity-Aware Proxy</b><br><small>accès conditionné :<br>IP du VPN STIME uniquement</small>"
+
+arStime: "<b>Artifact Registry STIME</b><br><small>images agent + golden<br>proxys npm / PyPI [option]</small>"
+
+golden: "<b>Golden Image</b><br><small>image GCE custom</small>"
+secrets: "<b>Secret Manager</b><br><small>token GitLab, comptes homologation</small>"
+logging: "<b>Cloud Logging</b><br><small>logs des Runs</small>"
+artifacts: "<b>Cloud Storage</b><br><small>Session Artifacts</small>"
+vertex: "<b>Vertex AI</b><br><small>modèle Claude<br>(reste dans GCP)</small>"
+
+host: "<b>VM Run</b> (Compute Engine)<br><small>sans IP publique · éphémère<br>max_run_duration</small>"
+agent: "<b>Agent Claude Code</b><br><small>conteneur · /workspace</small>"
+sidecars: "<b>Sidecars</b><br><small>docker compose</small>"
+firewall: "<b>Firewall</b><br><small>in : tcp/22 depuis IAP uniquement<br>out : deny par défaut + allowlist</small>"
+hybrid: "<b>Cloud VPN / Interconnect</b><br><small>connectivité STIME<br>[existante ?]</small>"
+nat: "<b>Cloud NAT</b><br><small>optionnel · IP statiques</small>"
+
+gitlab: "<b>GitLab STIME</b><br><small>HTTPS 443 (clone, push)</small>"
+homolo: "<b>Homologation</b><br><small>[CIDR et ports à définir]</small>"
+internet: "<b>Internet</b><br><small>uniquement si besoin<br>(allowlist FQDN)</small>"
+
+firestore: "<b>Firestore</b><br><small>historique des Runs</small>"
+sweeper: "<b>Cloud Function sweeper</b><br><small>nettoyage</small>"
+scheduler: "<b>Cloud Scheduler</b><br><small>toutes les 5 min</small>"
+
+dev -> arStime: "docker push"
+dev -> iap: "afk attach (SSH)"
+dev -> host: "instances.create"
+dev -> firestore: "afk history"
+iap -> firewall
+firewall -> host: "SSH"
+golden -> host: "boot"
+host -> agent: "docker run"
+agent -- sidecars
+host -> arStime: "pull"
+host -> secrets: "au boot"
+host -> logging
+host -> artifacts
+agent -> vertex: "API Claude"
+agent -> hybrid: "réseau privé"
+hybrid -> gitlab
+hybrid -> homolo
+agent -> nat { style.stroke-dash: 4 }
+nat -> internet { style.stroke-dash: 4 }
+scheduler -> sweeper
+sweeper -> firestore
+sweeper -> host { style.stroke-dash: 4 }
+
+vpn: "VPN STIME" {
+  dev
+}
+stimeRegistry: "Projet GCP STIME (registre)" {
+  arStime
+}
+apis: "Services Google (Private Google Access)" {
+  golden
+  secrets
+  logging
+  artifacts
+  vertex
+}
+vm: "VM Run (une par Run)" {
+  host
+  agent
+  sidecars
+}
+vpc: "Subnet AFK · Shared VPC STIME [à confirmer]" {
+  vm
+  firewall
+  hybrid
+  nat
+}
+sweep: "Historique & nettoyage" {
+  firestore
+  sweeper
+  scheduler
+}
+gcp: "Projet GCP AFK (STIME)" {
+  iap
+  apis
+  vpc
+  sweep
+}
+onprem: "Réseau interne STIME" {
+  gitlab
+  homolo
+}
