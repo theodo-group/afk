@@ -5,21 +5,20 @@ iap: "<b>Identity-Aware Proxy</b><br><small>accès conditionné :<br>IP du VPN S
 arStime: "<b>Artifact Registry STIME</b><br><small>images agent + golden<br>proxys npm / PyPI [option]</small>"
 
 golden: "<b>Golden Image</b><br><small>image GCE custom</small>"
-secrets: "<b>Secret Manager</b><br><small>token GitLab, comptes homologation</small>"
+secrets: "<b>Secret Manager</b><br><small>tokens Claude et GitLab<br>comptes homologation</small>"
 logging: "<b>Cloud Logging</b><br><small>logs des Runs</small>"
 artifacts: "<b>Cloud Storage</b><br><small>Session Artifacts</small>"
-vertex: "<b>Vertex AI</b><br><small>modèle Claude<br>(reste dans GCP)</small>"
 
 host: "<b>VM Run</b> (Compute Engine)<br><small>sans IP publique · éphémère<br>max_run_duration</small>"
 agent: "<b>Agent Claude Code</b><br><small>conteneur · /workspace</small>"
 sidecars: "<b>Sidecars</b><br><small>docker compose</small>"
 firewall: "<b>Firewall</b><br><small>in : tcp/22 depuis IAP uniquement<br>out : deny par défaut + allowlist</small>"
 hybrid: "<b>Cloud VPN / Interconnect</b><br><small>connectivité STIME<br>[existante ?]</small>"
-nat: "<b>Cloud NAT</b><br><small>optionnel · IP statiques</small>"
+nat: "<b>Cloud NAT</b><br><small>IP statiques<br>allowlist de domaines</small>"
 
 gitlab: "<b>GitLab STIME</b><br><small>HTTPS 443 (clone, push)</small>"
 homolo: "<b>Homologation</b><br><small>[CIDR et ports à définir]</small>"
-internet: "<b>Internet</b><br><small>uniquement si besoin<br>(allowlist FQDN)</small>"
+anthropic: "<b>API Anthropic</b><br><small>licences Claude Team/Enterprise<br>api.anthropic.com · platform.claude.com</small>"
 
 firestore: "<b>Firestore</b><br><small>historique des Runs</small>"
 sweeper: "<b>Cloud Function sweeper</b><br><small>nettoyage</small>"
@@ -38,12 +37,11 @@ host -> arStime: "pull"
 host -> secrets: "au boot"
 host -> logging
 host -> artifacts
-agent -> vertex: "API Claude"
 agent -> hybrid: "réseau privé"
 hybrid -> gitlab
 hybrid -> homolo
-agent -> nat { style.stroke-dash: 4 }
-nat -> internet { style.stroke-dash: 4 }
+agent -> nat
+nat -> anthropic: "HTTPS 443"
 scheduler -> sweeper
 sweeper -> firestore
 sweeper -> host { style.stroke-dash: 4 }
@@ -59,7 +57,6 @@ apis: "Services Google (Private Google Access)" {
   secrets
   logging
   artifacts
-  vertex
 }
 vm: "VM Run (une par Run)" {
   host
@@ -82,6 +79,9 @@ gcp: "Projet GCP AFK (STIME)" {
   apis
   vpc
   sweep
+}
+internet: "Internet (liste blanche)" {
+  anthropic
 }
 onprem: "Réseau interne STIME" {
   gitlab
