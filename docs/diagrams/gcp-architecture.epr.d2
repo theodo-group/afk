@@ -1,0 +1,89 @@
+dev: "<b>Développeur</b><br><small>CLI afk · compte gcloud (Owner)</small>" { shape: person }
+
+iap: "<b>Identity-Aware Proxy</b><br><small>tunnel TCP + OS Login</small>"
+
+host: "<b>VM Run</b> (Compute Engine)<br><small>Spot · sans IP publique<br>startup-script · max_run_duration</small>"
+agent: "<b>Agent Claude Code</b><br><small>conteneur · repo cloné dans /workspace</small>"
+sidecars: "<b>Sidecars</b><br><small>docker compose (postgres, redis…)</small>"
+firewall: "<b>Firewall</b><br><small>ingress tcp/22 depuis 35.235.240.0/20 uniquement<br>tout le reste : deny</small>"
+nat: "<b>Cloud NAT</b><br><small>egress uniquement</small>"
+
+golden: "<b>Golden Image</b><br><small>image GCE custom<br>(afk golden build)</small>"
+registry: "<b>Artifact Registry</b><br><small>images agent</small>"
+secrets: "<b>Secret Manager</b><br><small>secrets afk-*</small>"
+logging: "<b>Cloud Logging</b><br><small>driver gcplogs</small>"
+artifacts: "<b>Cloud Storage</b><br><small>Session Artifacts<br>privé · expiration 30 j</small>"
+firestore: "<b>Firestore</b><br><small>historique des Runs (afk-runs)</small>"
+
+scheduler: "<b>Cloud Scheduler</b><br><small>toutes les 5 min · OIDC</small>"
+sweeper: "<b>Cloud Function sweeper</b><br><small>réconcilie l'historique<br>supprime les Runs retenus expirés</small>"
+
+roleDev: "<b>Rôle afk-developer</b><br><small>instances.create/delete/start/stop<br>(subnet + types machine autorisés)<br>actAs afk-vm · IAP tunnel · OS Login</small>"
+saVm: "<b>SA afk-vm</b><br><small>AR reader · secrets afk-* · logWriter<br>objectCreator (bucket) · self-delete/stop</small>"
+saSweeper: "<b>SA afk-sweeper</b><br><small>instances.list/get/delete<br>datastore.user</small>"
+
+github: "<b>GitHub</b><br><small>clone du repo (token en secret)</small>"
+anthropic: "<b>API Anthropic</b><br><small>clé API en secret</small>"
+
+dev -> registry: "docker push"
+dev -> secrets: "afk secrets put"
+dev -> host: "instances.create"
+dev -> iap: "afk attach (SSH)"
+dev -> firestore: "afk history"
+iap -> firewall
+firewall -> host: "SSH"
+golden -> host: "boot"
+host -> agent: "docker run"
+agent -- sidecars
+host -> registry: "pull"
+host -> secrets: "lecture au boot"
+host -> logging: "logs"
+host -> artifacts: "upload fin de Run"
+agent -> nat
+nat -> github: "HTTPS"
+nat -> anthropic: "HTTPS"
+scheduler -> sweeper
+sweeper -> firestore: "réconcilie"
+sweeper -> host { style.stroke-dash: 4 }
+
+laptop: "Poste développeur" {
+  dev
+}
+vm: "VM Run (une par Run, auto-supprimée à la fin)" {
+  host
+  agent
+  sidecars
+}
+vpc: "VPC afk-vpc · subnet 10.40.0.0/20 · Private Google Access" {
+  vm
+  firewall
+  nat
+}
+apis: "Services Google managés (accès privé)" {
+  golden
+  registry
+  secrets
+  logging
+  artifacts
+}
+sweep: "Historique des Runs & nettoyage" {
+  firestore
+  scheduler
+  sweeper
+}
+iam: "IAM (moindre privilège)" {
+  roleDev
+  saVm
+  saSweeper
+}
+gcp: "Projet GCP (provisionné par terraform/gcp)" {
+  iap
+  vpc
+  apis
+  sweep
+  iam
+}
+internet: "Internet (via NAT)" {
+  github
+  anthropic
+}
