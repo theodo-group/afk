@@ -1,0 +1,37 @@
+{
+  "gridSize": 40,
+  "nodes": {
+    "anthropic": { "cx": 37, "cy": 14, "w": 6, "h": 3, "textSize": "L", "borderColor": "orange", "fillColor": "white", "icon": "lobe/ai/anthropic", "iconPosition": "top" },
+    "arStime": { "cx": 3, "cy": 3, "w": 6, "h": 3, "textSize": "L", "borderColor": "green", "fillColor": "white", "icon": "gcp/devtools/container-registry", "iconPosition": "top" },
+    "ci": { "cx": 45, "cy": 3, "w": 5, "h": 3, "textSize": "L", "borderColor": "orange", "fillColor": "white", "icon": "onprem/ci/gitlabci", "iconPosition": "top" },
+    "dev": { "cx": 3, "cy": 9, "w": 4, "h": 3, "textSize": "L", "borderColor": "gray" },
+    "gitlab": { "cx": 37, "cy": 3, "w": 6, "h": 3, "textSize": "L", "borderColor": "orange", "fillColor": "white", "icon": "onprem/vcs/gitlab", "iconPosition": "top" },
+    "google": { "cx": 20, "cy": 3, "w": 6, "h": 3, "textSize": "L", "borderColor": "teal", "fillColor": "white", "icon": "gcp/security/secret-manager", "iconPosition": "top" },
+    "homolo": { "cx": 37, "cy": 8, "w": 6, "h": 3, "textSize": "L", "borderColor": "purple", "borderStyle": "dashed", "fillColor": "white", "icon": "fontawesome/brands/android", "iconPosition": "top" },
+    "iap": { "cx": 12, "cy": 13, "w": 6, "h": 3, "textSize": "L", "borderColor": "blue", "fillColor": "white", "icon": "gcp/security/iap", "iconPosition": "top" },
+    "maven": { "cx": 45, "cy": 14, "w": 5, "h": 3, "textSize": "L", "borderColor": "gray", "fillColor": "white", "icon": "simpleicons/brand/gradle", "iconPosition": "top" },
+    "nat": { "cx": 28, "cy": 9, "w": 6, "h": 3, "textSize": "L", "borderColor": "blue", "fillColor": "white", "icon": "gcp/network/nat", "iconPosition": "top" },
+    "vm": { "cx": 20, "cy": 9, "w": 6, "h": 3, "textSize": "L", "borderColor": "orange", "fillColor": "white", "icon": "lobe/ai/claudecode", "iconPosition": "top" }
+  },
+  "edges": {
+    "dev->arStime": { "sourceSide": "N", "targetSide": "S", "width": "L" },
+    "dev->iap": { "sourceSide": "S", "targetSide": "W", "color": "blue", "width": "L" },
+    "dev->vm": { "color": "blue", "width": "L" },
+    "gitlab->ci": { "color": "orange", "width": "L" },
+    "iap->vm": { "sourceSide": "E", "targetSide": "S", "color": "blue", "width": "L" },
+    "nat->anthropic": { "color": "orange", "width": "L" },
+    "nat->gitlab": { "color": "orange", "width": "L" },
+    "nat->homolo": { "color": "purple", "lineStyle": "dashed", "width": "L" },
+    "nat->maven": { "color": "orange", "width": "L" },
+    "vm->arStime": { "color": "green", "width": "L" },
+    "vm->google": { "sourceSide": "N", "targetSide": "S", "width": "L" },
+    "vm->nat": { "color": "orange", "width": "L" }
+  },
+  "areas": {
+    "gcp": { "borderColor": "blue", "borderStyle": "dashed", "fillColor": "blue" },
+    "internet": { "borderColor": "gray", "borderStyle": "dashed", "fillColor": "gray" },
+    "reg": { "borderColor": "green", "fillColor": "green" },
+    "stime": { "borderColor": "orange", "fillColor": "orange" },
+    "vpn": { "borderColor": "green", "fillColor": "green" }
+  }
+}

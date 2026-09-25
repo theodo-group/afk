@@ -1,0 +1,46 @@
+dev: "<b>Développeur</b><br><small>CLI afk</small>" { shape: person }
+arStime: "<b>Artifact Registry STIME</b><br><small>image agent · proxy Maven</small>"
+iap: "<b>IAP</b><br><small>SSH depuis le VPN seulement</small>"
+google: "<b>Services Google</b><br><small>secrets · logs · transcripts</small>"
+vm: "<b>VM jetable</b><br><small>agent Claude Code<br>sans IP publique</small>"
+nat: "<b>Cloud NAT</b><br><small>2 IP statiques<br>sortie en liste blanche</small>"
+gitlab: "<b>GitLab STIME</b><br><small>clone · push · MR</small>"
+ci: "<b>CI GitLab</b><br><small>tests, dont iOS</small>"
+homolo: "<b>Homologation</b><br><small>phase 2</small>"
+anthropic: "<b>API Anthropic</b><br><small>licences Claude</small>"
+maven: "<b>Dépôts Maven</b><br><small>en attendant le proxy</small>"
+
+dev -> arStime: "push image"
+dev -> vm: "afk run"
+dev -> iap: "afk attach"
+iap -> vm: "tcp/22"
+vm -> google
+vm -> arStime: "pull"
+vm -> nat: "HTTPS 443"
+nat -> gitlab
+nat -> anthropic
+nat -> maven
+nat -> homolo { style.stroke-dash: 4 }
+gitlab -> ci: "pipeline"
+
+vpn: "VPN STIME" {
+  dev
+}
+reg: "Projet stime-red-automation" {
+  arStime
+}
+gcp: "Projet GCP AFK · europe-west9" {
+  iap
+  google
+  vm
+  nat
+}
+stime: "STIME" {
+  gitlab
+  ci
+  homolo
+}
+internet: "Internet" {
+  anthropic
+  maven
+}
