@@ -19,6 +19,7 @@ import {
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
   logGroupPrefix,
+  runsTableName,
   ssmSecretPrefix,
   SESSION_ARTIFACT_MAX_BYTES,
   TAG_BRANCH,
@@ -261,6 +262,9 @@ export const planAwsRun = (
     sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
     sessionArtifactBucket: `${artifactsBucketPrefix(prefix)}-${identity.Account}-${region}`,
     sessionArtifactMaxBytes: SESSION_ARTIFACT_MAX_BYTES,
+    // Same derivation AwsRunHistory uses to read the table, so the VM that
+    // writes the row and the CLI that reads it cannot drift apart.
+    runsTable: runsTableName(prefix),
     logGroupPrefix: logGroupPrefix(prefix),
   })
 

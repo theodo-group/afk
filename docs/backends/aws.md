@@ -29,7 +29,7 @@ Run once per AWS account/team.
 
 ### Identity
 
-- An `afk-vm-instance-role` attached to every Run VM. Grants: ECR pull on `afk/*`; `ssm:GetParameter(s)` on `/afk/*`; `logs:CreateLogStream` + `logs:PutLogEvents` on `/afk/*`. Nothing else — no `ec2:*`, no `iam:*`. The VM shuts itself down at the OS level; AWS terminates it.
+- An `afk-vm-instance-role` attached to every Run VM. Grants: ECR pull on `afk/*`; `ssm:GetParameter(s)` on `/afk/*`; `logs:CreateLogStream` + `logs:PutLogEvents` on `/afk/*`; `s3:PutObject` on the Session Artifacts bucket; `dynamodb:UpdateItem` on the `afk-runs` table, so the VM can record its own exit code before shutting down (see Run lifecycle). Nothing else — no `ec2:*`, no `iam:*`. The VM shuts itself down at the OS level; AWS terminates it.
 - An `afk-sweeper-role` for the sweeper Lambda: `ec2:DescribeInstances`, `ec2:TerminateInstances` scoped to `tag:afk:managed=true` (covers both the timeout backstop and the retention reaper).
 - An `afk-developer` role + policy granting:
   - `ec2:RunInstances` heavily conditioned: AMI must be `afk:golden=true` and owned by this account; subnet/VPC/SG must be the AFK ones; instance type must be in the whitelist; `aws:RequestTag/afk:owner` must equal `${aws:userid}`; `afk:run-id` must be present.
@@ -42,7 +42,7 @@ Run once per AWS account/team.
 ### Storage / state
 
 - Terraform state lives in the S3 bucket created by `afk init` (not by Terraform — chicken-and-egg). S3 native state locking (`use_lockfile = true`).
-- A DynamoDB `afk-runs` table holds Run history (used by `afk history`).
+- A DynamoDB `afk-runs` table holds Run history (used by `afk history`). The CLI writes the row at launch, the Run VM completes it with the exit code as it shuts down, and the sweeper reconciles the rows of VMs that never got that far.
 - A **Session Artifacts** S3 bucket (`afk-artifacts-<account>-<region>`, Terraform-managed, `force_destroy`, AES256, public access blocked). If `sessionArtifacts` is declared in `afk.config.json`, the Run VM `docker cp`s the declared base dirs out of the main service at graceful exit, drops files over the ~25 MB cap, and uploads the rest to `s3://<bucket>/<repo>/<runId>/session-artifacts/` before self-terminating (the VM role has `s3:PutObject` only). `afk session-artifact <run-id>` syncs that prefix down, applies the precise globs + cap, and writes the survivors to `--out`. Best-effort: a killed or hard-timed-out Run never reaches the upload. A lifecycle rule expires objects after 30 days, matching the log-retention window.
 
 ### Not created by Terraform
@@ -104,7 +104,8 @@ Stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The 
 
 ## Run lifecycle
 
-- A Run's lifetime equals its main service container's lifetime. On exit the `user_data` script captures the code and runs `shutdown -h now`; the instance (launched with `InstanceInitiatedShutdownBehavior=terminate`) is terminated by AWS. No `ec2:TerminateInstances` permission is granted to the VM.
+- A Run's lifetime equals its main service container's lifetime. On exit the `user_data` script captures the code, **records it on the Run's own history row** (`status`, `stopped_at`, `exit_code`), and runs `shutdown -h now`; the instance (launched with `InstanceInitiatedShutdownBehavior=terminate`) is terminated by AWS. No `ec2:TerminateInstances` permission is granted to the VM.
+- The VM is the only witness of its own exit status — the CLI returned at launch and does not stay resident — so that write is where the exit code becomes durable. It is best-effort and carries a `status = running` condition, making it first-writer-wins against the sweeper: whichever runs first keeps the row. A Run whose VM never reached the write (`afk kill`, a Spot reclaim, a crash) therefore has no `exit_code`, and the sweeper reconciles it instead.
 - A wall-clock timeout (default 4h) wraps compose with `timeout(1)`.
 - The sweeper Lambda terminates instances whose agent crashed before reaching `shutdown` (older than the declared timeout, with a grace window).
 - **`--retain` (post-mortem inspection).** A Run launched with `--retain` is tagged `afk:retain=true` and launched with `InstanceInitiatedShutdownBehavior=stop`, so on exit it **stops instead of terminating** — preserving the EBS root (and the exited containers) for later `afk attach` (see Attach). `--retain` implies On-Demand: Spot capacity cannot be stopped without losing its disk, so `--retain --spot` is a hard error. A retained instance is reclaimed by `afk kill` or by the sweeper once it is older than the retention period (`retention_days`, default 7); the sweeper's reaper query terminates `afk:retain` + stopped instances past that window. Opt-in because a stopped instance still bills for its EBS disk.

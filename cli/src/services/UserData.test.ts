@@ -21,6 +21,7 @@ const base: UserDataInput = {
   sessionArtifactBases: [],
   sessionArtifactBucket: "afk-artifacts-111122223333-eu-west-1",
   sessionArtifactMaxBytes: 25 * 1024 * 1024,
+  runsTable: "afk-runs",
 }
 
 describe("buildUserData — Session Artifact collection", () => {
@@ -58,6 +59,66 @@ describe("buildUserData — Session Artifact collection", () => {
     expect(ud).toContain("ps -aq 'agent'")
     // stack must survive the instance stop for post-mortem attach
     expect(ud).not.toContain("down -v --remove-orphans")
+  })
+})
+
+describe("buildUserData — completion write", () => {
+  it("records the exit code on the Run's own history row", () => {
+    const ud = buildUserData(base)
+    expect(ud).toContain("dynamodb update-item")
+    expect(ud).toContain("--table-name 'afk-runs'")
+    expect(ud).toContain('--key \'{"run_id":{"S":"run-123"}}\'')
+    expect(ud).toContain("SET #s = :s, stopped_at = :t, #e = :e")
+    expect(ud).toContain('{"#s":"status","#e":"exit_code"}')
+    expect(ud).toContain('{"N":"$RUN_EXIT"}')
+  })
+
+  it("names the table the active resource prefix resolves to", () => {
+    const ud = buildUserData({ ...base, runsTable: "acme-runs" })
+    expect(ud).toContain("--table-name 'acme-runs'")
+    expect(ud).not.toContain("afk-runs")
+  })
+
+  it("derives the status from the exit code, matching recordComplete", () => {
+    const ud = buildUserData(base)
+    expect(ud).toContain(
+      'if [ "$RUN_EXIT" = 0 ]; then AFK_RUN_STATUS=stopped; else AFK_RUN_STATUS=failed; fi',
+    )
+  })
+
+  it("yields to whoever wrote the row first, as the sweeper does", () => {
+    const ud = buildUserData(base)
+    expect(ud).toContain("--condition-expression '#s = :running'")
+  })
+
+  it("runs after the workload, before shutdown, with `set -e` still off", () => {
+    const ud = buildUserData(base)
+    const exitCaptured = ud.indexOf("RUN_EXIT=$?")
+    const write = ud.indexOf("dynamodb update-item")
+    const setE = ud.indexOf("\nset -e")
+    const shutdown = ud.indexOf("shutdown -h now")
+    expect(exitCaptured).toBeGreaterThan(-1)
+    expect(write).toBeGreaterThan(exitCaptured)
+    // Inside the `set +e` region: a failed write must not abort the script
+    // before it reaches `shutdown`, whatever its own `||` guard catches.
+    expect(setE).toBeGreaterThan(write)
+    expect(shutdown).toBeGreaterThan(setE)
+  })
+
+  it("cannot fail the script: every branch ends in an echo", () => {
+    const ud = buildUserData(base)
+    expect(ud).toContain('|| echo "afk-userdata: run history write failed')
+  })
+
+  it("is emitted on the compose path too", () => {
+    const ud = buildUserData({
+      ...base,
+      compose: "services:\n  agent:\n    image: x\n",
+    })
+    expect(ud).toContain("dynamodb update-item")
+    expect(ud.indexOf("dynamodb update-item")).toBeGreaterThan(
+      ud.indexOf("--exit-code-from"),
+    )
   })
 })
 

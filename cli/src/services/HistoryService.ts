@@ -68,9 +68,10 @@ export const HistoryServiceLive = Layer.effect(
             .filter((r) => !repo || r.repo === repo)
             .map<RunHistoryRow>((r) => ({
               runId: r.runId,
-              // STOPPED + unknown exit_code => "stopped" (sweeper-reconciled
-              // or self-terminated VM with no completion writer); "failed" is
-              // reserved for an actual non-zero exit the entrypoint reported.
+              // STOPPED + unknown exit_code => "stopped": the Run ended without
+              // reporting how, because its VM never reached the completion
+              // write (killed, reclaimed, crashed) or it predates that writer.
+              // "failed" is reserved for an actual non-zero exit.
               status:
                 r.status === "RUNNING"
                   ? "running"

@@ -1,10 +1,14 @@
 # ---------------------------------------------------------------------------
 # DynamoDB table — persistent Run history.
 #
-# Rows are written by the CLI at `afk run` time and updated by the sweeper
-# Lambda when EC2 reports the instance terminated. EC2's DescribeInstances
-# only retains terminated instances for ~1 hour, so this table is the
-# system of record for "what Runs happened beyond the last hour."
+# Rows are written by the CLI at `afk run` time and completed by the Run VM
+# itself, which records its exit code from user_data just before shutting down.
+# The sweeper Lambda is the backstop: it reconciles the rows of VMs that died
+# without getting that far, and it loses the race deliberately — both writers
+# condition on `status = running`, so the first one to land keeps the row.
+# EC2's DescribeInstances only retains terminated instances for ~1 hour, so
+# this table is the system of record for "what Runs happened beyond the last
+# hour."
 #
 # Schema:
 #   pk:       run_id                              (canonical lookup)

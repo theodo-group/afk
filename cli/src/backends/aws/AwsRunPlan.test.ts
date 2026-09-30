@@ -180,6 +180,30 @@ describe("planAwsRun", () => {
       expect(result.left.message).toContain("--retain cannot be combined")
     }
   })
+
+  // The VM records its own completion, so the table it writes to must be the
+  // one AwsRunHistory reads from — both derive it from the same prefix.
+  it("points the VM's completion write at the default history table", () => {
+    const result = planAwsRun(baseInput())
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.userData).toContain(
+        "--table-name 'afk-runs'",
+      )
+    }
+  })
+
+  it("follows aws.resourcePrefix to the project's own history table", () => {
+    const result = planAwsRun(
+      baseInput({ config: { aws: { resourcePrefix: "acme" } } }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.userData).toContain(
+        "--table-name 'acme-runs'",
+      )
+    }
+  })
 })
 
 describe("ec2InstanceToRun retention", () => {
