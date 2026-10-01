@@ -9,8 +9,9 @@ import {
 
 /**
  * One row in the Backend-neutral history table. Stored at Run start by the
- * active Backend's Compute; updated to STOPPED+exitCode by the Backend's
- * lifecycle layer (sweeper Lambda on AWS, DO alarm on Cloudflare).
+ * active Backend's Compute; updated to STOPPED+exitCode by whatever outlives
+ * the workload on that Backend — the VM's own boot script on AWS, the DO alarm
+ * on Cloudflare. The CLI is never that writer: it returns at launch.
  */
 export interface HistoryRow {
   readonly runId: string

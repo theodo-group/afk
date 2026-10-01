@@ -19,7 +19,8 @@ locals {
 # ---------------------------------------------------------------------------
 # VM instance role — attached to every Run VM via the instance profile.
 # Minimal: pull from ECR, read SSM params under /afk/secrets, write CloudWatch
-# Logs under /afk/*. No ec2:*. No iam:*. The VM terminates itself by OS
+# Logs under /afk/*, upload Session Artifacts, and update its own run-history
+# row with the exit code. No ec2:*. No iam:*. The VM terminates itself by OS
 # shutdown (InstanceInitiatedShutdownBehavior=terminate), not via API.
 # ---------------------------------------------------------------------------
 
@@ -88,6 +89,15 @@ data "aws_iam_policy_document" "vm_instance" {
     sid       = "UploadSessionArtifacts"
     actions   = ["s3:PutObject"]
     resources = ["${local.artifacts_arn}/*"]
+  }
+
+  # The VM is the only witness of its own exit status, so it records it on its
+  # own history row before shutting down. UpdateItem alone, on the base table
+  # only: it touches one item, by run_id, and GSIs are not writable directly.
+  statement {
+    sid       = "RecordRunCompletion"
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.runs.arn]
   }
 }
 

@@ -33,6 +33,8 @@ export interface UserDataInput {
   readonly sessionArtifactBucket: string
   /** Per-file size cap; matched files larger than this are skipped, not truncated. */
   readonly sessionArtifactMaxBytes: number
+  /** DynamoDB run-history table the VM records its own completion on. */
+  readonly runsTable: string
   /**
    * CloudWatch log-group path prefix (`/<prefix>`); the group is
    * `<logGroupPrefix>/<repo>`. Absent ⇒ the default `LOG_GROUP_PREFIX` ("/afk").
@@ -159,6 +161,49 @@ const renderArtifactCollection = (
   ].join("\n")
 }
 
+/**
+ * Completion write: the VM records its own exit status on its run-history row.
+ *
+ * The VM is the only witness. `$RUN_EXIT` exists on the instance and nowhere
+ * else — the CLI returned at launch and does not stay resident — so a Run that
+ * shut down without writing here left no trace of how it ended. Attribute for
+ * attribute this is `AwsRunHistory.recordComplete`, which is why `afk history`
+ * needs no reader change to light up.
+ *
+ * The condition makes it first-writer-wins against the sweeper Lambda, which
+ * reconciles orphaned rows under the same guard. The VM normally wins by the
+ * sweeper's whole 15-minute tick; when it does not, the row it would have
+ * clobbered is the sweeper's more informative account of a VM that died without
+ * reaching this line.
+ *
+ * Best-effort, like artifact collection: it runs with `set -e` still off and
+ * swallows its own failure, so a missing IAM grant costs the history row and
+ * never the Run. Failures keep their stderr — on a retained instance
+ * `/var/log/afk-userdata.log` is the only place left to tell an AccessDenied
+ * from a lost race.
+ */
+const renderCompletionWrite = (input: UserDataInput): string => {
+  const valuesFile = `${VM_AFK_DIR}/complete.json`
+  const key = JSON.stringify({ run_id: { S: input.runId } })
+  return [
+    `# --- Record completion in the run history (best-effort) ---`,
+    `AFK_STOPPED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"`,
+    `if [ "$RUN_EXIT" = 0 ]; then AFK_RUN_STATUS=stopped; else AFK_RUN_STATUS=failed; fi`,
+    `cat > ${shellQuote(valuesFile)} <<AFK_COMPLETE_EOF`,
+    `{":s":{"S":"$AFK_RUN_STATUS"},":t":{"S":"$AFK_STOPPED_AT"},":e":{"N":"$RUN_EXIT"},":running":{"S":"running"}}`,
+    `AFK_COMPLETE_EOF`,
+    `aws --region ${shellQuote(input.region)} dynamodb update-item \\`,
+    `  --table-name ${shellQuote(input.runsTable)} \\`,
+    `  --key ${shellQuote(key)} \\`,
+    `  --update-expression 'SET #s = :s, stopped_at = :t, #e = :e' \\`,
+    `  --expression-attribute-names '{"#s":"status","#e":"exit_code"}' \\`,
+    `  --expression-attribute-values ${shellQuote(`file://${valuesFile}`)} \\`,
+    `  --condition-expression '#s = :running' >/dev/null \\`,
+    `  && echo "afk-userdata: recorded exit $RUN_EXIT in run history" \\`,
+    `  || echo "afk-userdata: run history write failed (non-fatal)"`,
+  ].join("\n")
+}
+
 export const buildUserData = (input: UserDataInput): string => {
   const logGroup = `${input.logGroupPrefix ?? LOG_GROUP_PREFIX}/${input.repoName}`
   const daemonJson = renderDaemonJson(logGroup, input.region, input.runId)
@@ -257,8 +302,13 @@ export const buildUserData = (input: UserDataInput): string => {
     "# --- Run the workload under wall-clock cap ---",
     "set +e",
     runWorkload,
-    "set -e",
     `echo "afk-userdata: run exited $RUN_EXIT"`,
+    "",
+    // Still inside the `set +e` region: the completion write is best-effort, and
+    // structuring it so makes that true of any failure mode, not just the ones
+    // its own `||` catches.
+    renderCompletionWrite(input),
+    "set -e",
     "",
     "# --- Self-terminate via OS shutdown (instance has terminate-on-shutdown) ---",
     "shutdown -h now",
