@@ -39,7 +39,7 @@ type SubmitError =
 
 /**
  * The developer's side of a [[Schedule]]: submitting one, reading it back,
- * withdrawing it. The tick is the other side and lives in `Orchestrator`.
+ * withdrawing it. The tick is the other side and lives in `Scheduler`.
  *
  * Submit is where every refusal belongs. It runs four gates cheapest-first so
  * a typo never costs a ten-minute build, and so an expired session is found

@@ -39,7 +39,7 @@ import { BuildServiceLive } from "./services/BuildService.ts"
 import { HistoryServiceLive } from "./services/HistoryService.ts"
 import { RunServiceLive } from "./services/RunService.ts"
 import { ScheduleServiceLive } from "./services/ScheduleService.ts"
-import { OrchestratorLive } from "./services/Orchestrator.ts"
+import { SchedulerLive } from "./services/Scheduler.ts"
 import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
 import { AwsBackendLive } from "./backends/aws/index.ts"
@@ -98,7 +98,7 @@ const local = Options.boolean("local").pipe(
 //                      └── BuildService (cross-cutting, uses ImageRegistry)
 //                            └── orchestrating services (RunService,
 //                                 HistoryService, then ScheduleService +
-//                                 Orchestrator) + Bootstrap
+//                                 Scheduler) + Bootstrap
 //
 // Developer-facing secret CRUD goes straight to the SecretStore tag the Backend
 // provides — there is no SecretService facade.
@@ -158,12 +158,11 @@ const backendLayer =
 const buildLayer = BuildServiceLive.pipe(Layer.provideMerge(backendLayer))
 const runLayer = RunServiceLive.pipe(Layer.provideMerge(buildLayer))
 const historyLayer = HistoryServiceLive.pipe(Layer.provideMerge(runLayer))
-// The orchestrator sits above RunService (it launches Runs) and HistoryService
+// The Scheduler sits above RunService (it launches Runs) and HistoryService
 // (it reads their outcomes); ScheduleService sits beside it on the same tags.
-const scheduleLayer = Layer.mergeAll(
-  ScheduleServiceLive,
-  OrchestratorLive,
-).pipe(Layer.provideMerge(historyLayer))
+const scheduleLayer = Layer.mergeAll(ScheduleServiceLive, SchedulerLive).pipe(
+  Layer.provideMerge(historyLayer),
+)
 const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(scheduleLayer))
 
 // ---------- Root command ----------

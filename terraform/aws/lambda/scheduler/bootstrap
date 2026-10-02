@@ -3,7 +3,7 @@
 # invocation with one `afk schedule tick`.
 #
 # There is no handler module: the tick is a CLI subcommand, so the whole
-# orchestrator is the CLI the developer already runs by hand. That is what
+# scheduler is the CLI the developer already runs by hand. That is what
 # keeps `afk schedule tick` on a laptop and the deployed Lambda the same code
 # path rather than two implementations of the same rules.
 set -eu

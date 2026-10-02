@@ -3,7 +3,7 @@ import { ScheduleStore } from "../../services/backend/ScheduleStore.ts"
 import { UserError } from "../../infra/Errors.ts"
 
 /**
- * the Cloudflare Backend has no Schedule store yet. The orchestrator ships on AWS only; this
+ * the Cloudflare Backend has no Schedule store yet. The scheduler ships on AWS only; this
  * keeps the tag resolved so the `afk schedule` commands compile against one
  * Backend-neutral seam, and refuses with a message naming the reason rather
  * than failing deeper with a missing-service defect.
@@ -11,7 +11,7 @@ import { UserError } from "../../infra/Errors.ts"
 const unsupported = Effect.fail(
   new UserError({
     message: "Schedules are not supported on the Cloudflare Backend.",
-    hint: "The orchestrator runs on the AWS Backend today. Submit the Schedule there, or launch Runs by hand with `afk run`.",
+    hint: "The scheduler runs on the AWS Backend today. Submit the Schedule there, or launch Runs by hand with `afk run`.",
   }),
 )
 

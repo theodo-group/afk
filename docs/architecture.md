@@ -40,7 +40,7 @@ cli/src/
 │   │       RunHistory.ts, ScheduleStore.ts, GoldenImage.ts, BackendDoctor.ts,
 │   │       Team.ts, Provisioner.ts, SessionArtifactStore.ts
 │   ├── RunService.ts      Orchestrator: build image, delegate to Compute, stream logs.
-│   ├── Orchestrator.ts    The Schedule tick: decide via Triggers, then launch.
+│   ├── Scheduler.ts       The Schedule tick: decide via Triggers, then launch.
 │   └── BuildService, ConfigService, HistoryService, BootstrapService,
 │       ScheduleService, Triggers,
 │       Compose, RunPlan, DindGolden, GoldenImageVersion, Pricing,
@@ -172,7 +172,7 @@ These do not use Effect and follow their own conventions:
 - **`worker/cloudflare/`** — launcher Worker. Hono + Durable Objects, async/await.
 - **`terraform/aws/`**, **`terraform/gcp/`** — HCL.
 - **`terraform/aws/lambda/sweeper/`** — TypeScript Lambda, plain AWS SDK.
-- **`terraform/aws/lambda/orchestrator/`** — a Lambda *container image* (bun + git + the AWS CLI) whose custom-runtime `bootstrap` answers each tick with `afk schedule tick`. A container because afk is Bun-only, and the CLI rather than a handler module so the tick a developer runs by hand and the deployed one are the same code path. Opt-in: `orchestrator_enabled`.
+- **`terraform/aws/lambda/scheduler/`** — a Lambda *container image* (bun + git + the AWS CLI) whose custom-runtime `bootstrap` answers each tick with `afk schedule tick`. A container because afk is Bun-only, and the CLI rather than a handler module so the tick a developer runs by hand and the deployed one are the same code path. Opt-in: `scheduler_enabled`.
 - **`terraform/gcp/function/sweeper/`** — TypeScript Cloud Function, plain Google SDKs.
 - **`entrypoint/entrypoint.sh`** — CLI-owned bash entrypoint baked into agent images at build time.
 

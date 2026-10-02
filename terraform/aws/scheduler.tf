@@ -1,47 +1,47 @@
 # ---------------------------------------------------------------------------
-# Orchestrator Lambda — ticks submitted Schedules and launches what is due.
+# Scheduler Lambda — ticks submitted Schedules and launches what is due.
 #
-# Opt-in (`orchestrator_enabled`). Unlike the sweeper's esbuild zip this is a
+# Opt-in (`scheduler_enabled`). Unlike the sweeper's esbuild zip this is a
 # container image: afk is Bun-only, so the tick cannot run on nodejs20. The
 # image carries bun, git and the AWS CLI and runs `afk schedule tick` — the
 # same subcommand a developer runs by hand, not a second implementation of the
 # same rules.
 #
-# The orchestrator never builds an image and never kills a Run. `afk schedule
+# The scheduler never builds an image and never kills a Run. `afk schedule
 # submit` builds on the developer's laptop and pins the result on every Entry,
 # which is what lets this be a Lambda at all: no Docker, no 1.7 GB checkout.
 # ---------------------------------------------------------------------------
 
 locals {
-  orchestrator_repo_root = "${path.module}/../.."
+  scheduler_repo_root = "${path.module}/../.."
 
   # Rebuild when anything that ends up in the image changes. A fileset hash
   # rather than a timestamp, so a no-op apply does not push 500 MB.
-  orchestrator_sources = concat(
-    [for f in fileset("${local.orchestrator_repo_root}/cli/src", "**/*.ts") :
-    "${local.orchestrator_repo_root}/cli/src/${f}"],
+  scheduler_sources = concat(
+    [for f in fileset("${local.scheduler_repo_root}/cli/src", "**/*.ts") :
+    "${local.scheduler_repo_root}/cli/src/${f}"],
     [
-      "${local.orchestrator_repo_root}/cli/package.json",
-      "${local.orchestrator_repo_root}/cli/bun.lock",
-      "${local.orchestrator_repo_root}/entrypoint/entrypoint.sh",
+      "${local.scheduler_repo_root}/cli/package.json",
+      "${local.scheduler_repo_root}/cli/bun.lock",
+      "${local.scheduler_repo_root}/entrypoint/entrypoint.sh",
     ],
-    [for f in fileset("${path.module}/lambda/orchestrator", "*") :
-    "${path.module}/lambda/orchestrator/${f}"],
+    [for f in fileset("${path.module}/lambda/scheduler", "*") :
+    "${path.module}/lambda/scheduler/${f}"],
   )
 
-  orchestrator_src_hash = substr(
-    sha1(join("", [for f in local.orchestrator_sources : filesha1(f)])),
+  scheduler_src_hash = substr(
+    sha1(join("", [for f in local.scheduler_sources : filesha1(f)])),
     0, 12,
   )
 
-  orchestrator_image = var.orchestrator_enabled ? "${aws_ecr_repository.orchestrator[0].repository_url}:${local.orchestrator_src_hash}" : ""
+  scheduler_image = var.scheduler_enabled ? "${aws_ecr_repository.scheduler[0].repository_url}:${local.scheduler_src_hash}" : ""
 }
 
 # --- Image ---
 
-resource "aws_ecr_repository" "orchestrator" {
-  count                = var.orchestrator_enabled ? 1 : 0
-  name                 = "${var.project_name}/orchestrator"
+resource "aws_ecr_repository" "scheduler" {
+  count                = var.scheduler_enabled ? 1 : 0
+  name                 = "${var.project_name}/scheduler"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -49,14 +49,14 @@ resource "aws_ecr_repository" "orchestrator" {
   }
 }
 
-resource "aws_ecr_lifecycle_policy" "orchestrator" {
-  count      = var.orchestrator_enabled ? 1 : 0
-  repository = aws_ecr_repository.orchestrator[0].name
+resource "aws_ecr_lifecycle_policy" "scheduler" {
+  count      = var.scheduler_enabled ? 1 : 0
+  repository = aws_ecr_repository.scheduler[0].name
 
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Keep the last 5 orchestrator images."
+      description  = "Keep the last 5 scheduler images."
       selection = {
         tagStatus   = "any"
         countType   = "imageCountMoreThan"
@@ -67,16 +67,16 @@ resource "aws_ecr_lifecycle_policy" "orchestrator" {
   })
 }
 
-resource "null_resource" "orchestrator_image" {
-  count = var.orchestrator_enabled ? 1 : 0
+resource "null_resource" "scheduler_image" {
+  count = var.scheduler_enabled ? 1 : 0
 
   triggers = {
-    source = local.orchestrator_src_hash
-    image  = local.orchestrator_image
+    source = local.scheduler_src_hash
+    image  = local.scheduler_image
   }
 
   provisioner "local-exec" {
-    working_dir = local.orchestrator_repo_root
+    working_dir = local.scheduler_repo_root
     interpreter = ["/bin/sh", "-c"]
     command     = <<-CMD
       set -eu
@@ -84,9 +84,9 @@ resource "null_resource" "orchestrator_image" {
       aws ecr get-login-password --region ${local.region} \
         | docker login --username AWS --password-stdin "$registry"
       docker build --platform linux/amd64 \
-        -f terraform/aws/lambda/orchestrator/Dockerfile \
-        -t ${local.orchestrator_image} .
-      docker push ${local.orchestrator_image}
+        -f terraform/aws/lambda/scheduler/Dockerfile \
+        -t ${local.scheduler_image} .
+      docker push ${local.scheduler_image}
     CMD
   }
 }
@@ -96,21 +96,21 @@ resource "null_resource" "orchestrator_image" {
 # Narrowed from the developer policy. Deliberately NOT granted: ssm:StartSession
 # (with iam:PassRole already present it would let anything running on this
 # principal become the VM role), ECR push, golden-image management,
-# ssm:PutParameter, and any terminate — the orchestrator does not kill.
+# ssm:PutParameter, and any terminate — the scheduler does not kill.
 
-resource "aws_iam_role" "orchestrator" {
-  count              = var.orchestrator_enabled ? 1 : 0
-  name               = "${var.project_name}-orchestrator-role"
+resource "aws_iam_role" "scheduler" {
+  count              = var.scheduler_enabled ? 1 : 0
+  name               = "${var.project_name}-scheduler-role"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
-resource "aws_iam_role_policy_attachment" "orchestrator_basic_logging" {
-  count      = var.orchestrator_enabled ? 1 : 0
-  role       = aws_iam_role.orchestrator[0].name
+resource "aws_iam_role_policy_attachment" "scheduler_basic_logging" {
+  count      = var.scheduler_enabled ? 1 : 0
+  role       = aws_iam_role.scheduler[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-data "aws_iam_policy_document" "orchestrator" {
+data "aws_iam_policy_document" "scheduler" {
   statement {
     sid       = "LaunchIntoAfkSubnetsOnly"
     actions   = ["ec2:RunInstances"]
@@ -212,7 +212,7 @@ data "aws_iam_policy_document" "orchestrator" {
   }
 
   # The critical lockdown, kept verbatim from the developer policy: without it
-  # the orchestrator could attach an arbitrary role to a Run VM.
+  # the scheduler could attach an arbitrary role to a Run VM.
   statement {
     sid       = "PassVmInstanceRoleOnly"
     actions   = ["iam:PassRole"]
@@ -224,7 +224,7 @@ data "aws_iam_policy_document" "orchestrator" {
     }
   }
 
-  # Read-only on the registry: the orchestrator launches images, never builds.
+  # Read-only on the registry: the scheduler launches images, never builds.
   statement {
     sid       = "EcrAuthToken"
     actions   = ["ecr:GetAuthorizationToken"]
@@ -308,21 +308,21 @@ data "aws_iam_policy_document" "orchestrator" {
   }
 }
 
-resource "aws_iam_role_policy" "orchestrator" {
-  count  = var.orchestrator_enabled ? 1 : 0
-  name   = "${var.project_name}-orchestrator"
-  role   = aws_iam_role.orchestrator[0].id
-  policy = data.aws_iam_policy_document.orchestrator.json
+resource "aws_iam_role_policy" "scheduler" {
+  count  = var.scheduler_enabled ? 1 : 0
+  name   = "${var.project_name}-scheduler"
+  role   = aws_iam_role.scheduler[0].id
+  policy = data.aws_iam_policy_document.scheduler.json
 }
 
 # --- Lambda function ---
 
-resource "aws_lambda_function" "orchestrator" {
-  count         = var.orchestrator_enabled ? 1 : 0
-  function_name = "${var.project_name}-orchestrator"
-  role          = aws_iam_role.orchestrator[0].arn
+resource "aws_lambda_function" "scheduler" {
+  count         = var.scheduler_enabled ? 1 : 0
+  function_name = "${var.project_name}-scheduler"
+  role          = aws_iam_role.scheduler[0].arn
   package_type  = "Image"
-  image_uri     = local.orchestrator_image
+  image_uri     = local.scheduler_image
   architectures = ["x86_64"]
   # A tick launches every due Entry serially enough that a slow EC2 RunInstances
   # can take a while; still far inside Lambda's 15-minute ceiling.
@@ -331,12 +331,12 @@ resource "aws_lambda_function" "orchestrator" {
 
   environment {
     variables = {
-      AFK_CONFIG_JSON     = var.orchestrator_config_json
-      AFK_GIT_TOKEN_PARAM = var.orchestrator_git_token_param
+      AFK_CONFIG_JSON     = var.scheduler_config_json
+      AFK_GIT_TOKEN_PARAM = var.scheduler_git_token_param
     }
   }
 
-  depends_on = [null_resource.orchestrator_image]
+  depends_on = [null_resource.scheduler_image]
 }
 
 # --- EventBridge tick ---
@@ -344,25 +344,25 @@ resource "aws_lambda_function" "orchestrator" {
 # This is the tick, not a Schedule: afk's own wake interval, identical for
 # every project. `schedule_expression` is Terraform's word for it.
 
-resource "aws_cloudwatch_event_rule" "orchestrator" {
-  count               = var.orchestrator_enabled ? 1 : 0
-  name                = "${var.project_name}-orchestrator"
-  description         = "Tick the AFK orchestrator"
-  schedule_expression = var.orchestrator_schedule_expression
+resource "aws_cloudwatch_event_rule" "scheduler" {
+  count               = var.scheduler_enabled ? 1 : 0
+  name                = "${var.project_name}-scheduler"
+  description         = "Tick the AFK scheduler"
+  schedule_expression = var.scheduler_tick_expression
 }
 
-resource "aws_cloudwatch_event_target" "orchestrator" {
-  count     = var.orchestrator_enabled ? 1 : 0
-  rule      = aws_cloudwatch_event_rule.orchestrator[0].name
-  target_id = "${var.project_name}-orchestrator"
-  arn       = aws_lambda_function.orchestrator[0].arn
+resource "aws_cloudwatch_event_target" "scheduler" {
+  count     = var.scheduler_enabled ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.scheduler[0].name
+  target_id = "${var.project_name}-scheduler"
+  arn       = aws_lambda_function.scheduler[0].arn
 }
 
-resource "aws_lambda_permission" "orchestrator_eventbridge" {
-  count         = var.orchestrator_enabled ? 1 : 0
+resource "aws_lambda_permission" "scheduler_eventbridge" {
+  count         = var.scheduler_enabled ? 1 : 0
   statement_id  = "AllowEventBridgeInvoke"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.orchestrator[0].function_name
+  function_name = aws_lambda_function.scheduler[0].function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.orchestrator[0].arn
+  source_arn    = aws_cloudwatch_event_rule.scheduler[0].arn
 }

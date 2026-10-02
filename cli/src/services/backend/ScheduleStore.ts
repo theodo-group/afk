@@ -76,7 +76,7 @@ type StoreError =
   | UserError
 
 /**
- * Where submitted Schedules live. One seam so the orchestrator and the
+ * Where submitted Schedules live. One seam so the scheduler and the
  * `afk schedule` commands are written once; only AWS implements it today (see
  * CONTEXT.md "Schedule").
  */
@@ -114,7 +114,7 @@ export class ScheduleStore extends Context.Tag("ScheduleStore")<
 
     /**
      * Withdraw a Schedule: every Entry not yet launched becomes `cancelled`.
-     * Runs already in flight keep going — the orchestrator never kills.
+     * Runs already in flight keep going — the scheduler never kills.
      * Returns how many Entries were withdrawn.
      */
     readonly cancel: (scheduleId: string) => Effect.Effect<number, StoreError>

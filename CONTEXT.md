@@ -111,11 +111,11 @@ The single collection point — the Run command's graceful exit — also bounds 
 
 ## Schedule
 
-A developer-authored declaration of [[run|Runs]] to launch unattended, and of what each one waits for. A Schedule is a file in the developer's own repo (`schedules/<name>.yaml`), named by its `schedule:` id, holding a list of [[entry|Entries]]. It is submitted with `afk schedule submit`, which validates it, builds the environment once, and persists it; from then on it is the orchestrator's standing instruction, revisable only by re-submitting.
+A developer-authored declaration of [[run|Runs]] to launch unattended, and of what each one waits for. A Schedule is a file in the developer's own repo (`schedules/<name>.yaml`), named by its `schedule:` id, holding a list of [[entry|Entries]]. It is submitted with `afk schedule submit`, which validates it, builds the environment once, and persists it; from then on it is the [[scheduler|Scheduler]]'s standing instruction, revisable only by re-submitting.
 
 A Schedule exists because the alternative is a developer staying awake. Before it, the only way to defer a Run was an in-VM `sleep` burned into the command at launch: unrevisable once fired, invisible to every other Run, and with no way to say "C once A succeeds". A Schedule makes both the clock and the dependency edge first-class and inspectable (`afk schedule ls`).
 
-**A Schedule is not the orchestrator's cadence.** The orchestrator wakes on a fixed interval — *the tick* — and on each wake reads every live Schedule and launches whatever is due. The tick is afk's own infrastructure, identical for every project and invisible to the developer; the Schedule is the developer's document. Terraform's `schedule_expression` names the tick, and it is the one place the two words collide.
+**A Schedule is not the [[scheduler|Scheduler]]'s cadence.** The Scheduler wakes on a fixed interval — *the tick* — and on each wake reads every live Schedule and launches whatever is due. The tick is afk's own infrastructure, identical for every project and invisible to the developer; the Schedule is the developer's document.
 
 Not to be confused with a [[run-plan|Run Plan]] (the fully-resolved description of *one* Run, computed at launch) or with the [[backend]]'s own reclamation timers (the sweeper's retention and timeout backstops, which no Schedule governs).
 
@@ -144,3 +144,13 @@ Three kinds, and deliberately only three:
 A Trigger's dependency edges are checked at submit time, not at fire time: every `after:` must name an Entry in the same Schedule, the graph must be acyclic, and every Entry must be reachable from a clock Trigger. A Schedule that fails any of those is refused whole, before anything is built or written.
 
 Not to be confused with the tick (afk's fixed wake interval, which is what *evaluates* Triggers — see [[schedule]]), nor with a Run's own exit code, which is the evidence a Trigger reads rather than the Trigger itself.
+
+## Scheduler
+
+The component that reads submitted [[schedule|Schedules]] and launches the [[entry|Entries]] whose [[trigger|Triggers]] are satisfied. One Scheduler serves a whole [[backend]]: it is afk's own infrastructure, not something a developer deploys per project.
+
+It wakes on a fixed interval — **the tick** — and each tick is one complete, self-contained pass: read every live Entry, read the Run history, settle the Entries whose Runs have ended, then launch what is now due. Nothing carries over between ticks, so a tick that dies half-way leaves the Entries it already moved in their new state and reconsiders the rest next time. A developer can run exactly one such pass by hand with `afk schedule tick`; the deployed Scheduler is that same command on a timer, not a second implementation of the same rules.
+
+Deliberately narrow. The Scheduler **never builds** — `afk schedule submit` builds on the developer's machine and pins the image on every Entry, which is what lets the Scheduler run somewhere with no Docker and no checkout. It **never kills** — `afk kill` and the Backend's own reclamation cover that. And it decides nothing on its own authority: an Entry's fate is read off its Run's history row, never inferred.
+
+Not to be confused with the tick (the Scheduler's interval, which Terraform is forced to call `schedule_expression` — the one place the two words collide), nor with the **Run orchestrator**, which is what `RunService` has always been called: that one resolves and launches a single Run on demand, and the Scheduler is one of its callers.

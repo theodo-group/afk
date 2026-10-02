@@ -15,9 +15,9 @@ import {
 } from "../infra/Errors.ts"
 import type { EntryOutcome } from "../schema/Schedule.ts"
 import {
-  ORCHESTRATOR_GRACE_MINUTES,
-  ORCHESTRATOR_HISTORY_WINDOW,
-  ORCHESTRATOR_STALE_MINUTES,
+  SCHEDULER_GRACE_MINUTES,
+  SCHEDULER_HISTORY_WINDOW,
+  SCHEDULER_STALE_MINUTES,
 } from "../constants.ts"
 
 export interface TickReport {
@@ -49,7 +49,7 @@ type TickError =
   | ConfigError
 
 /**
- * One pass of the orchestrator: read every live Entry, read the Run history,
+ * One pass of the scheduler: read every live Entry, read the Run history,
  * decide, then perform. The deciding is `Triggers.decide` — pure, injected
  * with the clock — so this layer only loads, writes and launches.
  *
@@ -57,15 +57,15 @@ type TickError =
  * it already moved in their new state and reconsiders the rest next time;
  * nothing here depends on having seen the previous tick.
  */
-export class Orchestrator extends Context.Tag("Orchestrator")<
-  Orchestrator,
+export class Scheduler extends Context.Tag("Scheduler")<
+  Scheduler,
   { readonly tick: Effect.Effect<TickReport, TickError> }
 >() {}
 
 const EMPTY: TickReport = { launched: [], settled: [], rearmed: [] }
 
-export const OrchestratorLive = Layer.effect(
-  Orchestrator,
+export const SchedulerLive = Layer.effect(
+  Scheduler,
   Effect.gen(function* () {
     const store = yield* ScheduleStore
     const history = yield* HistoryService
@@ -131,7 +131,7 @@ export const OrchestratorLive = Layer.effect(
       )
       if (live.length === 0) return EMPTY
 
-      const window = yield* parseSince(ORCHESTRATOR_HISTORY_WINDOW)
+      const window = yield* parseSince(SCHEDULER_HISTORY_WINDOW)
       const since = DateTime.subtractDuration(yield* DateTime.now, window)
       const rows = yield* history.query({ since })
       const facts: ReadonlyArray<RunFact> = rows.map((r) => ({
@@ -155,8 +155,8 @@ export const OrchestratorLive = Layer.effect(
           ...(e.outcome !== undefined ? { outcome: e.outcome } : {}),
         })),
         runs: facts,
-        staleAfterMinutes: ORCHESTRATOR_STALE_MINUTES,
-        graceMinutes: ORCHESTRATOR_GRACE_MINUTES,
+        staleAfterMinutes: SCHEDULER_STALE_MINUTES,
+        graceMinutes: SCHEDULER_GRACE_MINUTES,
       })
 
       const nowIso = now.toISOString()
@@ -212,6 +212,6 @@ export const OrchestratorLive = Layer.effect(
       }
     })
 
-    return Orchestrator.of({ tick })
+    return Scheduler.of({ tick })
   }),
 )

@@ -6,9 +6,9 @@ import { parseSince } from "./SinceWindow.ts"
  * Trigger evaluation, as a functional core. Everything here is a plain
  * function over plain data — no Effect, no Clock, no I/O — so the rules that
  * decide whether a scheduled Run happens are testable without a Layer, and the
- * tick (`Orchestrator`) stays a thin shell that performs what this returns.
+ * tick (`Scheduler`) stays a thin shell that performs what this returns.
  *
- * `now` is always passed in. The orchestrator reads the clock once per tick and
+ * `now` is always passed in. The scheduler reads the clock once per tick and
  * injects it, so a decision is reproducible from its inputs alone.
  */
 

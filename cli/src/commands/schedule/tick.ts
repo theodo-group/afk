@@ -1,19 +1,19 @@
 import { Command } from "@effect/cli"
 import { Effect } from "effect"
-import { Orchestrator } from "../../services/Orchestrator.ts"
+import { Scheduler } from "../../services/Scheduler.ts"
 import { Output } from "../../infra/Output.ts"
 
 /**
- * Run one orchestrator pass by hand. The deployed Lambda does exactly this on
+ * Run one scheduler pass by hand. The deployed Lambda does exactly this on
  * its tick; having it on the CLI is what makes a Schedule testable end to end
  * before any infrastructure exists.
  */
 export const tick = Command.make("tick", {}, () =>
   Effect.gen(function* () {
-    const orchestrator = yield* Orchestrator
+    const scheduler = yield* Scheduler
     const out = yield* Output
 
-    const report = yield* orchestrator.tick
+    const report = yield* scheduler.tick
     yield* out.emit({
       data: report,
       human: () =>

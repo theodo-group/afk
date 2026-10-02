@@ -94,7 +94,7 @@ export class BuildService extends Context.Tag("BuildService")<
     /**
      * Take an image the caller vouches for rather than building one.
      *
-     * This is what lets a launcher with no git work tree — the orchestrator's
+     * This is what lets a launcher with no git work tree — the scheduler's
      * Lambda — start a Run at all. `build` reaches `git.isClean` and
      * `git.currentBranch` before it ever consults the registry cache, so even a
      * guaranteed cache hit would still force a full checkout onto the caller.

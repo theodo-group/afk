@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Orchestrator Lambda image.
+# Scheduler Lambda image.
 #
 # A container image rather than the sweeper's nodejs20 zip because afk is
 # Bun-only: Bun.spawn (infra/Subprocess.ts), Bun.Glob (SessionArtifact.ts) and
@@ -7,7 +7,7 @@
 # image also carries the AWS CLI (every AWS adapter shells out to it) and git
 # (the fire-time `git ls-remote` that resolves each Entry's ref).
 #
-# Build context is the afk repo root — see orchestrator.tf.
+# Build context is the afk repo root — see scheduler.tf.
 # ---------------------------------------------------------------------------
 FROM public.ecr.aws/lambda/provided:al2023
 
@@ -30,7 +30,7 @@ COPY cli /opt/afk/cli
 COPY entrypoint /opt/afk/entrypoint
 RUN cd /opt/afk/cli && bun install --frozen-lockfile
 
-COPY terraform/aws/lambda/orchestrator/bootstrap /opt/afk/bootstrap
+COPY terraform/aws/lambda/scheduler/bootstrap /opt/afk/bootstrap
 RUN chmod +x /opt/afk/bootstrap
 
 ENTRYPOINT ["/opt/afk/bootstrap"]

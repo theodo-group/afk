@@ -67,7 +67,7 @@ resource "aws_dynamodb_table" "runs" {
 # DynamoDB table — submitted Schedules.
 #
 # Written by `afk schedule submit` from a developer's laptop and by the
-# orchestrator Lambda on every tick. One Schedule's Entries share a partition,
+# scheduler Lambda on every tick. One Schedule's Entries share a partition,
 # so reading one back is a single Query; the tick reads every Entry with a
 # Scan, which stays cheap because terminal Entries are the only thing that
 # accumulates and a Schedule holds a handful of them.
