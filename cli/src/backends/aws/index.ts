@@ -9,6 +9,7 @@ import { AwsGoldenImageLive } from "./AwsGoldenImage.ts"
 import { AwsBackendDoctorLive } from "./AwsBackendDoctor.ts"
 import { AwsTeamLive } from "./AwsTeam.ts"
 import { AwsProvisionerLive } from "./AwsProvisioner.ts"
+import { AwsScheduleStoreLive } from "./AwsScheduleStore.ts"
 
 /**
  * Aggregate Layer that wires up every Backend service tag with the AWS
@@ -32,6 +33,7 @@ const Leaves = Layer.mergeAll(
   AwsBackendDoctorLive,
   AwsTeamLive,
   AwsProvisionerLive,
+  AwsScheduleStoreLive,
 )
 
 export const AwsBackendLive = AwsComputeLive.pipe(Layer.provideMerge(Leaves))

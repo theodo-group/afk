@@ -1,0 +1,36 @@
+import { Command } from "@effect/cli"
+import { Effect } from "effect"
+import { Orchestrator } from "../../services/Orchestrator.ts"
+import { Output } from "../../infra/Output.ts"
+
+/**
+ * Run one orchestrator pass by hand. The deployed Lambda does exactly this on
+ * its tick; having it on the CLI is what makes a Schedule testable end to end
+ * before any infrastructure exists.
+ */
+export const tick = Command.make("tick", {}, () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator
+    const out = yield* Output
+
+    const report = yield* orchestrator.tick
+    yield* out.emit({
+      data: report,
+      human: () =>
+        out.print(
+          [
+            ...report.settled.map(
+              (s) =>
+                `settled  ${s.scheduleId}/${s.entryId} ${s.outcome} — ${s.reason}`,
+            ),
+            ...report.rearmed.map(
+              (r) => `re-armed ${r.scheduleId}/${r.entryId} → ${r.notBefore}`,
+            ),
+            ...report.launched.map(
+              (l) => `launched ${l.scheduleId}/${l.entryId} as ${l.runId}`,
+            ),
+          ].join("\n") || "(nothing due)",
+        ),
+    })
+  }),
+)

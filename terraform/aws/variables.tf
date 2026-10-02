@@ -76,3 +76,27 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "orchestrator_enabled" {
+  description = "Deploy the orchestrator Lambda, which ticks submitted Schedules and launches the Entries that are due. Off by default: the image is built and pushed at apply time, so turning it on makes `terraform apply` require Docker."
+  type        = bool
+  default     = false
+}
+
+variable "orchestrator_schedule_expression" {
+  description = "EventBridge cadence of the orchestrator's tick. This is afk's own wake interval, NOT a developer's Schedule — see CONTEXT.md 'Schedule'."
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "orchestrator_config_json" {
+  description = "The project's afk.config.json, verbatim. The Lambda has no checkout to discover one in, so it writes this to disk at startup and runs the CLI against it."
+  type        = string
+  default     = ""
+}
+
+variable "orchestrator_git_token_param" {
+  description = "SSM parameter holding a read-only git token. The tick resolves each Entry's ref with `git ls-remote` at fire time, so a private origin needs a credential. Empty for a public origin."
+  type        = string
+  default     = ""
+}

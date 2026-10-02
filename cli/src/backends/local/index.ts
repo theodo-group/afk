@@ -9,6 +9,7 @@ import { LocalGoldenImageLive } from "./LocalGoldenImage.ts"
 import { LocalBackendDoctorLive } from "./LocalBackendDoctor.ts"
 import { LocalTeamLive } from "./LocalTeam.ts"
 import { LocalProvisionerLive } from "./LocalProvisioner.ts"
+import { LocalScheduleStoreLive } from "./LocalScheduleStore.ts"
 
 /**
  * Aggregate Layer wiring every Backend service tag to the Local implementation.
@@ -30,6 +31,7 @@ const Leaves = Layer.mergeAll(
   LocalBackendDoctorLive,
   LocalTeamLive,
   LocalProvisionerLive,
+  LocalScheduleStoreLive,
 )
 
 export const LocalBackendLive = LocalComputeLive.pipe(

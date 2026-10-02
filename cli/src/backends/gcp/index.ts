@@ -9,6 +9,7 @@ import { GcpGoldenImageLive } from "./GcpGoldenImage.ts"
 import { GcpBackendDoctorLive } from "./GcpBackendDoctor.ts"
 import { GcpTeamLive } from "./GcpTeam.ts"
 import { GcpProvisionerLive } from "./GcpProvisioner.ts"
+import { GcpScheduleStoreLive } from "./GcpScheduleStore.ts"
 
 /**
  * Aggregate Layer wiring every Backend service tag with the GCP implementation.
@@ -28,6 +29,7 @@ const Leaves = Layer.mergeAll(
   GcpBackendDoctorLive,
   GcpTeamLive,
   GcpProvisionerLive,
+  GcpScheduleStoreLive,
 )
 
 export const GcpBackendLive = GcpComputeLive.pipe(Layer.provideMerge(Leaves))

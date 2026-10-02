@@ -9,6 +9,7 @@ import { CloudflareGoldenImageLive } from "./CloudflareGoldenImage.ts"
 import { CloudflareBackendDoctorLive } from "./CloudflareBackendDoctor.ts"
 import { CloudflareTeamLive } from "./CloudflareTeam.ts"
 import { CloudflareProvisionerLive } from "./CloudflareProvisioner.ts"
+import { CloudflareScheduleStoreLive } from "./CloudflareScheduleStore.ts"
 import { CfWorkerLive } from "./CfWorker.ts"
 
 /**
@@ -34,6 +35,7 @@ const Leaves = Layer.mergeAll(
   CloudflareBackendDoctorLive,
   CloudflareTeamLive,
   CloudflareProvisionerLive,
+  CloudflareScheduleStoreLive,
 ).pipe(Layer.provideMerge(CfWorkerLive))
 
 const Golden = CloudflareGoldenImageLive.pipe(Layer.provideMerge(Leaves))

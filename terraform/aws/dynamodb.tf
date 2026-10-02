@@ -62,3 +62,43 @@ resource "aws_dynamodb_table" "runs" {
     enabled = false
   }
 }
+
+# ---------------------------------------------------------------------------
+# DynamoDB table — submitted Schedules.
+#
+# Written by `afk schedule submit` from a developer's laptop and by the
+# orchestrator Lambda on every tick. One Schedule's Entries share a partition,
+# so reading one back is a single Query; the tick reads every Entry with a
+# Scan, which stays cheap because terminal Entries are the only thing that
+# accumulates and a Schedule holds a handful of them.
+#
+# Schema:
+#   pk:  schedule_id                       (the `schedule:` id in the file)
+#   sk:  entry_id                          (unique within that Schedule)
+#
+# Other attributes: state, trigger (JSON string — DynamoDB maps are not worth
+# widening the CLI's AttrValue for), ref, command, image, owner, timeout_hours,
+# on_demand, instance_type, submitted_at, not_before, run_id, launched_at,
+# settled_at, outcome, reason.
+# ---------------------------------------------------------------------------
+
+resource "aws_dynamodb_table" "schedule" {
+  name         = "${var.project_name}-schedule"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "schedule_id"
+  range_key    = "entry_id"
+
+  attribute {
+    name = "schedule_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "entry_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+}

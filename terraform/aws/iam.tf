@@ -416,6 +416,20 @@ data "aws_iam_policy_document" "developer" {
     ]
   }
 
+  # --- Schedules: submit, read back, withdraw, and tick by hand ---
+  statement {
+    sid = "ManageSchedules"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+    ]
+    resources = [aws_dynamodb_table.schedule.arn]
+  }
+
   # --- PassRole locked to the single VM instance role ---
   # The critical lockdown. Without this constraint a developer could attach an
   # arbitrary role to a Run VM, attach via SSM, and become that role.
