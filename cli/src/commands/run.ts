@@ -5,6 +5,12 @@ import { ConfigService } from "../services/ConfigService.ts"
 import { Output } from "../infra/Output.ts"
 
 const ref = Options.text("ref").pipe(Options.optional)
+const image = Options.text("image").pipe(
+  Options.optional,
+  Options.withDescription(
+    "launch against an image already in the registry instead of building one; you vouch that it matches the environment the ref expects",
+  ),
+)
 const instanceType = Options.text("instance-type").pipe(Options.optional)
 const onDemand = Options.boolean("on-demand").pipe(
   Options.withDescription(
@@ -40,8 +46,28 @@ const formatBackendDetails = (d: Record<string, string>): string => {
 
 export const run = Command.make(
   "run",
-  { ref, instanceType, onDemand, timeout, follow, dryRun, retain, command },
-  ({ ref, instanceType, onDemand, timeout, follow, dryRun, retain, command }) =>
+  {
+    ref,
+    image,
+    instanceType,
+    onDemand,
+    timeout,
+    follow,
+    dryRun,
+    retain,
+    command,
+  },
+  ({
+    ref,
+    image,
+    instanceType,
+    onDemand,
+    timeout,
+    follow,
+    dryRun,
+    retain,
+    command,
+  }) =>
     Effect.gen(function* () {
       const runs = yield* RunService
       const cfg = yield* ConfigService
@@ -55,6 +81,7 @@ export const run = Command.make(
       const planInput = {
         command,
         ref: ref._tag === "Some" ? ref.value : undefined,
+        image: image._tag === "Some" ? image.value : undefined,
         timeoutHours: timeout._tag === "Some" ? timeout.value : undefined,
         retain,
         backendOverrides,

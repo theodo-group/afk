@@ -28,6 +28,12 @@ import { DEFAULT_REGION } from "../constants.ts"
 export interface RunRequest {
   readonly command: ReadonlyArray<string>
   readonly ref?: string
+  /**
+   * Launch against an image that already exists in the registry instead of
+   * building one (`afk run --image`). The caller vouches for it; see
+   * `BuildService.adoptImage` for why a cache hit is not an equivalent.
+   */
+  readonly image?: string
   readonly timeoutHours?: number
   /** Retain the compute primitive past Run end for post-mortem `afk attach`
    *  (cloud On-Demand only; see StartInput.retain and CONTEXT.md "Retention"). */
@@ -212,7 +218,9 @@ export const RunServiceLive = Layer.effect(
       Effect.gen(function* () {
         const { config } = yield* cfg.load
         const region = config.aws?.region ?? DEFAULT_REGION
-        const built = yield* build.build({ region, ref: input.ref })
+        const built = yield* input.image !== undefined
+          ? build.adoptImage({ image: input.image, ref: input.ref })
+          : build.build({ region, ref: input.ref })
         return yield* compute.prepare({
           command: input.command,
           ref: input.ref,
