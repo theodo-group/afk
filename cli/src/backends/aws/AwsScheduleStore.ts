@@ -37,7 +37,7 @@ const parseJson = (raw: string): unknown => {
  * field decoded rather than read, and a row whose trigger no longer parses is
  * dropped rather than launched on a guess.
  */
-const entryFromItem = (item: Item): StoredEntry | null => {
+export const entryFromItem = (item: Item): StoredEntry | null => {
   const scheduleId = readS(item, "schedule_id")
   const entryId = readS(item, "entry_id")
   const rawTrigger = readS(item, "trigger")
@@ -80,7 +80,7 @@ const entryFromItem = (item: Item): StoredEntry | null => {
   }
 }
 
-const itemFromEntry = (e: StoredEntry): Item => ({
+export const itemFromEntry = (e: StoredEntry): Item => ({
   schedule_id: S(e.scheduleId),
   entry_id: S(e.entryId),
   state: S(e.state),
