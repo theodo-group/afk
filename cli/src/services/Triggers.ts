@@ -192,6 +192,8 @@ export interface EntryDeclaration {
  */
 export const validateEntries = (
   entries: ReadonlyArray<EntryDeclaration>,
+  /** Submit time, injected so the clock checks stay deterministic. */
+  referenceMs: number,
 ): ReadonlyArray<string> => {
   const duplicates = entries
     .map((e) => e.id)
@@ -254,13 +256,29 @@ export const validateEntries = (
     [...triggers].flatMap(([id, t]) => (isClock(t) ? [id] : [])),
   )
   const grounded = growGrounded(edges, clocks)
-  return [...triggers.keys()]
+  const ungrounded = [...triggers.keys()]
     .filter((id) => !grounded.has(id))
     .map(
       (id) =>
         `entry '${id}' is not reachable from a clock trigger, so nothing would ever start it`,
     )
+
+  // A clock Trigger that parses but yields no first occurrence would be stored
+  // as an Entry with no `not_before` — which never fires, silently. Refuse it
+  // here rather than let the developer find out by it not happening.
+  const unschedulable = [...triggers].flatMap(([id, t]) =>
+    isClock(t) && firstDueAt(t, referenceMs) === undefined
+      ? [
+          `entry '${id}': ${describeClock(t)} has no occurrence in the next year, so it would never fire`,
+        ]
+      : [],
+  )
+
+  return [...ungrounded, ...unschedulable]
 }
+
+const describeClock = (t: ParsedTrigger): string =>
+  t.kind === "cron" ? `'cron: ${t.expr}'` : "its trigger"
 
 const findCycles = (
   edges: ReadonlyMap<string, string>,

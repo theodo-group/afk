@@ -71,6 +71,10 @@ export const ScheduleServiceLive = Layer.effect(
     return ScheduleService.of({
       submit: ({ content, source }) =>
         Effect.gen(function* () {
+          // Read the clock once and inject it: every gate and every Entry's
+          // first occurrence is resolved against the same instant.
+          const submittedAt = new Date()
+
           // (a) Schema + graph. Nothing is built and nothing is written until
           // the whole file is sound, and every problem is reported at once.
           const raw = yield* Effect.try({
@@ -91,6 +95,7 @@ export const ScheduleServiceLive = Layer.effect(
           )
           const problems = validateEntries(
             file.entries.map((e) => ({ id: e.id, trigger: e.trigger })),
+            submittedAt.getTime(),
           )
           if (problems.length > 0) {
             return yield* Effect.fail(
@@ -117,7 +122,6 @@ export const ScheduleServiceLive = Layer.effect(
 
           // (d) Write. An expired session surfaces here, before any row lands.
           const owner = yield* compute.callerPrincipal
-          const submittedAt = new Date()
           const submittedAtIso = submittedAt.toISOString()
           const defaultTimeout =
             config.defaultTimeoutHours ?? DEFAULT_TIMEOUT_HOURS

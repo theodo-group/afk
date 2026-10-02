@@ -92,6 +92,20 @@ describe("nextCronMatch — UTC, strictly after", () => {
     )
   })
 
+  it("honours a restricted day-of-month on its own", () => {
+    expect(nextCronMatch("0 0 1 * *", Date.parse("2026-10-02T20:00:00Z"))).toBe(
+      Date.parse("2026-11-01T00:00:00Z"),
+    )
+  })
+
+  it("ORs day-of-month with day-of-week when both are restricted", () => {
+    // POSIX: '1st of the month OR any Monday', not their intersection.
+    // 2026-10-05 is the first Monday after the 2nd, and comes before the 1st.
+    expect(nextCronMatch("0 0 1 * 1", Date.parse("2026-10-02T20:00:00Z"))).toBe(
+      Date.parse("2026-10-05T00:00:00Z"),
+    )
+  })
+
   it("honours steps, lists and day-of-week", () => {
     expect(
       nextCronMatch("*/15 * * * *", Date.parse("2026-10-02T23:01:00Z")),
@@ -127,27 +141,36 @@ describe("validateEntries — the submit gate", () => {
 
   it("passes a sound chain", () => {
     expect(
-      validateEntries([
-        { id: "a", trigger: at },
-        { id: "b", trigger: { after: "a", require: "success" } },
-      ]),
+      validateEntries(
+        [
+          { id: "a", trigger: at },
+          { id: "b", trigger: { after: "a", require: "success" } },
+        ],
+        NOW,
+      ),
     ).toEqual([])
   })
 
   it("catches an after: naming no Entry", () => {
-    const errs = validateEntries([
-      { id: "a", trigger: at },
-      { id: "b", trigger: { after: "typo" } },
-    ])
+    const errs = validateEntries(
+      [
+        { id: "a", trigger: at },
+        { id: "b", trigger: { after: "typo" } },
+      ],
+      NOW,
+    )
     expect(errs).toHaveLength(1)
     expect(errs[0]).toContain("names no Entry")
   })
 
   it("catches a cycle", () => {
-    const errs = validateEntries([
-      { id: "a", trigger: { after: "b" } },
-      { id: "b", trigger: { after: "a" } },
-    ])
+    const errs = validateEntries(
+      [
+        { id: "a", trigger: { after: "b" } },
+        { id: "b", trigger: { after: "a" } },
+      ],
+      NOW,
+    )
     expect(errs.some((e) => e.startsWith("cycle:"))).toBe(true)
   })
 
@@ -155,32 +178,61 @@ describe("validateEntries — the submit gate", () => {
     // An Entry has exactly one edge, so 'unreachable from a clock' always
     // means 'leads into a cycle' — 'c' is stranded, and the cycle is what the
     // developer has to fix.
-    const errs = validateEntries([
-      { id: "a", trigger: { after: "b" } },
-      { id: "b", trigger: { after: "a" } },
-      { id: "c", trigger: { after: "b" } },
-    ])
+    const errs = validateEntries(
+      [
+        { id: "a", trigger: { after: "b" } },
+        { id: "b", trigger: { after: "a" } },
+        { id: "c", trigger: { after: "b" } },
+      ],
+      NOW,
+    )
     expect(errs.some((e) => e.startsWith("cycle:"))).toBe(true)
   })
 
   it("catches a duplicate id", () => {
-    const errs = validateEntries([
-      { id: "a", trigger: at },
-      { id: "a", trigger: at },
-    ])
+    const errs = validateEntries(
+      [
+        { id: "a", trigger: at },
+        { id: "a", trigger: at },
+      ],
+      NOW,
+    )
     expect(errs).toEqual(["duplicate entry id 'a'"])
   })
 
   it("refuses an id that would be read as a delay", () => {
-    const errs = validateEntries([{ id: "2h", trigger: at }])
+    const errs = validateEntries([{ id: "2h", trigger: at }], NOW)
     expect(errs[0]).toContain("shaped like a duration")
   })
 
+  it("refuses a cron that would never come round", () => {
+    // It parses, it is a clock, and every graph rule passes — but its next
+    // occurrence is past the search horizon, so it would be stored with no
+    // not_before and silently never fire. Submit is the only place to catch it.
+    const errs = validateEntries(
+      [{ id: "leap", trigger: { cron: "0 0 29 2 *" } }],
+      NOW,
+    )
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain("no occurrence in the next year")
+
+    // An impossible date, which no horizon would ever reach.
+    expect(
+      validateEntries(
+        [{ id: "never", trigger: { cron: "0 0 30 2 *" } }],
+        NOW,
+      )[0],
+    ).toContain("would never fire")
+  })
+
   it("refuses depending on a recurring Entry", () => {
-    const errs = validateEntries([
-      { id: "a", trigger: { cron: "0 23 * * *" } },
-      { id: "b", trigger: { after: "a" } },
-    ])
+    const errs = validateEntries(
+      [
+        { id: "a", trigger: { cron: "0 23 * * *" } },
+        { id: "b", trigger: { after: "a" } },
+      ],
+      NOW,
+    )
     expect(errs[0]).toContain("recurring (cron) Entry")
   })
 })

@@ -58,6 +58,7 @@ describe("the Schedule file format", () => {
     expect(
       validateEntries(
         decoded.right.entries.map((e) => ({ id: e.id, trigger: e.trigger })),
+        Date.parse("2026-10-01T00:00:00Z"),
       ),
     ).toEqual([])
   })
