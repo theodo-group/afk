@@ -44,6 +44,20 @@ const rowFromItem = (item: Item): HistoryRow | null => {
 }
 
 /**
+ * A Scan returns items in hash order, and DynamoDB applies `Limit` before any
+ * ordering (and before the filter): passing it to the Scan yields an arbitrary
+ * page, not the newest Runs. So the Scan reads the whole table and the cap is
+ * applied here, after the sort.
+ */
+export const newestFirst = (
+  rows: ReadonlyArray<HistoryRow>,
+  limit: number | undefined,
+): ReadonlyArray<HistoryRow> => {
+  const sorted = [...rows].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
+  return limit === undefined ? sorted : sorted.slice(0, limit)
+}
+
+/**
  * AWS implementation of RunHistory. Backed by the DynamoDB `afk-runs` table
  * provisioned by Terraform. Indexed by `run_id` (PK), with GSIs on `owner`
  * and `repo` for `afk history` queries.
@@ -149,13 +163,14 @@ export const AwsRunHistoryLive = Layer.effect(
                   expressionAttributeValues: { ":t": S(sinceIsoUtc) },
                 }
               : {}),
-            ...(limit !== undefined ? { limit } : {}),
           })
-          return items
-            .map(rowFromItem)
-            .filter((x): x is HistoryRow => x !== null)
-            .filter((row) => !branch || row.branch === branch)
-            .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
+          return newestFirst(
+            items
+              .map(rowFromItem)
+              .filter((x): x is HistoryRow => x !== null)
+              .filter((row) => !branch || row.branch === branch),
+            limit,
+          )
         }),
     })
   }),
