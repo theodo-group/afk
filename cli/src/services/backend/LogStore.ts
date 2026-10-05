@@ -12,8 +12,10 @@ export interface TailInput {
   readonly repoName: string
   readonly serviceFilter?: string
   readonly follow: boolean
-  /** Duration string ("30d", "1h", "10m") — only meaningful when follow=false. */
+  /** `--since` as the user gave it: a duration ("30d", "1h") or an ISO timestamp. */
   readonly since?: string
+  /** The Run's start (ISO), when known: where a read with no `--since` begins. */
+  readonly startedAt?: string
 }
 
 /**

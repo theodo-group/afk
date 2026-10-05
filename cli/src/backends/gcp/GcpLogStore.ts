@@ -3,6 +3,7 @@ import { LogStore } from "../../services/backend/LogStore.ts"
 import { CloudLogging } from "../../adapters/gcp/CloudLogging.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
+import { DEFAULT_LOG_SINCE } from "../../constants.ts"
 
 /**
  * GCP implementation of LogStore. Backed by Cloud Logging: the `gcplogs` driver
@@ -28,7 +29,7 @@ export const GcpLogStoreLive = Layer.effect(
             runId: input.runId,
             service: input.serviceFilter,
             follow: input.follow,
-            freshness: input.since,
+            freshness: input.since ?? DEFAULT_LOG_SINCE,
           })
         }),
     })
