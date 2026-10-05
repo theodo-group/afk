@@ -6,6 +6,11 @@ import { BunContext, BunRuntime } from "@effect/platform-bun"
 
 import { makeSubprocessLive } from "./infra/Subprocess.ts"
 import { renderCause } from "./infra/Errors.ts"
+import {
+  exitCodeOf,
+  HANDLED_SIGNALS,
+  type HandledSignal,
+} from "./infra/ExitCode.ts"
 import { makeOutputLive, Output } from "./infra/Output.ts"
 import { consoleLogger } from "./infra/Logger.ts"
 
@@ -215,6 +220,15 @@ const program = Effect.gen(function* () {
   )
 })
 
+// registered before runMain's own handlers, so the signal is known by the
+// time its teardown picks the exit code.
+let signal: HandledSignal | undefined
+HANDLED_SIGNALS.forEach((s) =>
+  process.once(s, () => {
+    signal ??= s
+  }),
+)
+
 BunRuntime.runMain(
   program.pipe(
     Effect.catchAllCause((cause) =>
@@ -224,4 +238,5 @@ BunRuntime.runMain(
       }),
     ),
   ),
+  { teardown: (exit, onExit) => onExit(exitCodeOf(exit, signal)) },
 )
