@@ -21,11 +21,18 @@ export class Logs extends Context.Tag("Logs")<
       readonly group: string
       readonly stream: string
       readonly startFromHead?: boolean
+      /** Epoch ms; events before it are skipped server-side. */
+      readonly startTime?: number
       readonly nextToken?: string
     }) => Effect.Effect<
       { readonly events: ReadonlyArray<LogEvent>; readonly nextToken?: string },
       AwsError
     >
+    readonly streamNames: (input: {
+      readonly region: string
+      readonly group: string
+      readonly prefix: string
+    }) => Effect.Effect<ReadonlyArray<string>, AwsError>
     readonly tail: (input: {
       readonly region: string
       readonly group: string
@@ -98,6 +105,9 @@ export const LogsLive = Layer.effect(
             "--log-stream-name",
             input.stream,
             ...(input.startFromHead ? ["--start-from-head"] : []),
+            ...(input.startTime !== undefined
+              ? ["--start-time", String(input.startTime)]
+              : []),
             ...(input.nextToken ? ["--next-token", input.nextToken] : []),
           ])
           .pipe(
@@ -109,6 +119,21 @@ export const LogsLive = Layer.effect(
               nextToken: r.nextForwardToken,
             })),
           ),
+      streamNames: (input) =>
+        aws
+          .json<{
+            logStreams: ReadonlyArray<{ logStreamName: string }>
+          }>("logs:DescribeLogStreams", [
+            "logs",
+            "describe-log-streams",
+            "--region",
+            input.region,
+            "--log-group-name",
+            input.group,
+            "--log-stream-name-prefix",
+            input.prefix,
+          ])
+          .pipe(Effect.map((r) => r.logStreams.map((s) => s.logStreamName))),
       tail: (input) =>
         sub
           .stream("aws", [

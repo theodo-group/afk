@@ -131,6 +131,9 @@ export const DEFAULT_SESSION_TIMEOUT_HOURS = 24
  * idiom the Golden bootstraps use; portable across the dev's base images. */
 export const SESSION_KEEPALIVE_COMMAND = ["tail", "-f", "/dev/null"] as const
 export const DEFAULT_MAIN_SERVICE = "agent"
+
+/** `afk logs` window when neither `--since` nor the Run's start is known. */
+export const DEFAULT_LOG_SINCE = "30d"
 /** Days a finished Run's compute primitive is retained before reclamation.
  * Always honoured by the Local Backend; on AWS/GCP it applies to Runs launched
  * with `--retain` (the sweeper reaps retained instances past this window). */

@@ -19,9 +19,9 @@ const all = Options.boolean("all").pipe(
   Options.withDescription("show every service, not just the main service"),
 )
 const since = Options.text("since").pipe(
-  Options.withDefault("30d"),
+  Options.optional,
   Options.withDescription(
-    "time window for historical reads (e.g. 1h, 24h, 7d). default 30d",
+    "where a historical read starts: a duration (1h, 24h, 7d) or an ISO timestamp. default: the Run's start",
   ),
 )
 
@@ -50,17 +50,17 @@ export const logs = Command.make(
       // that outlives the VM, and Cloud Logging's filter is exact-match, so
       // a prefix would never match. Fall back to history (which the picker
       // already queries) and resolve the prefix there.
-      const resolvedRunId = yield* runs.findByRunId(picked.value).pipe(
-        Effect.map((r) => r.runId),
+      const resolved = yield* runs.findByRunId(picked.value).pipe(
+        Effect.map((r) => ({ runId: r.runId, startedAt: r.startedAt })),
         Effect.catchTag("UserError", () =>
           hist.query({ limit: 100 }).pipe(
             Effect.flatMap((rows) => {
               const exact = rows.find((r) => r.runId === picked.value)
-              if (exact) return Effect.succeed(exact.runId)
+              if (exact) return Effect.succeed(exact)
               const matches = rows.filter((r) =>
                 r.runId.startsWith(picked.value),
               )
-              if (matches.length === 1) return Effect.succeed(matches[0]!.runId)
+              if (matches.length === 1) return Effect.succeed(matches[0]!)
               if (matches.length === 0) {
                 return Effect.fail(
                   new UserError({
@@ -98,11 +98,12 @@ export const logs = Command.make(
           : mainService
 
       yield* logStore.tail({
-        runId: resolvedRunId,
+        runId: resolved.runId,
         repoName: sourceRepoName,
         ...(serviceFilter !== undefined ? { serviceFilter } : {}),
         follow,
-        since,
+        ...(since._tag === "Some" ? { since: since.value } : {}),
+        ...(resolved.startedAt ? { startedAt: resolved.startedAt } : {}),
       })
     }),
 )
