@@ -19,6 +19,19 @@ export interface UserDataInput {
     readonly ssmName: string
   }>
   /**
+   * Per-Run copies of the Owner's personal secrets (see AwsPersonalSecrets).
+   * The CLI writes them only once the instance exists — the copy is tagged
+   * with its ARN — so the boot waits for each, checks it was written by
+   * `ownerUserId`, and deletes it once read. Empty when no reference is
+   * personal.
+   */
+  readonly runSecrets: ReadonlyArray<{
+    readonly name: string
+    readonly ssmName: string
+  }>
+  /** The userid every run secret must be tagged `afk:owner` with. */
+  readonly ownerUserId: string
+  /**
    * Compose file content as authored by the developer. Undefined for no-compose Runs.
    * The CLI has already substituted ${AFK_IMAGE}; ${AFK_COMMAND} is interpolated at boot.
    */
@@ -91,6 +104,49 @@ const renderSecretFetches = (
     })
     .join("\n")
 }
+
+/** How long the boot waits for the CLI to copy a personal secret after launch. */
+const RUN_SECRET_WAIT_SECONDS = 300
+
+/**
+ * Read one per-Run copy of a personal secret. The instance role can only read
+ * copies tagged with this instance's ARN; that the copy was written by the
+ * Run's own Owner is checked here, since any developer can tag a parameter
+ * with any instance's ARN. A Run never starts without its personal secret —
+ * it would fall back to running with an empty token — so a failure aborts.
+ */
+const renderRunSecretFetch = (
+  s: { name: string; ssmName: string },
+  input: UserDataInput,
+): string => {
+  const region = shellQuote(input.region)
+  const param = shellQuote(s.ssmName)
+  return [
+    `_val=""`,
+    `for _try in $(seq 1 ${RUN_SECRET_WAIT_SECONDS / 5}); do`,
+    `  _val=$(aws --region ${region} ssm get-parameter --with-decryption --name ${param} --query Parameter.Value --output text 2>/dev/null) && break`,
+    `  sleep 5`,
+    `done`,
+    `[ -n "$_val" ] || afk_abort ${shellQuote(`personal secret ${s.ssmName} never arrived`)}`,
+    `_by=$(aws --region ${region} ssm list-tags-for-resource --resource-type Parameter --resource-id ${param} --query "TagList[?Key=='afk:owner'].Value" --output text)`,
+    `[ "$_by" = ${shellQuote(input.ownerUserId)} ] || afk_abort ${shellQuote(`personal secret ${s.ssmName} was not written by the Run's Owner`)}`,
+    `aws --region ${region} ssm delete-parameter --name ${param} || echo "afk-userdata: could not delete ${s.ssmName} (non-fatal)"`,
+    `printf '%s=%s\\n' ${shellQuote(s.name)} "$_val" >> "$AFK_ENV_FILE"`,
+    `unset _val _by`,
+  ].join("\n")
+}
+
+const renderRunSecretFetches = (input: UserDataInput): string =>
+  input.runSecrets.length === 0
+    ? "# (no personal secrets)"
+    : [
+        "afk_abort() {",
+        `  echo "afk-userdata: $1 — aborting the run"`,
+        "  shutdown -h now",
+        "  exit 1",
+        "}",
+        ...input.runSecrets.map((s) => renderRunSecretFetch(s, input)),
+      ].join("\n")
 
 const renderDaemonJson = (
   logGroup: string,
@@ -296,6 +352,7 @@ export const buildUserData = (input: UserDataInput): string => {
     `chmod 600 "$AFK_ENV_FILE"`,
     renderEnvFileWrites(input.env),
     renderSecretFetches(input.secrets, input.region),
+    renderRunSecretFetches(input),
     "",
     composeBlock,
     "",

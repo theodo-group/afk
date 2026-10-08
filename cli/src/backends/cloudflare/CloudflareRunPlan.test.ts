@@ -123,3 +123,23 @@ describe("planCloudflareRun", () => {
     }
   })
 })
+
+describe("planCloudflareRun — personal secrets", () => {
+  it("refuses a personal secret: every Run shares the Worker's identity", () => {
+    const result = planCloudflareRun({
+      ...baseInput(),
+      envEntries: [
+        {
+          kind: "secret",
+          name: "CLAUDE_CODE_OAUTH_TOKEN",
+          secretName: "claude-oauth",
+          scope: "personal",
+        },
+      ],
+    })
+    expect(Either.isLeft(result)).toBe(true)
+    if (Either.isLeft(result)) {
+      expect(result.left.message).toContain("not supported on the Cloudflare")
+    }
+  })
+})

@@ -30,9 +30,10 @@ const findProjectRoot = (dir: string): string | null => {
  * Parse one line of `.afk.env`. Accepts:
  *   PLAIN_VAR=value                          → kind: "plain"
  *   SOME_VAR=secret:my-secret-name           → kind: "secret", secretName: "my-secret-name"
+ *   SOME_VAR=personal-secret:my-token        → kind: "secret", scope: "personal"
  *   GITHUB_TOKEN=ssm:/afk/secrets/github-token  (legacy AWS-only form)  → kind: "secret"
  */
-const parseEnvLine = (
+export const parseEnvLine = (
   raw: string,
   secretPrefix: string,
 ): EnvEntry | { _malformed: true; reason: string; name: string } | null => {
@@ -44,7 +45,20 @@ const parseEnvLine = (
   const value = line.slice(eq + 1).trim()
   if (!name) return null
   if (value.startsWith("secret:")) {
-    return { kind: "secret", name, secretName: value.slice("secret:".length) }
+    return {
+      kind: "secret",
+      name,
+      secretName: value.slice("secret:".length),
+      scope: "team",
+    }
+  }
+  if (value.startsWith("personal-secret:")) {
+    return {
+      kind: "secret",
+      name,
+      secretName: value.slice("personal-secret:".length),
+      scope: "personal",
+    }
   }
   if (value.startsWith("ssm:")) {
     // Legacy form: SSM absolute path. Strip the `<secretPrefix>/` prefix (default
@@ -62,6 +76,7 @@ const parseEnvLine = (
       kind: "secret",
       name,
       secretName: path.slice(secretPrefix.length + 1),
+      scope: "team",
     }
   }
   return { kind: "plain", name, value }

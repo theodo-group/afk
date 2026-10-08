@@ -2,12 +2,13 @@ import { Command } from "@effect/cli"
 import { Effect } from "effect"
 import { SecretStore } from "../../services/backend/SecretStore.ts"
 import { Output } from "../../infra/Output.ts"
+import { personal, scopeOf } from "./scope.ts"
 
-export const ls = Command.make("ls", {}, () =>
+export const ls = Command.make("ls", { personal }, ({ personal }) =>
   Effect.gen(function* () {
     const secrets = yield* SecretStore
     const out = yield* Output
-    const list = yield* secrets.list
+    const list = yield* secrets.list(scopeOf(personal))
     yield* out.emit({
       data: list,
       human: () =>

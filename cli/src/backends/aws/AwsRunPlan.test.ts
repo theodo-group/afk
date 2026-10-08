@@ -14,6 +14,8 @@ import {
   TAG_RETAIN,
   TAG_RUN_ID,
 } from "../../constants.ts"
+import type { EnvEntry } from "../../schema/Config.ts"
+import { personalSecretName } from "./AwsPersonalSecrets.ts"
 
 const baseInput = (
   overrides: {
@@ -256,5 +258,54 @@ describe("ec2InstanceToRun retention", () => {
       7,
     )
     expect(run?.retainedUntil).toBeUndefined()
+  })
+})
+
+describe("planAwsRun — personal secrets", () => {
+  const ALICE = "AROAEXAMPLEID:alice"
+  const RUN = "11111111-2222-3333-4444-555555555555"
+  const personal: EnvEntry = {
+    kind: "secret",
+    name: "CLAUDE_CODE_OAUTH_TOKEN",
+    secretName: "claude-oauth",
+    scope: "personal",
+  }
+  const team: EnvEntry = {
+    kind: "secret",
+    name: "GITLAB_TOKEN",
+    secretName: "gitlab-token",
+    scope: "team",
+  }
+  const plan = (userId: string, envEntries: ReadonlyArray<EnvEntry>) =>
+    planAwsRun({ ...baseInput({ identity: { UserId: userId } }), envEntries })
+
+  it("copies each personal secret to a path of this Run", () => {
+    const core = Either.getOrThrow(plan(ALICE, [team, personal]))
+    expect(core.backendPlanBase.personalSecrets).toEqual([
+      {
+        source: personalSecretName(undefined, ALICE, "claude-oauth"),
+        copy: `/afk/runs/${RUN}/claude-oauth`,
+      },
+    ])
+    expect(core.backendPlanBase.ownerUserId).toBe(ALICE)
+  })
+
+  it("reads the team secret directly and the personal one from the Run's copy", () => {
+    const { userData } = Either.getOrThrow(
+      plan(ALICE, [team, personal]),
+    ).backendPlanBase
+    expect(userData).toContain("--name '/afk/secrets/gitlab-token'")
+    expect(userData).toContain(`--name '/afk/runs/${RUN}/claude-oauth'`)
+    expect(userData).not.toContain("/afk/personal/")
+  })
+
+  it("copies nothing when every secret is a team one", () => {
+    const core = Either.getOrThrow(plan(ALICE, [team]))
+    expect(core.backendPlanBase.personalSecrets).toEqual([])
+  })
+
+  it("refuses personal secrets on an anonymous session", () => {
+    const result = plan("AROAEXAMPLEID:botocore-session-1712345", [personal])
+    expect(Either.isLeft(result)).toBe(true)
   })
 })

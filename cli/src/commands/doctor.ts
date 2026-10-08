@@ -1,5 +1,5 @@
 import { Command } from "@effect/cli"
-import { Effect } from "effect"
+import { type Context, Effect } from "effect"
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { checkBinary } from "../infra/Subprocess.ts"
@@ -14,7 +14,11 @@ import {
   type CheckResult,
 } from "../services/backend/BackendDoctor.ts"
 import { Compute } from "../services/backend/Compute.ts"
-import { DOCKERFILE, ENV_FILE, GOLDEN_IMAGE_STALE_DAYS } from "../constants.ts"
+import type { SecretRef } from "../services/RunPlan.ts"
+import type { SecretScope } from "../schema/Secret.ts"
+
+const SCOPES: ReadonlyArray<SecretScope> = ["team", "personal"]
+import { DOCKERFILE, GOLDEN_IMAGE_STALE_DAYS } from "../constants.ts"
 
 /**
  * Light syntactic check on the consumer's afk.Dockerfile: contracts only —
@@ -59,21 +63,44 @@ const checkDockerfile = (projectRoot: string): CheckResult => {
 }
 
 /**
- * Parse .afk.env and pull out the names referenced as `<KEY>=secret:<name>`.
- * Same shape the Backend resolves at Run boot — checked against the live
- * SecretStore.list() so the developer learns about a missing entry at
- * `afk doctor` time, not at the start of a Run (where it'd fail the boot).
+ * Every `.afk.env` secret reference must already live in its scope of the
+ * active store; a missing one fails the Run at boot, not at submit time. Lists
+ * each scope once and intersects — one round-trip per scope, regardless of the
+ * reference count.
  */
-const extractSecretRefs = (projectRoot: string): ReadonlyArray<string> => {
-  const path = resolve(projectRoot, ENV_FILE)
-  if (!existsSync(path)) return []
-  const refs: string[] = []
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
-    const line = raw.replace(/#.*$/, "").trim()
-    const m = line.match(/^[A-Z_][A-Z0-9_]*=secret:([A-Za-z0-9._-]+)$/i)
-    if (m && m[1]) refs.push(m[1])
-  }
-  return refs
+const checkSecretRefs = (
+  secrets: Context.Tag.Service<typeof SecretStore>,
+  refs: ReadonlyArray<SecretRef>,
+  scope: SecretScope,
+): Effect.Effect<CheckResult> => {
+  const wanted = refs.filter((r) => r.scope === scope).map((r) => r.secretName)
+  const name =
+    scope === "personal" ? "personal secret references" : "secret references"
+  const putHint =
+    scope === "personal"
+      ? "afk secrets put --personal <name>"
+      : "afk secrets put <name>"
+  return secrets.list(scope).pipe(
+    Effect.map((stored): CheckResult => {
+      const have = new Set(stored.map((s) => s.name))
+      const missing = wanted.filter((r) => !have.has(r))
+      return {
+        name,
+        ok: missing.length === 0,
+        detail:
+          missing.length === 0
+            ? `${wanted.length} reference${wanted.length === 1 ? "" : "s"} resolve`
+            : `${missing.length} unresolved: ${missing.join(", ")} — \`${putHint}\``,
+      }
+    }),
+    Effect.catchAll((e) =>
+      Effect.succeed<CheckResult>({
+        name,
+        ok: false,
+        detail: `could not list stored secrets: ${e.message}`,
+      }),
+    ),
+  )
 }
 
 export const doctor = Command.make("doctor", {}, () =>
@@ -102,31 +129,17 @@ export const doctor = Command.make("doctor", {}, () =>
       const { projectRoot } = loaded.right
       checks.push(checkDockerfile(projectRoot))
 
-      // Every `secret:<name>` reference in .afk.env must already live in the
-      // active store; a missing one fails the Run at boot, not at submit time.
-      // List once and intersect — one round-trip regardless of reference count.
-      const refs = extractSecretRefs(projectRoot)
-      if (refs.length > 0) {
-        const stored = yield* secrets.list.pipe(Effect.either)
-        if (stored._tag === "Right") {
-          const have = new Set(stored.right.map((s) => s.name))
-          const missing = refs.filter((r) => !have.has(r))
-          checks.push({
-            name: "secret references",
-            ok: missing.length === 0,
-            detail:
-              missing.length === 0
-                ? `${refs.length} reference${refs.length === 1 ? "" : "s"} resolve`
-                : `${missing.length} unresolved: ${missing.join(", ")} — \`afk secrets put <name>\``,
-          })
-        } else {
-          checks.push({
-            name: "secret references",
-            ok: false,
-            detail: `could not list stored secrets: ${stored.left.message}`,
-          })
-        }
-      }
+      const refs = loaded.right.envEntries.flatMap<SecretRef>((e) =>
+        e.kind === "secret"
+          ? [{ name: e.name, secretName: e.secretName, scope: e.scope }]
+          : [],
+      )
+      const scopes = SCOPES.filter((sc) => refs.some((r) => r.scope === sc))
+      checks.push(
+        ...(yield* Effect.all(
+          scopes.map((sc) => checkSecretRefs(secrets, refs, sc)),
+        )),
+      )
     } else {
       checks.push({
         name: "afk.config.json",

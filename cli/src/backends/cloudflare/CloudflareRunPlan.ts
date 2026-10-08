@@ -9,6 +9,7 @@ import type {
 } from "../../services/backend/Compute.ts"
 import { UserError } from "../../infra/Errors.ts"
 import { assembleRunPlan } from "../../services/RunPlan.ts"
+import { personalSecretsUnsupported } from "../../services/backend/SecretStore.ts"
 import { collectionBases } from "../../services/SessionArtifact.ts"
 import {
   DEFAULT_MAIN_SERVICE,
@@ -150,6 +151,9 @@ export const planCloudflareRun = (
   })
   if (assembled.composeError) {
     return Either.left(new UserError({ message: assembled.composeError }))
+  }
+  if (assembled.secrets.some((s) => s.scope === "personal")) {
+    return Either.left(personalSecretsUnsupported("Cloudflare"))
   }
   const {
     timeoutHours,

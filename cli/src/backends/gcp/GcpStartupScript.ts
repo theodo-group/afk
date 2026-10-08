@@ -1,3 +1,4 @@
+import type { SecretRef } from "../../services/RunPlan.ts"
 import {
   GCP_BACKEND_ENV,
   GCP_SECRET_PREFIX,
@@ -36,13 +37,14 @@ export interface GcpStartupScriptInput {
    *  instead of self-deleting, so `afk attach` can resume for post-mortem. */
   readonly retain: boolean
   readonly env: ReadonlyArray<{ readonly name: string; readonly value: string }>
-  /** Secret Manager secret ids (already prefixed) to read at boot. */
-  readonly secrets: ReadonlyArray<string>
-  /** Env-var name ↦ canonical secret name mapping for the env file. */
-  readonly secretEnvNames: ReadonlyArray<{
-    readonly name: string
-    readonly secretName: string
-  }>
+  /** Env-var name ↦ secret mapping for the env file. */
+  readonly secretEnvNames: ReadonlyArray<SecretRef>
+  /**
+   * The Owner's personal-secret container, read once when any reference is
+   * `personal` — absent otherwise. Only the Owner's own VM service account can
+   * read it, so a Run launched with any other account fails here.
+   */
+  readonly personalSecretId?: string
   /** Compose YAML (gcplogs already injected, ${AFK_IMAGE} already substituted). */
   readonly compose?: string
   readonly sessionArtifactBases: ReadonlyArray<string>
@@ -65,21 +67,53 @@ const renderEnvFileWrites = (
     .join("\n")
 }
 
-const renderSecretFetches = (
-  secrets: ReadonlyArray<{ name: string; secretName: string }>,
-  project: string,
-): string => {
-  if (secrets.length === 0) return "# (no secrets)"
-  return secrets
-    .map((s) => {
-      const id = `${GCP_SECRET_PREFIX}-${s.secretName}`
-      return [
-        `_val=$(gcloud secrets versions access latest --project=${shellQuote(project)} --secret=${shellQuote(id)})`,
-        `printf '%s=%s\\n' ${shellQuote(s.name)} "$_val" >> "$AFK_ENV_FILE"`,
-        `unset _val`,
-      ].join("\n")
-    })
-    .join("\n")
+const renderTeamSecretFetch = (s: SecretRef, project: string): string =>
+  [
+    `_val=$(gcloud secrets versions access latest --project=${shellQuote(project)} --secret=${shellQuote(`${GCP_SECRET_PREFIX}-${s.secretName}`)})`,
+    `printf '%s=%s\\n' ${shellQuote(s.name)} "$_val" >> "$AFK_ENV_FILE"`,
+    `unset _val`,
+  ].join("\n")
+
+// A personal value is one `name=<base64>` line of the container (see
+// GcpPersonalSecrets). Match the name literally — `.` is a regex wildcard.
+const renderPersonalSecretFetch = (s: SecretRef): string =>
+  [
+    `_line=$(printf '%s\\n' "$AFK_PERSONAL" | awk -v n=${shellQuote(s.secretName)} 'index($0, n "=") == 1 { print substr($0, length(n) + 2); exit }')`,
+    `[ -n "$_line" ] || afk_abort ${shellQuote(`personal secret '${s.secretName}' is not set`)}`,
+    `printf '%s=%s\\n' ${shellQuote(s.name)} "$(printf '%s' "$_line" | base64 -d)" >> "$AFK_ENV_FILE"`,
+    `unset _line`,
+  ].join("\n")
+
+/**
+ * A Run whose personal secret cannot be read must not start without it: the
+ * agent would otherwise run with an empty token, or fall back to a team one.
+ * Reclaim the instance the same way the end of a Run does.
+ */
+const renderAbort = (input: GcpStartupScriptInput): string =>
+  [
+    "afk_abort() {",
+    `  echo "afk-startup: $1 — aborting the run"`,
+    `  gcloud compute instances ${input.retain ? "stop" : "delete"} ${shellQuote(input.instanceName)} --zone=${shellQuote(input.zone)} --quiet || true`,
+    "  exit 1",
+    "}",
+  ].join("\n")
+
+const renderSecretFetches = (input: GcpStartupScriptInput): string => {
+  const team = input.secretEnvNames.filter((s) => s.scope === "team")
+  const personal = input.secretEnvNames.filter((s) => s.scope === "personal")
+  if (team.length === 0 && personal.length === 0) return "# (no secrets)"
+  return [
+    ...team.map((s) => renderTeamSecretFetch(s, input.project)),
+    ...(personal.length > 0 && input.personalSecretId
+      ? [
+          renderAbort(input),
+          `AFK_PERSONAL=$(gcloud secrets versions access latest --project=${shellQuote(input.project)} --secret=${shellQuote(input.personalSecretId)}) \\`,
+          `  || afk_abort "cannot read the personal secrets"`,
+          ...personal.map(renderPersonalSecretFetch),
+          `unset AFK_PERSONAL`,
+        ]
+      : []),
+  ].join("\n")
 }
 
 const renderCommandShellString = (command: ReadonlyArray<string>): string =>
@@ -191,7 +225,7 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
     `: > "$AFK_ENV_FILE"`,
     `chmod 600 "$AFK_ENV_FILE"`,
     renderEnvFileWrites(input.env),
-    renderSecretFetches(input.secretEnvNames, input.project),
+    renderSecretFetches(input),
     "",
     composeBlock,
     "",

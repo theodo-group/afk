@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { SecretScope } from "./Secret.ts"
 
 /**
  * AWS-specific config block. Read only when `backend == "aws"`.
@@ -185,14 +186,17 @@ export const EnvEntry = Schema.Union(
   Schema.Struct({
     /**
      * A Backend-resolved secret reference. The `.afk.env` syntax is
-     * `secret:<name>` (the canonical form) or `ssm:<path>` (the legacy AWS-only
-     * form, still parsed). The Backend's SecretStore implementation knows how
+     * `secret:<name>` (the canonical form), `personal-secret:<name>` (the
+     * launching Owner's own secret) or `ssm:<path>` (the legacy AWS-only form,
+     * still parsed). The Backend's SecretStore implementation knows how
      * to dereference the name at Run time.
      */
     kind: Schema.Literal("secret"),
     name: Schema.String,
     /** Canonical secret name (no prefix). */
     secretName: Schema.String,
+    /** `personal-secret:<name>` resolves the launching Owner's own secret. */
+    scope: SecretScope,
   }),
 )
 export type EnvEntry = typeof EnvEntry.Type

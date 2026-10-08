@@ -18,6 +18,8 @@ const base: UserDataInput = {
   timeoutSeconds: 3600,
   env: [],
   secrets: [],
+  runSecrets: [],
+  ownerUserId: "AROAEXAMPLEID:alice",
   sessionArtifactBases: [],
   sessionArtifactBucket: "afk-artifacts-111122223333-eu-west-1",
   sessionArtifactMaxBytes: 25 * 1024 * 1024,
@@ -143,5 +145,40 @@ describe("encodeUserData", () => {
       Buffer.from(encodeUserData(script), "base64"),
     ).toString("utf8")
     expect(back).toBe(script)
+  })
+})
+
+describe("buildUserData — personal secrets", () => {
+  const withRunSecret = buildUserData({
+    ...base,
+    runSecrets: [
+      {
+        name: "CLAUDE_CODE_OAUTH_TOKEN",
+        ssmName: "/afk/runs/run-123/claude-oauth",
+      },
+    ],
+  })
+
+  it("reads nothing personal when the Run references no personal secret", () => {
+    expect(buildUserData(base)).not.toContain("/afk/runs/")
+  })
+
+  it("waits for the copy the CLI writes after launch, then deletes it", () => {
+    expect(withRunSecret).toContain(
+      "ssm get-parameter --with-decryption --name '/afk/runs/run-123/claude-oauth'",
+    )
+    expect(withRunSecret).toContain("sleep 5")
+    expect(withRunSecret).toContain(
+      "ssm delete-parameter --name '/afk/runs/run-123/claude-oauth'",
+    )
+  })
+
+  it("refuses a copy someone other than the Run's Owner wrote", () => {
+    expect(withRunSecret).toContain(`[ "$_by" = 'AROAEXAMPLEID:alice' ]`)
+  })
+
+  it("aborts the Run rather than start it without the secret", () => {
+    expect(withRunSecret).toContain("afk_abort()")
+    expect(withRunSecret).toContain("never arrived")
   })
 })

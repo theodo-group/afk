@@ -14,6 +14,10 @@ import { readSecretFile, type SecretFile } from "./localSecrets.ts"
  * `.afk.env` is identical to every other Backend; only the backing store moves
  * to the developer's machine. `LocalCompute` reads the same file to inject
  * values into a Run's env at launch (no in-container fetch).
+ *
+ * One machine has one [[owner]], so the `personal` and `team` scopes are the
+ * same store here: a `personal-secret:<name>` reference resolves exactly like
+ * `secret:<name>`.
  */
 export const LocalSecretStoreLive = Layer.effect(
   SecretStore,
@@ -68,15 +72,17 @@ export const LocalSecretStoreLive = Layer.effect(
           yield* writeFile(url, data)
         }),
 
-      list: Effect.gen(function* () {
-        const url = yield* gitUrl
-        const data = readSecretFile(url)
-        return Object.entries(data).map<Secret>(([name, s]) => ({
-          name,
-          reference: `secret:${name}`,
-          lastModified: s.lastModified,
-        }))
-      }),
+      list: (scope) =>
+        gitUrl.pipe(
+          Effect.map((url) =>
+            Object.entries(readSecretFile(url)).map<Secret>(([name, s]) => ({
+              name,
+              scope,
+              reference: `secret:${name}`,
+              lastModified: s.lastModified,
+            })),
+          ),
+        ),
     })
   }),
 )

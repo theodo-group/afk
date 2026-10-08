@@ -14,6 +14,11 @@ import { collectionBases } from "../../services/SessionArtifact.ts"
 import { retainedUntilIso } from "../../services/retention.ts"
 import { anonymousOwnerWarning, resolveOwner } from "./OwnerId.ts"
 import {
+  personalSecretName,
+  requireNamedOwner,
+  runSecretName,
+} from "./AwsPersonalSecrets.ts"
+import {
   artifactsBucketPrefix,
   DEFAULT_INSTANCE_TYPE,
   DEFAULT_MAIN_SERVICE,
@@ -154,6 +159,16 @@ export type AwsBackendPlan = {
   readonly startedAt: string
   /** Root EBS size (GiB) to launch with; absent ⇒ the Golden AMI's own size. */
   readonly rootVolumeSizeGb: number | undefined
+  /**
+   * The Owner's personal secrets this Run reads, and where each is copied once
+   * the instance exists (see AwsPersonalSecrets). Empty when none.
+   */
+  readonly personalSecrets: ReadonlyArray<{
+    readonly source: string
+    readonly copy: string
+  }>
+  /** The caller's `${aws:userid}`, which tags those copies. */
+  readonly ownerUserId: string
 }
 
 export interface PlanAwsRunInput {
@@ -242,6 +257,13 @@ export const planAwsRun = (
 
   const logGroup = `${logGroupPrefix(prefix)}/${i.sourceRepoName}`
 
+  const teamSecrets = secrets.filter((s) => s.scope === "team")
+  const personalSecrets = secrets.filter((s) => s.scope === "personal")
+  if (personalSecrets.length > 0) {
+    const named = requireNamedOwner(identity.UserId)
+    if (Either.isLeft(named)) return Either.left(named.left)
+  }
+
   const userData = buildUserData({
     runId: i.runId,
     region,
@@ -254,10 +276,15 @@ export const planAwsRun = (
     env,
     // UserData still expects {name, ssmName} for back-compat with the AWS
     // entrypoint which dereferences via the VM's instance profile.
-    secrets: secrets.map((s) => ({
+    secrets: teamSecrets.map((s) => ({
       name: s.name,
       ssmName: `${ssmSecretPrefix(prefix)}/${s.secretName}`,
     })),
+    runSecrets: personalSecrets.map((s) => ({
+      name: s.name,
+      ssmName: runSecretName(prefix, i.runId, s.secretName),
+    })),
+    ownerUserId: identity.UserId,
     compose: composeContent,
     sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
     sessionArtifactBucket: `${artifactsBucketPrefix(prefix)}-${identity.Account}-${region}`,
@@ -340,6 +367,11 @@ export const planAwsRun = (
       imageWasSkipped: built.skipped,
       startedAt: i.startedAt,
       rootVolumeSizeGb: config.aws?.rootVolumeSizeGb,
+      personalSecrets: personalSecrets.map((s) => ({
+        source: personalSecretName(prefix, identity.UserId, s.secretName),
+        copy: runSecretName(prefix, i.runId, s.secretName),
+      })),
+      ownerUserId: identity.UserId,
     },
   })
 }

@@ -1,5 +1,10 @@
 import { Effect, Layer } from "effect"
 import { GcpIam } from "../../adapters/gcp/Iam.ts"
+import { SecretManager } from "../../adapters/gcp/SecretManager.ts"
+import {
+  ensurePersonalIdentity,
+  removePersonalIdentity,
+} from "./GcpPersonalIdentity.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { ConfigError, GcpError, UserError } from "../../infra/Errors.ts"
@@ -37,12 +42,15 @@ const memberName = (member: string): string => member.split(":").pop() ?? member
  * binds/unbinds existing org members to the project-level `afkDeveloper` custom
  * role. `add` takes a `principal` (e.g. `user:dev@acme.com`); the `name` is the
  * display label. `AddMemberResult` reports the bound member — no access key or
- * service token, since nothing is minted.
+ * service token, since nothing is minted. `add` also gives the member their own
+ * VM service account and personal-secret container (GcpPersonalIdentity), which
+ * `rm` deletes.
  */
 export const GcpTeamLive = Layer.effect(
   Team,
   Effect.gen(function* () {
     const iam = yield* GcpIam
+    const sm = yield* SecretManager
     const auth = yield* Auth
     const cfg = yield* ConfigService
 
@@ -94,6 +102,7 @@ export const GcpTeamLive = Layer.effect(
         yield* Effect.forEach(PREDEFINED_DEVELOPER_ROLES, (role) =>
           iam.addBinding(p, principal, role),
         )
+        yield* ensurePersonalIdentity(iam, sm, p, principal)
         return {
           member: { name, kind: "gcp-principal", arn: principal },
         }
@@ -110,9 +119,7 @@ export const GcpTeamLive = Layer.effect(
         // as well as the full email.
         const match = members.find(
           (m) =>
-            m.name === name ||
-            m.arn === name ||
-            m.name.split("@")[0] === name,
+            m.name === name || m.arn === name || m.name.split("@")[0] === name,
         )
         if (!match) {
           return yield* Effect.fail(
@@ -132,6 +139,14 @@ export const GcpTeamLive = Layer.effect(
         )
         yield* Effect.forEach(PREDEFINED_DEVELOPER_ROLES, (role) =>
           iam.removeBinding(p, match.arn, role),
+        )
+        // Best-effort: a member added before personal secrets existed has none.
+        yield* removePersonalIdentity(iam, sm, p, match.arn).pipe(
+          Effect.catchAll((e) =>
+            Effect.logWarning(
+              `could not remove the personal secrets and VM service account of ${match.name}: ${e.message}`,
+            ),
+          ),
         )
       })
 

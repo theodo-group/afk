@@ -1,4 +1,5 @@
 import type { AfkConfig, EnvEntry } from "../schema/Config.ts"
+import type { SecretScope } from "../schema/Secret.ts"
 import { UserError } from "../infra/Errors.ts"
 import { DEFAULT_TIMEOUT_HOURS } from "../constants.ts"
 import { lintCompose, substituteImage } from "./Compose.ts"
@@ -11,14 +12,18 @@ import { lintCompose, substituteImage } from "./Compose.ts"
  * and then attaches only its provider-specific fields (owner, log channel,
  * backendPlan) on top.
  */
+/** One `.afk.env` secret reference: the env var it fills and the secret it reads. */
+export interface SecretRef {
+  readonly name: string
+  readonly secretName: string
+  readonly scope: SecretScope
+}
+
 export interface AssembledRunPlan {
   readonly timeoutHours: number
   readonly timeoutSeconds: number
   readonly env: ReadonlyArray<{ readonly name: string; readonly value: string }>
-  readonly secrets: ReadonlyArray<{
-    readonly name: string
-    readonly secretName: string
-  }>
+  readonly secrets: ReadonlyArray<SecretRef>
   readonly composeUsed: boolean
   /** Linted + image-substituted compose YAML; absent when no compose file. */
   readonly composeContent?: string
@@ -69,12 +74,11 @@ export const assembleRunPlan = (
   env.push({ name: "AFK_RUN_ID", value: runId })
   env.push({ name: "AFK_TIMEOUT_SECONDS", value: String(timeoutSeconds) })
 
-  const secrets = envEntries
-    .filter((e) => e.kind === "secret")
-    .map((e) => ({
-      name: e.name,
-      secretName: (e as { secretName: string }).secretName,
-    }))
+  const secrets = envEntries.flatMap<SecretRef>((e) =>
+    e.kind === "secret"
+      ? [{ name: e.name, secretName: e.secretName, scope: e.scope }]
+      : [],
+  )
 
   const base = {
     timeoutHours,

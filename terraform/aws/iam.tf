@@ -1,9 +1,15 @@
 locals {
   account_id    = data.aws_caller_identity.current.account_id
   region        = var.aws_region
-  ssm_param_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter/${var.project_name}/*"
+  ssm_param_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter/${var.project_name}/secrets/*"
   ecr_repo_arn  = "arn:aws:ecr:${local.region}:${local.account_id}:repository/${var.project_name}/*"
   log_group_arn = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/${var.project_name}/*"
+
+  # `ssm_param_arn` covers team secrets only. Personal secrets and their
+  # per-Run copies sit beside them and are granted by tag, below — a grant on
+  # `/<project_name>/*` would hand every developer and every Run VM all of them.
+  ssm_personal_param_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter/${var.project_name}/personal/*"
+  ssm_run_param_arn      = "arn:aws:ssm:${local.region}:${local.account_id}:parameter/${var.project_name}/runs/*"
 
   # Resource ARNs for the RunInstances policy. RunInstances touches several
   # resource types in one API call; the conditions on each are different.
@@ -18,7 +24,8 @@ locals {
 
 # ---------------------------------------------------------------------------
 # VM instance role — attached to every Run VM via the instance profile.
-# Minimal: pull from ECR, read SSM params under /afk/secrets, write CloudWatch
+# Minimal: pull from ECR, read SSM params under /afk/secrets (and the per-Run
+# copies of its Owner's personal secrets tagged with its own ARN), write CloudWatch
 # Logs under /afk/*, upload Session Artifacts, and update its own run-history
 # row with the exit code. No ec2:*. No iam:*. The VM terminates itself by OS
 # shutdown (InstanceInitiatedShutdownBehavior=terminate), not via API.
@@ -61,6 +68,24 @@ data "aws_iam_policy_document" "vm_instance" {
     sid       = "ReadAfkSecrets"
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = [local.ssm_param_arn]
+  }
+
+  # The per-Run copies of the Owner's personal secrets: only those tagged with
+  # THIS instance's ARN, so a Run reads its own Owner's secrets and no one
+  # else's. Deleted once read; the tags are read to check the copy's writer.
+  statement {
+    sid = "ReadOwnRunSecrets"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:ListTagsForResource",
+      "ssm:DeleteParameter",
+    ]
+    resources = [local.ssm_run_param_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/afk:instance"
+      values   = ["$${ec2:SourceInstanceARN}"]
+    }
   }
 
   statement {
@@ -356,6 +381,7 @@ data "aws_iam_policy_document" "developer" {
   }
 
   # --- SSM secrets (developer-managed) ---
+  # Team secrets: shared by every developer.
   statement {
     sid = "ManageAfkSsmParameters"
     actions = [
@@ -363,9 +389,47 @@ data "aws_iam_policy_document" "developer" {
       "ssm:GetParameter",
       "ssm:GetParameters",
       "ssm:DeleteParameter",
-      "ssm:DescribeParameters",
     ]
     resources = [local.ssm_param_arn]
+  }
+
+  # DescribeParameters has no resource-level scoping; it lists names, never
+  # values.
+  statement {
+    sid       = "ListSsmParameters"
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["*"]
+  }
+
+  # Personal secrets and their per-Run copies: a developer creates them tagged
+  # with their own userid, and reads, overwrites or deletes only those. SSM
+  # refuses tags on an overwrite, so creation is gated on the request tag and
+  # everything after on the resource tag.
+  statement {
+    sid       = "CreateOwnPersonalSecrets"
+    actions   = ["ssm:PutParameter", "ssm:AddTagsToResource"]
+    resources = [local.ssm_personal_param_arn, local.ssm_run_param_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/afk:owner"
+      values   = ["$${aws:userid}"]
+    }
+  }
+
+  statement {
+    sid = "ManageOwnPersonalSecrets"
+    actions = [
+      "ssm:PutParameter",
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:DeleteParameter",
+    ]
+    resources = [local.ssm_personal_param_arn, local.ssm_run_param_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/afk:owner"
+      values   = ["$${aws:userid}"]
+    }
   }
 
   # --- CloudWatch Logs ---

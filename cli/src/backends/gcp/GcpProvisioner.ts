@@ -4,6 +4,9 @@ import { homedir } from "node:os"
 import { resolve } from "node:path"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
+import { GcpIam } from "../../adapters/gcp/Iam.ts"
+import { SecretManager } from "../../adapters/gcp/SecretManager.ts"
+import { ensurePersonalIdentity } from "./GcpPersonalIdentity.ts"
 import { Terraform } from "../../adapters/Terraform.ts"
 import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
@@ -57,6 +60,8 @@ export const GcpProvisionerLive = Layer.effect(
   Effect.gen(function* () {
     const cfg = yield* ConfigService
     const auth = yield* Auth
+    const iam = yield* GcpIam
+    const sm = yield* SecretManager
     const tf = yield* Terraform
     const out = yield* Output
 
@@ -108,6 +113,10 @@ export const GcpProvisionerLive = Layer.effect(
           developer_member: developerMember,
         },
       })
+      yield* out.print(
+        `• personal VM service account + secrets for ${account}…`,
+      )
+      yield* ensurePersonalIdentity(iam, sm, project, developerMember)
 
       return {
         summary:
@@ -116,6 +125,7 @@ export const GcpProvisionerLive = Layer.effect(
         nextSteps: [
           "afk golden build                     # build the Golden custom image",
           "afk secrets put github-token <PAT>   # so Runs can clone source",
+          "afk secrets put --personal <name>    # a secret only your Runs read",
           'afk run "<command>"',
         ],
       }

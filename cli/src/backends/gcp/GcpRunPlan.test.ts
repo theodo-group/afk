@@ -3,6 +3,7 @@ import { Either } from "effect"
 import type { AfkConfig } from "../../schema/Config.ts"
 import type { StartInput } from "../../services/backend/Compute.ts"
 import {
+  finalizeGcpPlan,
   gceInstanceToRun,
   planGcpRun,
   sanitizeLabel,
@@ -14,6 +15,12 @@ import {
   GCP_LABEL_RETAIN,
   GCP_LABEL_RUN_ID,
 } from "../../constants.ts"
+import type { EnvEntry } from "../../schema/Config.ts"
+import {
+  personalSecretId,
+  personalServiceAccountEmail,
+} from "./GcpPersonalSecrets.ts"
+import type { GcpBackendPlan } from "./GcpRunPlan.ts"
 
 const baseInput = (
   overrides: {
@@ -237,5 +244,53 @@ describe("gceInstanceToRun", () => {
   it("sanitizeLabel lowercases and replaces disallowed chars", () => {
     expect(sanitizeLabel("Dev@Acme.com")).toBe("dev-acme-com")
     expect(sanitizeLabel("feature/Foo")).toBe("feature-foo")
+  })
+})
+
+describe("planGcpRun — personal secrets", () => {
+  const withSecrets = (envEntries: ReadonlyArray<EnvEntry>) => ({
+    ...baseInput(),
+    envEntries,
+  })
+  const placement = {
+    subnet: "projects/acme-prod/regions/us-central1/subnetworks/afk-subnet",
+    serviceAccount: "afk-vm@acme-prod.iam.gserviceaccount.com",
+  }
+  const planOf = (envEntries: ReadonlyArray<EnvEntry>) => {
+    const core = Either.getOrThrow(planGcpRun(withSecrets(envEntries)))
+    return finalizeGcpPlan(core, placement).backendPlan as GcpBackendPlan
+  }
+  const team: EnvEntry = {
+    kind: "secret",
+    name: "GITLAB_TOKEN",
+    secretName: "gitlab-token",
+    scope: "team",
+  }
+  const personal: EnvEntry = {
+    kind: "secret",
+    name: "CLAUDE_CODE_OAUTH_TOKEN",
+    secretName: "claude-oauth",
+    scope: "personal",
+  }
+
+  it("boots with the shared VM service account when every secret is a team one", () => {
+    const plan = planOf([team])
+    expect(plan.serviceAccount).toBe(placement.serviceAccount)
+    expect(plan.startupScript).not.toContain("afk-personal-")
+  })
+
+  it("boots with the Owner's own VM service account when a secret is personal", () => {
+    expect(planOf([team, personal]).serviceAccount).toBe(
+      personalServiceAccountEmail("acme-prod", "dev@acme.com"),
+    )
+  })
+
+  it("reads the Owner's personal secrets once and aborts the Run without them", () => {
+    const script = planOf([team, personal]).startupScript
+    expect(script).toContain(`--secret='${personalSecretId("dev@acme.com")}'`)
+    expect(script).toContain("afk_abort")
+    expect(script).toContain("'CLAUDE_CODE_OAUTH_TOKEN'")
+    // the team secret is still read from its own Secret Manager secret
+    expect(script).toContain("--secret='afk-secret-gitlab-token'")
   })
 })

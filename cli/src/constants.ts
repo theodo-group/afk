@@ -18,7 +18,6 @@ export const AFK_STATE_BUCKET_PREFIX = "afk-tf-state"
 export const AFK_ARTIFACTS_BUCKET_PREFIX = "afk-artifacts"
 
 export const SSM_SECRET_PREFIX = "/afk/secrets"
-export const SSM_RUNTIME_PREFIX = "/afk/runs"
 
 export const ECR_REPO_PREFIX = "afk"
 export const ECR_LIFECYCLE_DAYS = 7
@@ -63,6 +62,22 @@ export const ssmSecretPrefix = (
   prefix: string = DEFAULT_RESOURCE_PREFIX,
 ): string => `/${prefix}/secrets`
 
+/**
+ * SSM path prefix for personal secrets (`/<prefix>/personal`, then
+ * `/<owner key>/<name>`). Outside `ssmSecretPrefix`: team grants never reach it.
+ */
+export const ssmPersonalSecretPrefix = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `/${prefix}/personal`
+
+/**
+ * SSM path prefix for the per-Run copies of personal secrets
+ * (`/<prefix>/runs`, then `/<runId>/<name>`) a Run VM reads at boot.
+ */
+export const ssmRunSecretPrefix = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `/${prefix}/runs`
+
 /** CloudWatch log-group path prefix (`/<prefix>`, suffixed `/<repo>`). */
 export const logGroupPrefix = (
   prefix: string = DEFAULT_RESOURCE_PREFIX,
@@ -104,6 +119,9 @@ export const TAG_REPO = "afk:repo"
 // presence is what tells `findByRunId`/the sweeper a STOPPED instance is a
 // retained Run rather than a crashed one.
 export const TAG_RETAIN = "afk:retain"
+// On the per-Run copy of a personal secret: the ARN of the one instance whose
+// role may read it (`${ec2:SourceInstanceARN}` in terraform/aws/iam.tf).
+export const TAG_INSTANCE = "afk:instance"
 
 export const TAG_GOLDEN = "afk:golden"
 export const TAG_GOLDEN_VERSION = "afk:golden-version"
@@ -237,6 +255,10 @@ export const GCP_GOLDEN_IMAGE_FAMILY = "afk-golden"
 // Secret Manager secret names are flat (no '/'), so the SSM `/afk/secrets/<n>`
 // path collapses to `afk-secret-<n>`.
 export const GCP_SECRET_PREFIX = "afk-secret"
+// An Owner's personal secrets live in ONE Secret Manager secret,
+// `afk-personal-<owner key>`, readable by that Owner and their VM service
+// account only (see GcpPersonalSecrets).
+export const GCP_PERSONAL_SECRET_PREFIX = "afk-personal"
 
 // Firestore collection holding the run index (the DynamoDB `afk-runs` analogue).
 export const GCP_RUNS_COLLECTION = "afk-runs"
@@ -251,6 +273,9 @@ export const GCP_STATE_BUCKET_PREFIX = "afk-tf-state"
 // (project_name defaults to "afk"), same assumption GCP_VM_SERVICE_ACCOUNT makes.
 export const GCP_DEVELOPER_ROLE = "afk_developer"
 export const GCP_VM_SERVICE_ACCOUNT = "afk-vm"
+// Custom role terraform grants the VM service account so a Run can reclaim
+// itself (`${replace(project_name, "-", "_")}_vm_self_delete`).
+export const GCP_VM_SELF_DELETE_ROLE = "afk_vm_self_delete"
 
 // IAP brokers the SSH tunnel; this is the env var the startup-script exports so
 // the CLI-owned entrypoint can self-delete the instance on exit.

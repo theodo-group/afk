@@ -37,6 +37,7 @@ import {
   toRunStarted,
 } from "./AwsRunPlan.ts"
 import { resolveRunByIdPrefix } from "../../services/RunIdPrefix.ts"
+import { instanceArn, runSecretTags } from "./AwsPersonalSecrets.ts"
 import {
   anonymousOwnerWarning,
   ownerTagValues,
@@ -167,6 +168,29 @@ export const AwsComputeLive = Layer.effect(
         return finalizeAwsPlan(core, placement)
       })
 
+    // The instance role reads only copies tagged with its own ARN, so they can
+    // only be written once the instance exists; its boot waits for them. A
+    // copy that cannot be written leaves a Run that would abort at boot —
+    // reclaim it now and say why.
+    const copyPersonalSecrets = (aws: AwsBackendPlan, instanceId: string) =>
+      Effect.forEach(aws.personalSecrets, ({ source, copy }) =>
+        ssm
+          .getSecret(aws.region, source)
+          .pipe(
+            Effect.flatMap((value) =>
+              ssm.putTaggedSecret(
+                aws.region,
+                copy,
+                value,
+                runSecretTags(
+                  aws.ownerUserId,
+                  instanceArn(aws.region, aws.accountId, instanceId),
+                ),
+              ),
+            ),
+          ),
+      )
+
     const launch = (plan: PreparedRun) =>
       Effect.gen(function* () {
         const aws = plan.backendPlan as AwsBackendPlan
@@ -191,6 +215,14 @@ export const AwsComputeLive = Layer.effect(
           shutdownBehavior: aws.shutdownBehavior,
           tags: aws.tags,
         })
+
+        yield* copyPersonalSecrets(aws, instanceId).pipe(
+          Effect.tapError(() =>
+            ec2
+              .terminateInstances(aws.region, [instanceId])
+              .pipe(Effect.ignore),
+          ),
+        )
 
         yield* history
           .recordStart({

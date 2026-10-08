@@ -40,18 +40,20 @@ resource "google_project_iam_member" "vm_artifactregistry_reader" {
 }
 
 # Secret Manager accessor — resolve secret:<name> refs at boot.
-# Scoped to afk-* secrets via the per-secret IAM in secretmanager (the CLI
-# creates afk-<name> secrets); project-level accessor kept narrow by an IAM
-# condition on the secret resource name prefix.
+# Scoped to TEAM secrets (`afk-secret-<name>`, created by `afk secrets put`) by
+# an IAM condition on the secret resource name prefix. The prefix must stop
+# short of `afk-personal-*`: an Owner's personal secrets are readable only by
+# that Owner's own VM service account (`afk-vm-<owner key>`, created by
+# `afk team add` / `afk provision`), bound on the secret itself.
 resource "google_project_iam_member" "vm_secret_accessor" {
   project = var.project_id
   role    = "roles/secretmanager.secretAccessor"
   member  = "serviceAccount:${google_service_account.vm.email}"
 
   condition {
-    title       = "afk-secrets-only"
-    description = "Only secrets whose ID begins with afk-."
-    expression  = "resource.name.startsWith(\"projects/${local.project_number}/secrets/${var.project_name}-\")"
+    title       = "afk-team-secrets-only"
+    description = "Only team secrets (${var.project_name}-secret-*)"
+    expression  = "resource.name.startsWith(\"projects/${local.project_number}/secrets/${var.project_name}-secret-\")"
   }
 }
 

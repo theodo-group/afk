@@ -50,7 +50,7 @@ export const config = Command.make("config", {}, () =>
             ...resolved.envEntries.map((e) =>
               e.kind === "plain"
                 ? `  ${e.name} = ${e.value}`
-                : `  ${e.name} -> secret:${e.secretName}`,
+                : `  ${e.name} -> ${e.scope === "personal" ? "personal-secret" : "secret"}:${e.secretName}`,
             ),
           ].join("\n"),
         ),

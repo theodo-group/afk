@@ -6,9 +6,11 @@ import {
   type RunStarted,
 } from "./backend/Compute.ts"
 import { LogStore } from "./backend/LogStore.ts"
+import { SecretStore } from "./backend/SecretStore.ts"
 import { BuildService } from "./BuildService.ts"
 import { ConfigService } from "./ConfigService.ts"
 import type { Run, RunStatus } from "../schema/Run.ts"
+import type { EnvEntry } from "../schema/Config.ts"
 import {
   AwsError,
   CloudflareError,
@@ -143,6 +145,7 @@ export const RunServiceLive = Layer.effect(
     const build = yield* BuildService
     const cfg = yield* ConfigService
     const logs = yield* LogStore
+    const secrets = yield* SecretStore
 
     const isTerminal = (s: RunStatus): boolean =>
       s === "STOPPING" || s === "STOPPED"
@@ -208,9 +211,40 @@ export const RunServiceLive = Layer.effect(
         yield* Fiber.interrupt(tail)
       })
 
+    // A personal secret the Owner never stored would only surface once the VM
+    // boots and aborts the Run; check it before building anything. (Team
+    // secrets are not checked here: `afk doctor` does, and a missing one has
+    // always been a boot-time failure.)
+    const checkPersonalSecrets = (
+      envEntries: ReadonlyArray<EnvEntry>,
+    ): Effect.Effect<
+      void,
+      AwsError | CloudflareError | GcpError | ConfigError | UserError
+    > => {
+      const wanted = envEntries.flatMap((e) =>
+        e.kind === "secret" && e.scope === "personal" ? [e.secretName] : [],
+      )
+      if (wanted.length === 0) return Effect.void
+      return secrets.list("personal").pipe(
+        Effect.flatMap((stored) => {
+          const have = new Set(stored.map((s) => s.name))
+          const missing = wanted.filter((name) => !have.has(name))
+          return missing.length === 0
+            ? Effect.void
+            : Effect.fail(
+                new UserError({
+                  message: `personal secret${missing.length === 1 ? "" : "s"} not set: ${missing.join(", ")}`,
+                  hint: `Store ${missing.length === 1 ? "it" : "each"} with \`afk secrets put --personal <name>\`.`,
+                }),
+              )
+        }),
+      )
+    }
+
     const prepare = (input: RunRequest) =>
       Effect.gen(function* () {
-        const { config } = yield* cfg.load
+        const { config, envEntries } = yield* cfg.load
+        yield* checkPersonalSecrets(envEntries)
         const region = config.aws?.region ?? DEFAULT_REGION
         const built = yield* build.build({ region, ref: input.ref })
         return yield* compute.prepare({

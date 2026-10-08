@@ -30,6 +30,10 @@ import {
   DEFAULT_MAIN_SERVICE,
   SESSION_ARTIFACT_MAX_BYTES,
 } from "../../constants.ts"
+import {
+  personalSecretId,
+  personalServiceAccountEmail,
+} from "./GcpPersonalSecrets.ts"
 
 // ---------------------------------------------------------------------------
 // Functional core for the GCP Backend: pure, no I/O, no clock, no randomness.
@@ -173,6 +177,9 @@ export interface GcpRunCore {
   readonly zone: string
   readonly project: string
   readonly warnings: ReadonlyArray<string>
+  /** The Owner's own VM service account, when the Run reads a personal secret;
+   *  absent ⇒ the shared one from the network placement. */
+  readonly personalServiceAccount?: string
   readonly preparedBase: Omit<PreparedRun, "backendPlan">
   readonly backendPlanBase: Omit<GcpBackendPlan, "subnet">
 }
@@ -254,6 +261,10 @@ export const planGcpRun = (
     composeUsed,
   } = assembled
 
+  // Personal secrets are readable by the Owner's own VM service account only,
+  // so a Run that references one must boot with it (see GcpPersonalSecrets).
+  const usesPersonalSecrets = secrets.some((s) => s.scope === "personal")
+
   const bucket = `${GCP_ARTIFACTS_BUCKET_PREFIX}-${i.project}`
   const instanceName = `afk-${i.sourceRepoName}-${i.runId.slice(0, 8)}`.slice(
     0,
@@ -272,11 +283,10 @@ export const planGcpRun = (
     timeoutSeconds,
     retain,
     env,
-    secrets: secrets.map((s) => s.secretName),
-    secretEnvNames: secrets.map((s) => ({
-      name: s.name,
-      secretName: s.secretName,
-    })),
+    secretEnvNames: secrets,
+    ...(usesPersonalSecrets
+      ? { personalSecretId: personalSecretId(i.ownerAccount) }
+      : {}),
     compose: composeContent,
     sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
     sessionArtifactBucket: bucket,
@@ -301,6 +311,14 @@ export const planGcpRun = (
     zone,
     project: i.project,
     warnings: assembled.warnings,
+    ...(usesPersonalSecrets
+      ? {
+          personalServiceAccount: personalServiceAccountEmail(
+            i.project,
+            i.ownerAccount,
+          ),
+        }
+      : {}),
     preparedBase: {
       runId: i.runId,
       command: input.command,
@@ -347,7 +365,7 @@ export const finalizeGcpPlan = (
 ): PreparedRun => {
   const backendPlan: GcpBackendPlan = {
     ...core.backendPlanBase,
-    serviceAccount: placement.serviceAccount,
+    serviceAccount: core.personalServiceAccount ?? placement.serviceAccount,
     subnet: placement.subnet,
   }
   return { ...core.preparedBase, backendPlan }

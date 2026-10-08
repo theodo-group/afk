@@ -54,6 +54,29 @@ export class GcpIam extends Context.Tag("GcpIam")<
       member: string,
       role: string,
     ) => Effect.Effect<void, GcpError>
+    /** Bind `member` to `role` on a GCS bucket (e.g. Session Artifact upload). */
+    readonly addBucketBinding: (
+      bucket: string,
+      member: string,
+      role: string,
+    ) => Effect.Effect<void, GcpError>
+    readonly removeBucketBinding: (
+      bucket: string,
+      member: string,
+      role: string,
+    ) => Effect.Effect<void, GcpError>
+    /** Create a service account; a no-op when it already exists. */
+    readonly ensureServiceAccount: (
+      project: string,
+      accountId: string,
+      displayName: string,
+    ) => Effect.Effect<void, GcpError>
+    readonly deleteServiceAccount: (
+      project: string,
+      email: string,
+    ) => Effect.Effect<void, GcpError>
+    /** The numeric project id IAM conditions name resources by. */
+    readonly projectNumber: (project: string) => Effect.Effect<string, GcpError>
     /** Members bound to `role` on the project. */
     readonly listBindings: (
       project: string,
@@ -161,11 +184,70 @@ export const GcpIamLive = Layer.effect(
           ),
         )
 
+    const bucketBinding =
+      (verb: "add" | "remove") =>
+      (bucket: string, member: string, role: string) =>
+        gcloud.run(`storage:buckets:${verb}-iam-policy-binding`, [
+          "storage",
+          "buckets",
+          `${verb}-iam-policy-binding`,
+          `gs://${bucket}`,
+          `--member=${member}`,
+          `--role=${role}`,
+        ])
+
+    const ensureServiceAccount = (
+      project: string,
+      accountId: string,
+      displayName: string,
+    ) =>
+      Effect.gen(function* () {
+        const exists = yield* gcloud.exists([
+          "iam",
+          "service-accounts",
+          "describe",
+          `${accountId}@${project}.iam.gserviceaccount.com`,
+          `--project=${project}`,
+        ])
+        if (exists) return
+        yield* gcloud.run("iam:service-accounts:create", [
+          "iam",
+          "service-accounts",
+          "create",
+          accountId,
+          `--project=${project}`,
+          `--display-name=${displayName}`,
+        ])
+      })
+
+    const deleteServiceAccount = (project: string, email: string) =>
+      gcloud.run("iam:service-accounts:delete", [
+        "iam",
+        "service-accounts",
+        "delete",
+        email,
+        `--project=${project}`,
+        "--quiet",
+      ])
+
+    const projectNumber = (project: string) =>
+      gcloud.text("projects:describe", [
+        "projects",
+        "describe",
+        project,
+        "--format=value(projectNumber)",
+      ])
+
     return GcpIam.of({
       addBinding,
       addServiceAccountBinding,
       removeBinding,
       removeServiceAccountBinding,
+      addBucketBinding: bucketBinding("add"),
+      removeBucketBinding: bucketBinding("remove"),
+      ensureServiceAccount,
+      deleteServiceAccount,
+      projectNumber,
       listBindings,
     })
   }),

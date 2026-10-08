@@ -26,6 +26,23 @@ export class Ssm extends Context.Tag("Ssm")<
       name: string,
       value: string,
     ) => Effect.Effect<void, AwsError>
+    /**
+     * Create a SecureString carrying `tags`, or overwrite its value if it
+     * exists. Two calls because SSM refuses `--tags` with `--overwrite`: the
+     * tags are set once, at creation, which is what the developer policy's
+     * `aws:RequestTag` condition checks.
+     */
+    readonly putTaggedSecret: (
+      region: string,
+      name: string,
+      value: string,
+      tags: ReadonlyArray<{ readonly key: string; readonly value: string }>,
+    ) => Effect.Effect<void, AwsError>
+    /** A SecureString's decrypted value. */
+    readonly getSecret: (
+      region: string,
+      name: string,
+    ) => Effect.Effect<string, AwsError>
     readonly deleteParameter: (
       region: string,
       name: string,
@@ -238,6 +255,54 @@ export const SsmLive = Layer.effect(
           "SecureString",
           "--overwrite",
         ]),
+      putTaggedSecret: (region, name, value, tags) =>
+        aws
+          .run("ssm:PutParameter", [
+            "ssm",
+            "put-parameter",
+            "--region",
+            region,
+            "--name",
+            name,
+            "--value",
+            value,
+            "--type",
+            "SecureString",
+            "--tags",
+            // JSON, not shorthand: an ARN value holds `:` and `/`.
+            JSON.stringify(tags.map((t) => ({ Key: t.key, Value: t.value }))),
+          ])
+          .pipe(
+            Effect.catchIf(
+              (e) => e.message.includes("ParameterAlreadyExists"),
+              () =>
+                aws.run("ssm:PutParameter", [
+                  "ssm",
+                  "put-parameter",
+                  "--region",
+                  region,
+                  "--name",
+                  name,
+                  "--value",
+                  value,
+                  "--type",
+                  "SecureString",
+                  "--overwrite",
+                ]),
+            ),
+          ),
+      getSecret: (region, name) =>
+        aws
+          .json<{ Parameter: { Value: string } }>("ssm:GetParameter", [
+            "ssm",
+            "get-parameter",
+            "--region",
+            region,
+            "--name",
+            name,
+            "--with-decryption",
+          ])
+          .pipe(Effect.map((r) => r.Parameter.Value)),
       deleteParameter: (region, name) =>
         aws.run("ssm:DeleteParameter", [
           "ssm",
