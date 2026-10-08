@@ -29,6 +29,10 @@ export const tick = Command.make("tick", {}, () =>
             ...report.launched.map(
               (l) => `launched ${l.scheduleId}/${l.entryId} as ${l.runId}`,
             ),
+            ...report.retrying.map(
+              (r) =>
+                `retrying ${r.scheduleId}/${r.entryId} — attempt ${r.attempts} refused: ${r.error}`,
+            ),
           ].join("\n") || "(nothing due)",
         ),
     })

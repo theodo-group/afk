@@ -151,6 +151,15 @@ The component that reads submitted [[schedule|Schedules]] and launches the [[ent
 
 It wakes on a fixed interval — **the tick** — and each tick is one complete, self-contained pass: read every live Entry, read the Run history, settle the Entries whose Runs have ended, then launch what is now due. Nothing carries over between ticks, so a tick that dies half-way leaves the Entries it already moved in their new state and reconsiders the rest next time. A developer can run exactly one such pass by hand with `afk schedule tick`; the deployed Scheduler is that same command on a timer, not a second implementation of the same rules.
 
+**A refused launch is retried; a Run that started is not.** The two sit on
+opposite sides of one line: a launch the provider refused created nothing, so
+trying again costs nothing — and on Spot capacity, a refusal at 23:00 is
+ordinary rather than exceptional. A Run that began and then died is the
+opposite: it may already have pushed commits, commented on a ticket or spent
+an agent's quota, so it settles on its history row and is never re-run.
+Retries are bounded, so an Entry that can never launch still reports instead
+of retrying on every tick forever.
+
 Deliberately narrow. The Scheduler **never builds** — `afk schedule submit` builds on the developer's machine and pins the image on every Entry, which is what lets the Scheduler run somewhere with no Docker and no checkout. It **never kills** — `afk kill` and the Backend's own reclamation cover that. And it decides nothing on its own authority: an Entry's fate is read off its Run's history row, never inferred.
 
 Not to be confused with the tick (the Scheduler's interval, which Terraform is forced to call `schedule_expression` — the one place the two words collide), nor with the **Run orchestrator**, which is what `RunService` has always been called: that one resolves and launches a single Run on demand, and the Scheduler is one of its callers.

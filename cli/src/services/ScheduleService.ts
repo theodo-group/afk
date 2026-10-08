@@ -145,6 +145,7 @@ export const ScheduleServiceLive = Layer.effect(
               onDemand: e.onDemand ?? false,
               ...(e.instanceType ? { instanceType: e.instanceType } : {}),
               submittedAt: submittedAtIso,
+              launchAttempts: 0,
               ...(dueMs !== undefined
                 ? { notBefore: new Date(dueMs).toISOString() }
                 : {}),

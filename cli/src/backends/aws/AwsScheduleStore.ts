@@ -65,6 +65,10 @@ export const entryFromItem = (item: Item): StoredEntry | null => {
       ? { instanceType: readS(item, "instance_type")! }
       : {}),
     submittedAt: readS(item, "submitted_at") ?? "",
+    launchAttempts: readN(item, "launch_attempts") ?? 0,
+    ...(readS(item, "last_error")
+      ? { lastError: readS(item, "last_error")! }
+      : {}),
     ...(readS(item, "not_before")
       ? { notBefore: readS(item, "not_before")! }
       : {}),
@@ -92,6 +96,8 @@ export const itemFromEntry = (e: StoredEntry): Item => ({
   timeout_hours: N(e.timeoutHours),
   on_demand: B(e.onDemand),
   submitted_at: S(e.submittedAt),
+  launch_attempts: N(e.launchAttempts),
+  ...(e.lastError ? { last_error: S(e.lastError) } : {}),
   ...(e.instanceType ? { instance_type: S(e.instanceType) } : {}),
   ...(e.notBefore ? { not_before: S(e.notBefore) } : {}),
   ...(e.runId ? { run_id: S(e.runId) } : {}),
@@ -206,7 +212,7 @@ export const AwsScheduleStoreLive = Layer.effect(
         update(
           scheduleId,
           entryId,
-          "SET #st = :st, run_id = :r, launched_at = :l REMOVE settled_at, outcome, reason",
+          "SET #st = :st, run_id = :r, launched_at = :l REMOVE settled_at, outcome, reason, last_error",
           { "#st": "state" },
           { ":st": S("launched"), ":r": S(runId), ":l": S(launchedAt) },
         ),
@@ -223,6 +229,15 @@ export const AwsScheduleStoreLive = Layer.effect(
             ":why": S(reason),
             ":t": S(settledAt),
           },
+        ),
+
+      recordLaunchFailure: ({ scheduleId, entryId, attempts, error }) =>
+        update(
+          scheduleId,
+          entryId,
+          "SET launch_attempts = :n, last_error = :e",
+          {},
+          { ":n": N(attempts), ":e": S(error) },
         ),
 
       rearm: ({ scheduleId, entryId, notBefore }) =>

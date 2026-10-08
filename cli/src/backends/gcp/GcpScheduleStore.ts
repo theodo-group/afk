@@ -22,6 +22,7 @@ export const GcpScheduleStoreLive = Layer.succeed(
     list: () => unsupported,
     markLaunched: () => unsupported,
     markSettled: () => unsupported,
+    recordLaunchFailure: () => unsupported,
     rearm: () => unsupported,
     cancel: () => unsupported,
   }),

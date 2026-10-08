@@ -30,6 +30,14 @@ export interface StoredEntry {
   readonly onDemand: boolean
   readonly instanceType?: string
   readonly submittedAt: string
+  /**
+   * Launches attempted for this Entry so far. A refused launch leaves the
+   * Entry `pending` and bumps this; the Scheduler gives up once it reaches
+   * SCHEDULER_LAUNCH_ATTEMPTS. Reset by re-submitting.
+   */
+  readonly launchAttempts: number
+  /** Short form of the last launch refusal, while the Entry is still pending. */
+  readonly lastError?: string
   /** ISO instant a clock Entry becomes eligible; absent on a dependency Entry. */
   readonly notBefore?: string
   readonly runId?: string
@@ -60,6 +68,13 @@ export interface MarkSettledInput {
   readonly outcome: EntryOutcome
   readonly reason: string
   readonly settledAt: string
+}
+
+export interface RecordLaunchFailureInput {
+  readonly scheduleId: string
+  readonly entryId: string
+  readonly attempts: number
+  readonly error: string
 }
 
 export interface RearmInput {
@@ -107,6 +122,15 @@ export class ScheduleStore extends Context.Tag("ScheduleStore")<
 
     readonly markSettled: (
       input: MarkSettledInput,
+    ) => Effect.Effect<void, StoreError>
+
+    /**
+     * A launch was refused and is worth another try: leave the Entry `pending`
+     * so the next tick reconsiders it, and remember how many attempts it has
+     * cost and why the last one failed.
+     */
+    readonly recordLaunchFailure: (
+      input: RecordLaunchFailureInput,
     ) => Effect.Effect<void, StoreError>
 
     /** Put a recurring Entry back to `pending` for its next occurrence. */

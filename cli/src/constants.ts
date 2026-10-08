@@ -162,6 +162,11 @@ export const SCHEDULER_STALE_MINUTES = 10
 // read as hung. Matches the sweeper's own grace so the two agree on when a Run
 // has overrun.
 export const SCHEDULER_GRACE_MINUTES = SWEEPER_GRACE_MINUTES
+// How many times the Scheduler tries to launch one Entry before giving up. A
+// refused launch created no Run, so retrying costs nothing and a Spot capacity
+// blip must not kill an overnight Schedule; the budget is what stops a
+// genuinely unlaunchable Entry retrying on every tick forever.
+export const SCHEDULER_LAUNCH_ATTEMPTS = 3
 // Window of Run history the tick loads to resolve launched Entries. Must
 // comfortably exceed the longest Entry timeout.
 export const SCHEDULER_HISTORY_WINDOW = "30d"

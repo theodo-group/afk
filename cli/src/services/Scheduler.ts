@@ -3,6 +3,7 @@ import { HistoryService } from "./HistoryService.ts"
 import { RunService } from "./RunService.ts"
 import { ScheduleStore, type StoredEntry } from "./backend/ScheduleStore.ts"
 import { decide, type Decision, type RunFact } from "./Triggers.ts"
+import { launchFailureAction, launchFailureDetail } from "./LaunchAttempt.ts"
 import { parseSince } from "./SinceWindow.ts"
 import {
   AwsError,
@@ -16,6 +17,7 @@ import {
 import type { EntryOutcome } from "../schema/Schedule.ts"
 import {
   SCHEDULER_GRACE_MINUTES,
+  SCHEDULER_LAUNCH_ATTEMPTS,
   SCHEDULER_HISTORY_WINDOW,
   SCHEDULER_STALE_MINUTES,
 } from "../constants.ts"
@@ -36,6 +38,13 @@ export interface TickReport {
     readonly scheduleId: string
     readonly entryId: string
     readonly notBefore: string
+  }>
+  /** Entries whose launch was refused and that stay pending for another tick. */
+  readonly retrying: ReadonlyArray<{
+    readonly scheduleId: string
+    readonly entryId: string
+    readonly attempts: number
+    readonly error: string
   }>
 }
 
@@ -62,7 +71,32 @@ export class Scheduler extends Context.Tag("Scheduler")<
   { readonly tick: Effect.Effect<TickReport, TickError> }
 >() {}
 
-const EMPTY: TickReport = { launched: [], settled: [], rearmed: [] }
+/**
+ * What one attempted launch came to. Named so the two failure branches widen
+ * to a single Effect type rather than TypeScript picking the first.
+ */
+type LaunchOutcome =
+  | {
+      readonly kind: "launched"
+      readonly scheduleId: string
+      readonly entryId: string
+      readonly runId: string
+    }
+  | {
+      readonly kind: "retrying"
+      readonly scheduleId: string
+      readonly entryId: string
+      readonly attempts: number
+      readonly error: string
+    }
+  | { readonly kind: "gave-up" }
+
+const EMPTY: TickReport = {
+  launched: [],
+  settled: [],
+  rearmed: [],
+  retrying: [],
+}
 
 export const SchedulerLive = Layer.effect(
   Scheduler,
@@ -96,32 +130,59 @@ export const SchedulerLive = Layer.effect(
               })
               .pipe(
                 Effect.as({
+                  kind: "launched" as const,
                   scheduleId: entry.scheduleId,
                   entryId: entry.entryId,
                   runId: started.runId,
                 }),
               ),
           ),
-          // A launch that cannot happen settles the Entry rather than being
-          // retried every tick forever — and its dependents learn about it.
-          Effect.catchAll((e) =>
-            store
-              .markSettled({
-                scheduleId: entry.scheduleId,
-                entryId: entry.entryId,
-                outcome: "failure",
-                reason: `launch failed: ${e.message}`,
-                settledAt: at,
-              })
-              .pipe(
-                Effect.zipRight(
-                  Effect.logWarning(
-                    `${entry.scheduleId}/${entry.entryId}: launch failed: ${e.message}`,
-                  ),
-                ),
-                Effect.as(undefined),
-              ),
-          ),
+          // A refused launch created no Run, so retrying it costs nothing and
+          // a Spot capacity blip must not end the Entry. `launchFailureAction`
+          // owns that call; the budget is what keeps an unlaunchable Entry
+          // from retrying on every tick forever.
+          Effect.catchAll((e): Effect.Effect<LaunchOutcome, TickError> => {
+            const attempts = entry.launchAttempts + 1
+            const detail = launchFailureDetail(e)
+            const where = `${entry.scheduleId}/${entry.entryId}`
+            const note = Effect.logWarning(
+              `${where}: launch attempt ${attempts} failed: ${e.message}`,
+            )
+            return launchFailureAction(
+              e,
+              attempts,
+              SCHEDULER_LAUNCH_ATTEMPTS,
+            ) === "retry"
+              ? store
+                  .recordLaunchFailure({
+                    scheduleId: entry.scheduleId,
+                    entryId: entry.entryId,
+                    attempts,
+                    error: detail,
+                  })
+                  .pipe(
+                    Effect.zipRight(note),
+                    Effect.as({
+                      kind: "retrying" as const,
+                      scheduleId: entry.scheduleId,
+                      entryId: entry.entryId,
+                      attempts,
+                      error: detail,
+                    }),
+                  )
+              : store
+                  .markSettled({
+                    scheduleId: entry.scheduleId,
+                    entryId: entry.entryId,
+                    outcome: "failure",
+                    reason: `launch failed after ${attempts} attempts: ${detail}`,
+                    settledAt: at,
+                  })
+                  .pipe(
+                    Effect.zipRight(note),
+                    Effect.as({ kind: "gave-up" as const }),
+                  )
+          }),
         )
 
     const tick = Effect.gen(function* () {
@@ -195,13 +256,14 @@ export const SchedulerLive = Layer.effect(
         const entry = byKey.get(`${d.scheduleId}\u0000${d.entryId}`)
         return entry ? [entry] : []
       })
-      const launched = yield* Effect.all(
+      const outcomes = yield* Effect.all(
         launches.map((e) => launch(e, nowIso)),
         { concurrency: 4 },
       )
 
       return {
-        launched: launched.filter((l) => l !== undefined),
+        launched: outcomes.flatMap((o) => (o.kind === "launched" ? [o] : [])),
+        retrying: outcomes.flatMap((o) => (o.kind === "retrying" ? [o] : [])),
         settled: settled.map((d) => ({
           scheduleId: d.scheduleId,
           entryId: d.entryId,

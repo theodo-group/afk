@@ -22,6 +22,7 @@ const full: StoredEntry = {
   timeoutHours: 24,
   onDemand: true,
   instanceType: "m6a.2xlarge",
+  launchAttempts: 0,
   submittedAt: "2026-10-02T20:00:00.000Z",
   notBefore: "2026-10-02T23:00:00.000Z",
   runId: "4c4ecbae-375e-4f1e-9b1a-000000000001",
@@ -43,6 +44,7 @@ const minimal: StoredEntry = {
   owner: "AROAEXAMPLE:jjauzion",
   timeoutHours: 4,
   onDemand: false,
+  launchAttempts: 0,
   submittedAt: "2026-10-02T20:00:00.000Z",
 }
 
@@ -70,6 +72,26 @@ describe("the schedule row mapping", () => {
         entryFromItem(itemFromEntry({ ...minimal, trigger }))?.trigger,
       ).toEqual(trigger)
     }
+  })
+
+  it("carries the launch-retry bookkeeping both ways", () => {
+    const refused = {
+      ...full,
+      state: "pending" as const,
+      launchAttempts: 2,
+      lastError: "InsufficientInstanceCapacity",
+    }
+    const back = entryFromItem(itemFromEntry(refused))
+    expect(back?.launchAttempts).toBe(2)
+    expect(back?.lastError).toBe("InsufficientInstanceCapacity")
+    expect(back?.state).toBe("pending")
+  })
+
+  it("reads a row written before launch_attempts existed as zero attempts", () => {
+    const { launch_attempts: _dropped, ...legacy } = itemFromEntry(full)
+    const back = entryFromItem(legacy)
+    expect(back?.launchAttempts).toBe(0)
+    expect(back?.lastError).toBeUndefined()
   })
 
   it("drops a row it cannot read rather than guessing at it", () => {

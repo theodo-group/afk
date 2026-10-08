@@ -36,7 +36,17 @@ export const ls = Command.make("ls", { schedule }, ({ schedule }) =>
               { header: "REF", value: (e) => e.ref },
               { header: "NEXT", value: (e) => e.notBefore ?? "-" },
               { header: "RUN", value: (e) => e.runId ?? "-" },
-              { header: "WHY", value: (e) => e.reason ?? "-" },
+              {
+                header: "WHY",
+                // A settled Entry has a reason; one still pending after a
+                // refused launch has only the refusal, which is the thing a
+                // developer needs to see while it is being retried.
+                value: (e) =>
+                  e.reason ??
+                  (e.lastError
+                    ? `attempt ${e.launchAttempts} refused: ${e.lastError}`
+                    : "-"),
+              },
             ]),
     })
   }),
