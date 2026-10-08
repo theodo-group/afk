@@ -417,6 +417,48 @@ describe("decide — dependency edges", () => {
     })
   })
 
+  // "Finished" means the dependency reached an outcome, not that it reported
+  // one. A reclaimed or crashed VM records no exit code, which settles the
+  // dependency `failure` — and a dependant that only asked for `after` must
+  // still fire, or losing a VM would strand the rest of the Schedule.
+  it("fires a plain 'finished' dependant when the dependency recorded NO exit code", () => {
+    const out = decide(
+      tick({
+        entries: [a(), b({ after: "a" })],
+        runs: [{ runId: "r1", running: false }],
+      }),
+    )
+    expect(out).toContainEqual({
+      kind: "launch",
+      scheduleId: "nightly",
+      entryId: "b",
+    })
+    expect(out).toContainEqual({
+      kind: "settle",
+      scheduleId: "nightly",
+      entryId: "a",
+      outcome: "failure",
+      reason: "Run r1 ended without recording an exit code",
+    })
+  })
+
+  it("holds back a 'succeeds' dependant on that same missing exit code", () => {
+    const out = decide(
+      tick({
+        entries: [a(), b({ after: "a", require: "success" })],
+        runs: [{ runId: "r1", running: false }],
+      }),
+    )
+    expect(out.filter((d) => d.kind === "launch")).toEqual([])
+    expect(out).toContainEqual({
+      kind: "settle",
+      scheduleId: "nightly",
+      entryId: "b",
+      outcome: "failure",
+      reason: "dependency 'a' did not succeed",
+    })
+  })
+
   it("collapses a whole blocked chain in one pass", () => {
     const out = decide(
       tick({
