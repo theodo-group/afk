@@ -22,6 +22,7 @@ const baseInput = (
   composeContent: overrides.composeContent,
   input: {
     command: ["claude", "go"],
+    envEntries: [],
     built: {
       image: "acme/widget:abc123",
       tag: "abc123",

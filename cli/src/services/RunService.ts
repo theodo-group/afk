@@ -8,6 +8,7 @@ import {
 import { LogStore } from "./backend/LogStore.ts"
 import { BuildService } from "./BuildService.ts"
 import { ConfigService } from "./ConfigService.ts"
+import type { EnvEntry } from "../schema/Config.ts"
 import type { Run, RunStatus } from "../schema/Run.ts"
 import {
   AwsError,
@@ -35,6 +36,13 @@ export interface RunRequest {
    */
   readonly image?: string
   readonly timeoutHours?: number
+  /**
+   * Launch with an environment other than this machine's `.afk.env` — the
+   * [[scheduler|Scheduler]] passes the submitter's, pinned on the Entry, so a
+   * scheduled Run authenticates as whoever scheduled it. Absent, the launching
+   * machine's own environment is used, which is what `afk run` wants.
+   */
+  readonly envEntries?: ReadonlyArray<EnvEntry>
   /** Retain the compute primitive past Run end for post-mortem `afk attach`
    *  (cloud On-Demand only; see StartInput.retain and CONTEXT.md "Retention"). */
   readonly retain?: boolean
@@ -216,7 +224,7 @@ export const RunServiceLive = Layer.effect(
 
     const prepare = (input: RunRequest) =>
       Effect.gen(function* () {
-        const { config } = yield* cfg.load
+        const { config, envEntries } = yield* cfg.load
         const region = config.aws?.region ?? DEFAULT_REGION
         const built = yield* input.image !== undefined
           ? build.adoptImage({ image: input.image, ref: input.ref })
@@ -225,6 +233,10 @@ export const RunServiceLive = Layer.effect(
           command: input.command,
           ref: input.ref,
           timeoutHours: input.timeoutHours,
+          // The one fallback to this machine's environment, kept here rather
+          // than in each Backend: four of them would be four chances to
+          // silently hand a scheduled Run the launcher's credentials.
+          envEntries: input.envEntries ?? envEntries,
           retain: input.retain,
           backendOverrides: input.backendOverrides,
           built,

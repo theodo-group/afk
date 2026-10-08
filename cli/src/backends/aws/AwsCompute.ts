@@ -114,8 +114,7 @@ export const AwsComputeLive = Layer.effect(
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
         // Shell: gather the effectful inputs the core needs.
-        const { config, envEntries, projectRoot, sourceRepoName } =
-          yield* cfg.load
+        const { config, projectRoot, sourceRepoName } = yield* cfg.load
         const identity = yield* sts.callerIdentity
         const latestGolden = yield* golden.findLatest
         if (!latestGolden) {
@@ -143,7 +142,7 @@ export const AwsComputeLive = Layer.effect(
         // generated here in the shell and injected, so the core stays testable.
         const core = yield* planAwsRun({
           config,
-          envEntries,
+          envEntries: input.envEntries,
           sourceRepoName,
           identity: { Account: identity.Account, UserId: identity.UserId },
           latestGoldenId: latestGolden.id,
