@@ -129,6 +129,10 @@ An Entry is a Run the system has not launched yet, so it has a lifecycle of its 
 
 **The environment is pinned to an Entry; the code is not.** `submit` builds the agent image once and pins it on every Entry, so a scheduled night runs the environment that was tested. The `ref` is resolved to a sha only when the Entry actually fires, so an Entry that runs after another sees the commits that one pushed. This asymmetry is what makes a chain of Entries on a shared branch work at all.
 
+**An Entry carries its submitter's environment, as references.** `submit` reads the submitter's `.afk.env` and pins what it finds on every Entry, so a scheduled [[run|Run]] authenticates as whoever scheduled it rather than as whoever deployed the [[scheduler|Scheduler]] — without which one person's tokens would push every developer's commits and spend their agent quota. What is pinned is *names*: `secret:` references the Run's own VM dereferences with its own instance role. The sole literal a Schedule may hold is `AFK_SKIP_SETUP`; every other plain value is refused at submit, by name, because the alternative is a credential stored in clear next to the command that uses it.
+
+The *values* behind those names stay late-bound, which is the second asymmetry with the image: `afk secrets put` rotates a credential for every future scheduled Run without re-submitting anything. The cost is that a reference can be deleted after submit, so the Scheduler checks again at fire time and refuses the launch rather than starting a Run with an empty credential.
+
 Not to be confused with the Run it launches: an Entry is the intent and outlives the Run; the Run is one execution and is recorded in the ordinary Run history, indistinguishable from a hand-launched one except by its [[owner|Owner]].
 
 ## Trigger
@@ -162,6 +166,6 @@ an agent's quota, so it settles on its history row and is never re-run.
 Retries are bounded, so an Entry that can never launch still reports instead
 of retrying on every tick forever.
 
-Deliberately narrow. The Scheduler **never builds** — `afk schedule submit` builds on the developer's machine and pins the image on every Entry, which is what lets the Scheduler run somewhere with no Docker and no checkout. It **never kills** — `afk kill` and the Backend's own reclamation cover that. And it decides nothing on its own authority: an Entry's fate is read off its Run's history row, never inferred.
+Deliberately narrow. The Scheduler **never builds** — `afk schedule submit` builds on the developer's machine and pins the image on every Entry, which is what lets the Scheduler run somewhere with no Docker and no checkout. It **never kills** — `afk kill` and the Backend's own reclamation cover that. It **holds no project credentials** — each Entry brings its submitter's, and the Scheduler's own git token is read-only and attributes nothing. And it decides nothing on its own authority: an Entry's fate is read off its Run's history row, never inferred.
 
 Not to be confused with the tick (the Scheduler's interval, which Terraform is forced to call `schedule_expression` — the one place the two words collide), nor with the **Run orchestrator**, which is what `RunService` has always been called: that one resolves and launches a single Run on demand, and the Scheduler is one of its callers.
