@@ -87,7 +87,14 @@ afk secrets put <name> [value]                 # write to the active Backend's s
                                                #   - inline value: visible in `ps`; prefer stdin for real secrets
 afk secrets ls                                 # list stored secret names
 afk secrets rm <name>                          # delete from the active Backend's secret store
+
+afk secrets put --personal <name> [value]      # your own secret: only Runs you launch read it
+afk secrets ls --personal                      # list your personal secrets
+afk secrets rm --personal <name>               # delete one of your personal secrets
 ```
+
+Team secrets are referenced from `.afk.env` as `secret:<name>`, personal ones as
+`personal-secret:<name>`. Personal secrets are supported on AWS, GCP and Local.
 
 ## Team
 

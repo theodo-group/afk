@@ -62,7 +62,8 @@ Run once per GCP project/team.
 
 ### Identity
 
-- An **`afk-vm`** service account attached to every Run VM. Grants: Artifact Registry reader; Secret Manager `secretAccessor` scoped to `afk-*` secrets via an IAM condition; Logging `logWriter`; Storage `objectCreator` on the artifacts bucket; and a custom self-reclaim role holding only `compute.instances.delete` + `compute.instances.stop` (a Run reclaims itself — delete, or stop when retained). Nothing else.
+- An **`afk-vm`** service account attached to every Run VM. Grants: Artifact Registry reader; Secret Manager `secretAccessor` scoped to team secrets (`afk-secret-*`) via an IAM condition; Logging `logWriter`; Storage `objectCreator` on the artifacts bucket; and a custom self-reclaim role holding only `compute.instances.delete` + `compute.instances.stop` (a Run reclaims itself — delete, or stop when retained). Nothing else.
+- One **`afk-vm-<owner key>`** service account per developer, created by `afk team add` (and by `afk provision` for the founding developer): the same grants as `afk-vm`, plus read on that developer's personal secrets. A Run that references a `personal-secret:` boots with it; the developer may attach (actAs) only their own. See [Secrets](#secrets).
 - An **`afk-developer`** custom role bound to developer principals: `compute.instances.create` (conditioned on the AFK subnet + machine-type whitelist where IAM conditions allow), `compute.instances.delete`, `compute.instances.start`/`stop` (resume + re-park a retained Run on attach), `iam.serviceAccountUser` on `afk-vm` only (the PassRole analogue — a developer can attach only the `afk-vm` SA), `roles/iap.tunnelResourceAccessor`, and `roles/compute.osLogin`.
 - An **`afk-sweeper`** SA for the Cloud Function: `compute.instances.list/get` + `roles/datastore.user`, plus `compute.instances.delete` to reap retained VMs past the retention window. Delete is project-wide (the `afk-retain` label isn't an IAM-condition attribute — same gap noted below); the Function only ever deletes stopped `afk-managed` + `afk-retain` instances, enforced in code.
 
@@ -78,11 +79,21 @@ Run once per GCP project/team.
 
 - **The Golden Image** — built by `afk golden build`.
 - **Artifact Registry image tags** — pushed by the CLI on `afk build`.
-- **Secrets** — created by `afk secrets put` in Secret Manager (`afk-<name>`).
+- **Secrets** — team secrets created by `afk secrets put` in Secret Manager (`afk-secret-<name>`); each developer's personal-secret container (`afk-personal-<owner key>`) and VM service account, created by `afk team add` / `afk provision`.
 
 ## Secrets
 
-Stored in **Secret Manager** as `afk-<name>`. The startup-script resolves references at boot via the VM's `afk-vm` SA (`secretAccessor`, IAM-conditioned to the `afk-*` prefix) and exports them into the compose stack. Values never appear in instance metadata, labels, or logs.
+**Team secrets** (`secret:<name>`) are stored in **Secret Manager** as `afk-secret-<name>`. The startup-script resolves references at boot via the VM's `afk-vm` SA (`secretAccessor`, IAM-conditioned to the `afk-secret-` prefix) and exports them into the compose stack. Values never appear in instance metadata, labels, or logs.
+
+**Personal secrets** (`personal-secret:<name>`, `afk secrets put --personal <name>`) belong to one developer and only that developer's Runs read them — e.g. each developer's own Claude licence token from `claude setup-token`:
+
+- A developer's personal secrets are the entries of ONE Secret Manager secret, `afk-personal-<owner key>` (`<owner key>` = 10 hex chars of the SHA-256 of their gcloud account), one `name=<base64>` line per secret. One secret rather than one per name because a developer cannot be granted `secrets.create` on their own names only: the admin creates the container once, and its bindings are on the secret itself — the developer gets `secretAccessor` + `secretVersionManager`, nobody else does. `put`/`rm` rewrite it and destroy the previous versions.
+- `afk team add` (and `afk provision`, for the founding developer) also creates `afk-vm-<owner key>`: the grants of `afk-vm`, plus `secretAccessor` on that container. The developer gets `iam.serviceAccountUser` on it, and on no other developer's.
+- A Run that references a personal secret boots with the launching developer's `afk-vm-<owner key>` instead of `afk-vm`, reads the container once and aborts (reclaiming the VM) if a referenced name is missing. `afk run` checks the names exist before building anything.
+
+Isolation is IAM's, not the CLI's: the shared `afk-vm` cannot read any personal container (its condition stops at `afk-secret-`), and a developer cannot boot a Run with another developer's service account.
+
+> Upgrading: members added before personal secrets existed have no `afk-vm-<owner key>` yet — re-run `afk team add` for them (it is idempotent). `afk provision` re-applies the tightened `afk-vm` condition.
 
 ## Logs
 
@@ -112,7 +123,8 @@ What this does:
 
 - `add` binds the project-level `afkDeveloper` role onto `--principal`. That role already carries the permissions the developer needs (`compute.instances.create/delete` on afk-managed labels, `iam.serviceAccountUser` on `afk-vm`, `iap.tunnelResourceAccessor`, `compute.osLogin`) — defined once at provision time and reused across team members.
 - `ls` enumerates the principals bound to the role.
-- `rm` unbinds the principal from the role.
+- `add` also creates the member's personal VM service account and personal-secret container (see [Secrets](#secrets)).
+- `rm` unbinds the principal from the role, and deletes their personal secrets and VM service account.
 
 > The caller of `afk team add/rm` needs permission to edit project IAM (`resourcemanager.projects.setIamPolicy`) — typically project Owner or a custom IAM-admin role. Without it the IAM bind call fails and the developer was never added.
 

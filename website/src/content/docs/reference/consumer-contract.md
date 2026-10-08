@@ -88,5 +88,6 @@ Declares the Backend, git URL, and per-Backend settings. See
 
 ## 4. `.afk.env` (gitignored)
 
-Environment variables for Runs — plain strings or `secret:<name>` references. See
+Environment variables for Runs — plain strings, `secret:<name>` or
+`personal-secret:<name>` references. See
 [Configuration](/afk/reference/configuration/#afkenv-gitignored).

@@ -57,7 +57,18 @@ Run once per AWS account/team.
 
 ## Secrets
 
-Stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The `user_data` script resolves references at boot via the VM's instance profile and exports them into the compose stack. Values never appear in `DescribeInstances`, CloudTrail (beyond the parameter name), or instance tags.
+**Team secrets** (`secret:<name>`) are stored in **SSM Parameter Store SecureString** under `/afk/secrets/<name>`. The `user_data` script resolves references at boot via the VM's instance profile and exports them into the compose stack. Values never appear in `DescribeInstances`, CloudTrail (beyond the parameter name), or instance tags.
+
+**Personal secrets** (`personal-secret:<name>`, `afk secrets put --personal <name>`) belong to one developer and only that developer's Runs read them — e.g. each developer's own Claude licence token from `claude setup-token`. An AWS Owner is a session of a role developers share, so there is no per-developer identity to hand a VM; isolation rides on tags instead:
+
+- A personal secret is a SecureString under `/afk/personal/<owner key>/<name>`, tagged `afk:owner = ${aws:userid}` at creation. The developer policy lets a caller create parameters there only with their own userid as tag, and read, overwrite or delete only parameters carrying it.
+- At launch, once the instance exists, the CLI copies each personal secret the Run references to `/afk/runs/<run-id>/<name>`, tagged with the caller's userid and the instance's ARN (`afk:instance`). If a copy cannot be written, the CLI terminates the instance and fails the launch.
+- The instance role may read (and delete) only `/afk/runs/*` parameters tagged with its own ARN (`ssm:resourceTag/afk:instance = ${ec2:SourceInstanceARN}`). The boot waits up to 5 minutes for each copy, checks its `afk:owner` tag is the Run's Owner (anyone may tag a parameter with any ARN), deletes it once read, and aborts the Run without it.
+- Personal secrets need a named session: an anonymous session (`botocore-session-…`) is renamed on every credential refresh, which would lock its holder out of the secrets tagged with the previous name.
+
+The team grants (`ReadAfkSecrets`, `ManageAfkSsmParameters`) are scoped to `/afk/secrets/*`, so neither a developer nor a Run VM reaches `/afk/personal/*` or `/afk/runs/*` through them.
+
+> Residual: a Run that dies between launch and its boot leaves its `/afk/runs/<run-id>/*` copies behind. Only their Owner can read them (tag), and no instance holds that ARN any more; `afk secrets` does not list them.
 
 ## Attach
 

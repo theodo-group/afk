@@ -169,6 +169,23 @@ AWS, a metadata field on the launcher Worker's run registry on Cloudflare, an
 only permitted to act on Runs whose Owner matches their own principal; team-wide
 views (`afk ls --all`) are a separate, broader permission.
 
+## Secret
+
+A named value a Run reads at boot without it ever appearing in the repo, the
+CLI's arguments, or the compute primitive's metadata. `.afk.env` maps an
+environment variable to a secret by name; the Backend resolves the value inside
+the Run. A secret has one of two scopes:
+
+- A **team secret** (`secret:<name>`, stored with `afk secrets put <name>`)
+  belongs to the project: every developer may write it and every Run may read
+  it — a deploy key, a bot's token.
+- A **personal secret** (`personal-secret:<name>`, stored with
+  `afk secrets put --personal <name>`) belongs to one [Owner](#owner): only that
+  Owner may write it, and only Runs that Owner launched may read it — the
+  developer's own Claude licence token, their own GitLab token. The guarantee is
+  the cloud's IAM, not the CLI. Cloudflare refuses personal secrets (its Runs
+  share one identity); on Local the two scopes are one store.
+
 ## Dockerfile Contract
 
 The set of rules a developer's `afk.Dockerfile` must follow for their image to be

@@ -99,8 +99,9 @@ Local; each backend page documents its transport and expiry.
 ## `.afk.env` (gitignored)
 
 Contains environment variables for Runs. Values may be plain strings (for
-non-secrets) or `secret:<name>` references (for values stored in the active
-Backend's secret store).
+non-secrets), `secret:<name>` references (team secrets, stored in the active
+Backend's secret store) or `personal-secret:<name>` references (your own
+secrets, which only your Runs can read).
 
 ```
 LOG_LEVEL=debug
@@ -112,6 +113,10 @@ GITHUB_TOKEN=secret:github-token
 
 # GitLab-hosted repos (gitlab.com or self-hosted): the entrypoint clones with `oauth2:<GITLAB_TOKEN>@…`
 # GITLAB_TOKEN=secret:gitlab-token
+
+# A per-developer value — e.g. each developer's own Claude licence token
+# (`claude setup-token`), stored with `afk secrets put --personal claude-oauth`
+CLAUDE_CODE_OAUTH_TOKEN=personal-secret:claude-oauth
 ```
 
 The scm-token variable name is host-dependent — the entrypoint matches the
@@ -125,8 +130,10 @@ values themselves are stored separately via `afk secrets put <name> <value>`.
 
 - Secret values are stored in the active Backend's secret store, written by
   `afk secrets put`.
-- Secret _references_ live in `.afk.env` as `secret:<name>`. The reference syntax
-  is canonical across Backends.
+- Secret _references_ live in `.afk.env` as `secret:<name>`, or
+  `personal-secret:<name>` for a secret only your own Runs may read
+  (`afk secrets put --personal`). The reference syntax is canonical across
+  Backends; Cloudflare refuses personal secrets.
 - `.afk.env` is gitignored by default. The CLI refuses to start if `.afk.env` is
   tracked by git.
 

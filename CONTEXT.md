@@ -70,6 +70,15 @@ The developer principal that launched a Run. The form of the principal is [[back
 
 On AWS the session name is the only half that differs between two developers sharing one role, so it is what makes them distinct Owners. A session nobody named — the aws CLI's `botocore-session-<epoch>`, minted afresh on every credential refresh — cannot be tagged, since the Run would drop out of its own `afk ls` within the hour; such a caller falls back to the role itself as Owner, sees every Run the role launched as if it were theirs, and is warned.
 
+## Secret
+
+A named value a [[run]] reads at boot without it ever appearing in the repo, the CLI's arguments, or the compute primitive's metadata. `.afk.env` maps an environment variable to a secret by name; the [[backend]] resolves the value inside the Run. A secret has one of two scopes:
+
+- A **team secret** (`secret:<name>`, stored with `afk secrets put <name>`) belongs to the project: every developer may write it and every Run may read it — a deploy key, a bot's token.
+- A **personal secret** (`personal-secret:<name>`, stored with `afk secrets put --personal <name>`) belongs to one [[owner]]: only that Owner may write it, and only Runs that Owner launched may read it — the developer's own Claude licence token, their own GitLab token. The guarantee is the cloud's IAM, not the CLI: on GCP each Owner's Runs boot with that Owner's own service account; on AWS each Run reads a copy tagged with its own instance. A Backend whose Runs share one identity (Cloudflare) refuses personal secrets; on Local, a single-Owner machine, the two scopes are one store.
+
+Not to be confused with plain `.afk.env` values, which travel in the Run Plan as they are and are visible to anyone who can read it.
+
 ## Dockerfile Contract
 
 The set of rules a developer's `afk.Dockerfile` must follow for their image to be usable as a Run. The file lives at the repo root and is named `afk.Dockerfile` to namespace it away from any other Dockerfile the project uses for its own deployment. It installs the toolchain and dependencies needed by the Run's command, but does **not** copy the source code (the source is cloned at Run start by the entrypoint). The entrypoint script is owned by the CLI and injected at build time — the developer's `afk.Dockerfile` does not declare it.
