@@ -91,7 +91,12 @@ type LaunchOutcome =
       readonly attempts: number
       readonly error: string
     }
-  | { readonly kind: "gave-up" }
+  | {
+      readonly kind: "gave-up"
+      readonly scheduleId: string
+      readonly entryId: string
+      readonly reason: string
+    }
 
 const EMPTY: TickReport = {
   launched: [],
@@ -174,6 +179,10 @@ export const SchedulerLive = Layer.effect(
         Effect.catchAll((e): Effect.Effect<LaunchOutcome, TickError> => {
           const attempts = entry.launchAttempts + 1
           const detail = launchFailureDetail(e)
+          const settledReason =
+            attempts === 1
+              ? `launch refused: ${detail}`
+              : `launch failed after ${attempts} attempts: ${detail}`
           const where = `${entry.scheduleId}/${entry.entryId}`
           const note = Effect.logWarning(
             `${where}: launch attempt ${attempts} failed: ${e.message}`,
@@ -202,12 +211,17 @@ export const SchedulerLive = Layer.effect(
                   scheduleId: entry.scheduleId,
                   entryId: entry.entryId,
                   outcome: "failure",
-                  reason: `launch failed after ${attempts} attempts: ${detail}`,
+                  reason: settledReason,
                   settledAt: at,
                 })
                 .pipe(
                   Effect.zipRight(note),
-                  Effect.as({ kind: "gave-up" as const }),
+                  Effect.as({
+                    kind: "gave-up" as const,
+                    scheduleId: entry.scheduleId,
+                    entryId: entry.entryId,
+                    reason: settledReason,
+                  }),
                 )
         }),
       )
@@ -302,12 +316,28 @@ export const SchedulerLive = Layer.effect(
       return {
         launched: outcomes.flatMap((o) => (o.kind === "launched" ? [o] : [])),
         retrying: outcomes.flatMap((o) => (o.kind === "retrying" ? [o] : [])),
-        settled: settled.map((d) => ({
-          scheduleId: d.scheduleId,
-          entryId: d.entryId,
-          outcome: d.outcome,
-          reason: d.reason,
-        })),
+        // An Entry whose launch was given up on settled this tick too; leaving
+        // it out made a tick that failed an Entry print "(nothing due)".
+        settled: [
+          ...settled.map((d) => ({
+            scheduleId: d.scheduleId,
+            entryId: d.entryId,
+            outcome: d.outcome,
+            reason: d.reason,
+          })),
+          ...outcomes.flatMap((o) =>
+            o.kind === "gave-up"
+              ? [
+                  {
+                    scheduleId: o.scheduleId,
+                    entryId: o.entryId,
+                    outcome: "failure" as const,
+                    reason: o.reason,
+                  },
+                ]
+              : [],
+          ),
+        ],
         rearmed: rearms,
       }
     })
