@@ -386,6 +386,37 @@ describe("decide — dependency edges", () => {
     })
   })
 
+  it("fires a dependant whose dependency settled on an earlier tick", () => {
+    // The tick that settled `a` may have died before launching `b`, or `b`'s
+    // launch may have been refused and left for a retry. Either way `a` is
+    // already `done` when `b` is next considered, and its outcome has to come
+    // from that row — there is no Run left to settle.
+    const out = decide(
+      tick({
+        entries: [
+          a({ state: "done", outcome: "success" }),
+          b({ after: "a", require: "success" }),
+        ],
+        runs: [],
+      }),
+    )
+    expect(out).toEqual([
+      { kind: "launch", scheduleId: "nightly", entryId: "b" },
+    ])
+  })
+
+  it("blocks a 'succeeds' dependant on an earlier tick's failure too", () => {
+    const out = decide(
+      tick({
+        entries: [
+          a({ state: "failed", outcome: "failure" }),
+          b({ after: "a", require: "success" }),
+        ],
+      }),
+    )
+    expect(out.filter((d) => d.kind === "launch")).toEqual([])
+  })
+
   it("reports a blocked dependant rather than leaving it pending forever", () => {
     const out = decide(
       tick({

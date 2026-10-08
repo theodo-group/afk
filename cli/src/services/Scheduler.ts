@@ -232,7 +232,13 @@ export const SchedulerLive = Layer.effect(
       const now = new Date()
       const decisions = decide({
         nowMs: now.getTime(),
-        entries: live.map((e) => ({
+        // Every Entry, not just the live ones: a dependency that settled on an
+        // earlier tick is `done`/`failed` by now, and `decide` reads its
+        // outcome from exactly those rows. Fed only the live set, a dependent
+        // could launch solely on the tick its dependency settled — so a tick
+        // that died in between, or a refused launch left for a retry, would
+        // leave it pending forever.
+        entries: all.map((e) => ({
           scheduleId: e.scheduleId,
           entryId: e.entryId,
           state: e.state,
