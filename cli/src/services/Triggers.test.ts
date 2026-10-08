@@ -548,4 +548,35 @@ describe("decide — a cron Entry re-arms after each occurrence", () => {
       notBeforeMs: Date.parse("2026-10-03T23:00:00Z"),
     })
   })
+
+  it("does not re-arm once its Schedule was cancelled mid-occurrence", () => {
+    // Cancel cannot touch an Entry whose Run is in flight — the Scheduler never
+    // kills — so it marks it instead. Re-arming here would put it back to
+    // pending and quietly undo the cancel: seen live, a cancelled `*/5` Entry
+    // came back for its next slot.
+    const out = decide(
+      tick({
+        entries: [
+          entry({
+            entryId: "nightly-run",
+            state: "launched",
+            trigger: { cron: "0 23 * * *" },
+            runId: "r1",
+            launchedAt: "2026-10-02T23:00:00Z",
+            withdrawn: true,
+          }),
+        ],
+        runs: [{ runId: "r1", running: false, exitCode: 0 }],
+      }),
+    )
+    expect(out).toEqual([
+      {
+        kind: "settle",
+        scheduleId: "nightly",
+        entryId: "nightly-run",
+        outcome: "success",
+        reason: "Run r1 exited 0",
+      },
+    ])
+  })
 })

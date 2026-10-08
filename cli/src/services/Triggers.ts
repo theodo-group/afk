@@ -350,6 +350,8 @@ export interface TickEntry {
   readonly launchedAt?: string
   readonly outcome?: EntryOutcome
   readonly timeoutHours: number
+  /** The Schedule was cancelled while this Entry's Run was in flight. */
+  readonly withdrawn?: boolean
 }
 
 /** What the Run history says about one launched Entry's Run. */
@@ -466,7 +468,8 @@ export const decide = (input: TickInput): ReadonlyArray<Decision> => {
     const entry = input.entries.find(
       (e) => keyOf(e.scheduleId, e.entryId) === keyOf(s.scheduleId, s.entryId),
     )
-    if (!entry || !("cron" in entry.trigger)) return []
+    // A withdrawn Entry's Run was allowed to finish, not to start another.
+    if (!entry || !("cron" in entry.trigger) || entry.withdrawn) return []
     const next = nextCronMatch(entry.trigger.cron, input.nowMs)
     return next === undefined
       ? []

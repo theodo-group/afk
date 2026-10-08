@@ -13,6 +13,7 @@ import {
 import { ConfigService } from "../../services/ConfigService.ts"
 import {
   ScheduleStore,
+  type CancelResult,
   type ReplaceResult,
   type StoredEntry,
 } from "../../services/backend/ScheduleStore.ts"
@@ -107,6 +108,9 @@ export const entryFromItem = (item: Item): StoredEntry | null => {
       : {}),
     ...(Either.isRight(outcome) ? { outcome: outcome.right } : {}),
     ...(readS(item, "reason") ? { reason: readS(item, "reason")! } : {}),
+    ...(readS(item, "withdrawn_at")
+      ? { withdrawnAt: readS(item, "withdrawn_at")! }
+      : {}),
   }
 }
 
@@ -134,6 +138,7 @@ export const itemFromEntry = (e: StoredEntry): Item => ({
   ...(e.settledAt ? { settled_at: S(e.settledAt) } : {}),
   ...(e.outcome ? { outcome: S(e.outcome) } : {}),
   ...(e.reason ? { reason: S(e.reason) } : {}),
+  ...(e.withdrawnAt ? { withdrawn_at: S(e.withdrawnAt) } : {}),
 })
 
 /**
@@ -278,23 +283,38 @@ export const AwsScheduleStoreLive = Layer.effect(
           { ":st": S("pending"), ":n": S(notBefore) },
         ),
 
-      cancel: (scheduleId) =>
+      cancel: (scheduleId, at) =>
         Effect.gen(function* () {
           const entries = yield* listOf(scheduleId)
           const withdrawable = entries.filter((e) => e.state === "pending")
+          const inFlight = entries.filter((e) => e.state === "launched")
           yield* Effect.all(
-            withdrawable.map((e) =>
-              update(
-                scheduleId,
-                e.entryId,
-                "SET #st = :st",
-                { "#st": "state" },
-                { ":st": S("cancelled") },
+            [
+              ...withdrawable.map((e) =>
+                update(
+                  scheduleId,
+                  e.entryId,
+                  "SET #st = :st",
+                  { "#st": "state" },
+                  { ":st": S("cancelled") },
+                ),
               ),
-            ),
+              ...inFlight.map((e) =>
+                update(
+                  scheduleId,
+                  e.entryId,
+                  "SET #w = :w",
+                  { "#w": "withdrawn_at" },
+                  { ":w": S(at) },
+                ),
+              ),
+            ],
             { concurrency: 8 },
           )
-          return withdrawable.length
+          return {
+            withdrawn: withdrawable.length,
+            inFlight: inFlight.map((e) => e.entryId),
+          } satisfies CancelResult
         }),
     })
   }),

@@ -262,6 +262,7 @@ export const SchedulerLive = Layer.effect(
           ...(e.runId !== undefined ? { runId: e.runId } : {}),
           ...(e.launchedAt !== undefined ? { launchedAt: e.launchedAt } : {}),
           ...(e.outcome !== undefined ? { outcome: e.outcome } : {}),
+          ...(e.withdrawnAt !== undefined ? { withdrawn: true } : {}),
         })),
         runs: facts,
         staleAfterMinutes: SCHEDULER_STALE_MINUTES,

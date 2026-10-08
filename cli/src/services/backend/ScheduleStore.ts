@@ -53,6 +53,19 @@ export interface StoredEntry {
   readonly outcome?: EntryOutcome
   /** Why the Entry settled the way it did, for `afk schedule ls`. */
   readonly reason?: string
+  /**
+   * When the Schedule was cancelled while this Entry's Run was in flight. The
+   * Run is left to finish — the Scheduler never kills — but a recurring Entry
+   * must not re-arm once it does, or the cancel is silently undone.
+   */
+  readonly withdrawnAt?: string
+}
+
+export interface CancelResult {
+  /** Entries that had not launched, now `cancelled`. */
+  readonly withdrawn: number
+  /** Entries whose Run is still going: it finishes, and nothing follows it. */
+  readonly inFlight: ReadonlyArray<string>
 }
 
 export interface ReplaceResult {
@@ -145,9 +158,12 @@ export class ScheduleStore extends Context.Tag("ScheduleStore")<
 
     /**
      * Withdraw a Schedule: every Entry not yet launched becomes `cancelled`.
-     * Runs already in flight keep going — the scheduler never kills.
-     * Returns how many Entries were withdrawn.
+     * Runs already in flight keep going — the scheduler never kills — but
+     * their Entries are marked so a recurring one does not come back.
      */
-    readonly cancel: (scheduleId: string) => Effect.Effect<number, StoreError>
+    readonly cancel: (
+      scheduleId: string,
+      at: string,
+    ) => Effect.Effect<CancelResult, StoreError>
   }
 >() {}

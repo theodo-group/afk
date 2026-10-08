@@ -4,7 +4,11 @@ import { Git } from "../adapters/Git.ts"
 import { BuildService } from "./BuildService.ts"
 import { ConfigService } from "./ConfigService.ts"
 import { Compute } from "./backend/Compute.ts"
-import { ScheduleStore, type StoredEntry } from "./backend/ScheduleStore.ts"
+import {
+  ScheduleStore,
+  type CancelResult,
+  type StoredEntry,
+} from "./backend/ScheduleStore.ts"
 import { SecretStore } from "./backend/SecretStore.ts"
 import { ScheduleFile, type StoredEnv } from "../schema/Schedule.ts"
 import { firstDueAt, parseTrigger, validateEntries } from "./Triggers.ts"
@@ -67,7 +71,9 @@ export class ScheduleService extends Context.Tag("ScheduleService")<
     readonly list: (
       scheduleId?: string,
     ) => Effect.Effect<ReadonlyArray<StoredEntry>, SubmitError>
-    readonly cancel: (scheduleId: string) => Effect.Effect<number, SubmitError>
+    readonly cancel: (
+      scheduleId: string,
+    ) => Effect.Effect<CancelResult, SubmitError>
   }
 >() {}
 
@@ -216,7 +222,8 @@ export const ScheduleServiceLive = Layer.effect(
         }),
 
       list: (scheduleId) => store.list(scheduleId),
-      cancel: (scheduleId) => store.cancel(scheduleId),
+      cancel: (scheduleId) =>
+        store.cancel(scheduleId, new Date().toISOString()),
     })
   }),
 )

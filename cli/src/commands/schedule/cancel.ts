@@ -12,14 +12,19 @@ export const cancel = Command.make("cancel", { schedule }, ({ schedule }) =>
     const schedules = yield* ScheduleService
     const out = yield* Output
 
-    const withdrawn = yield* schedules.cancel(schedule)
+    const { withdrawn, inFlight } = yield* schedules.cancel(schedule)
     yield* out.emit({
-      data: { schedule, withdrawn },
+      data: { schedule, withdrawn, inFlight },
       human: () =>
         out.print(
           [
             `cancelled ${withdrawn} pending entries of ${schedule}`,
-            `Runs already launched keep going — stop one with \`afk kill <run-id>\`.`,
+            ...(inFlight.length > 0
+              ? [
+                  `in flight, left to finish and not to recur: ${inFlight.join(", ")}`,
+                  `stop one now with \`afk kill <run-id>\`.`,
+                ]
+              : []),
           ].join("\n"),
         ),
     })

@@ -6,7 +6,7 @@ import type { StoredEntry } from "../../services/backend/ScheduleStore.ts"
  * The row mapping is the one place an Entry can go missing without an error:
  * `entryFromItem` returns null for anything it cannot read, and the caller
  * filters those out silently. A round trip is what proves the two halves agree
- * on all sixteen fields — including `trigger`, which crosses as a JSON string
+ * on every field — including `trigger`, which crosses as a JSON string
  * because DynamoDB maps are outside the CLI's `AttrValue`.
  */
 const full: StoredEntry = {
@@ -38,6 +38,7 @@ const full: StoredEntry = {
   settledAt: "2026-10-03T01:00:00.000Z",
   outcome: "failure",
   reason: "Run 4c4ecbae exited 7",
+  withdrawnAt: "2026-10-03T00:30:00.000Z",
 }
 
 /** Only what submit writes: every optional absent. */
