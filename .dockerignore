@@ -1,0 +1,17 @@
+# Context for the Scheduler Lambda image (terraform/aws/lambda/scheduler/
+# Dockerfile builds from this repo root). Only `cli/` and `entrypoint/` are
+# copied; everything here either does not belong in a Linux image or would be
+# copied only to be thrown away. `terraform/` stays: the bootstrap lives there.
+
+# Installed on the developer's machine, for the developer's machine — biome
+# ships a darwin binary. The image runs `bun install` itself.
+**/node_modules
+
+.git
+.github
+website
+docs
+worker
+integrations
+**/.DS_Store
+**/*.log

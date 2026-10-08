@@ -40,10 +40,16 @@ The image tag is a hash of everything that ends up inside it, so a no-op apply
 pushes nothing. To build by hand, from the repo root:
 
 ```sh
-docker build --platform linux/amd64 \
+docker build --platform linux/arm64 \
   -f terraform/aws/lambda/scheduler/Dockerfile \
   -t <account>.dkr.ecr.<region>.amazonaws.com/afk/scheduler:dev .
 ```
+
+## Size
+
+~1.1 GB: the AWS CLI v2 and bun dominate. Well inside Lambda's 10 GB ceiling,
+but it is the cold-start cost, so prefer a tick interval that keeps the
+execution environment warm over one that re-pulls it.
 
 ## Testing a Schedule without deploying this
 

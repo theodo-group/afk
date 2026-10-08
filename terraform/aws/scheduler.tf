@@ -83,7 +83,7 @@ resource "null_resource" "scheduler_image" {
       registry=${local.account_id}.dkr.ecr.${local.region}.amazonaws.com
       aws ecr get-login-password --region ${local.region} \
         | docker login --username AWS --password-stdin "$registry"
-      docker build --platform linux/amd64 \
+      docker build --platform linux/arm64 \
         -f terraform/aws/lambda/scheduler/Dockerfile \
         -t ${local.scheduler_image} .
       docker push ${local.scheduler_image}
@@ -323,7 +323,12 @@ resource "aws_lambda_function" "scheduler" {
   role          = aws_iam_role.scheduler[0].arn
   package_type  = "Image"
   image_uri     = local.scheduler_image
-  architectures = ["x86_64"]
+  # arm64: the image is built on a developer's machine, and the team's are
+  # Apple Silicon — so this is a native build rather than a QEMU one, and
+  # Graviton is cheaper to run. bun, the AWS CLI and the AL2023 base all ship
+  # aarch64. An Intel builder still produces the right thing: the documented
+  # build command passes --platform explicitly.
+  architectures = ["arm64"]
   # A tick launches every due Entry serially enough that a slow EC2 RunInstances
   # can take a while; still far inside Lambda's 15-minute ceiling.
   timeout     = 300
