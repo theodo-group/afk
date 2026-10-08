@@ -9,6 +9,7 @@ import {
 import type {
   EntryOutcome,
   EntryState,
+  StoredEnv,
   Trigger,
 } from "../../schema/Schedule.ts"
 
@@ -25,6 +26,12 @@ export interface StoredEntry {
   readonly command: string
   /** Pinned at submit — the environment the Schedule was tested against. */
   readonly image: string
+  /**
+   * The submitter's `.afk.env`, pinned at submit so the Run authenticates as
+   * whoever scheduled it. Secret *references*: the Run's own VM dereferences
+   * them, and the Scheduler never holds a credential (see CONTEXT.md "Entry").
+   */
+  readonly env: StoredEnv
   readonly owner: string
   readonly timeoutHours: number
   readonly onDemand: boolean

@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { EnvEntry } from "./Config.ts"
 
 export const ScheduleId = Schema.String.pipe(Schema.brand("ScheduleId"))
 export type ScheduleId = typeof ScheduleId.Type
@@ -69,3 +70,14 @@ export type EntryState = typeof EntryState.Type
 
 export const EntryOutcome = Schema.Literal("success", "failure")
 export type EntryOutcome = typeof EntryOutcome.Type
+
+/**
+ * The environment an [[entry|Entry]] carries, pinned at submit from the
+ * submitter's `.afk.env` so a scheduled [[run|Run]] authenticates as whoever
+ * scheduled it rather than as whoever deployed the [[scheduler|Scheduler]].
+ *
+ * References, not values — `ScheduleEnv.PLAIN_ALLOWED` names the sole literal
+ * a Schedule may hold, and submit refuses every other plain entry.
+ */
+export const StoredEnv = Schema.Array(EnvEntry)
+export type StoredEnv = typeof StoredEnv.Type

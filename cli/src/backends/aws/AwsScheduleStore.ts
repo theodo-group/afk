@@ -16,12 +16,18 @@ import {
   type ReplaceResult,
   type StoredEntry,
 } from "../../services/backend/ScheduleStore.ts"
-import { EntryOutcome, EntryState, Trigger } from "../../schema/Schedule.ts"
+import {
+  EntryOutcome,
+  EntryState,
+  StoredEnv,
+  Trigger,
+} from "../../schema/Schedule.ts"
 import { DEFAULT_REGION, scheduleTableName } from "../../constants.ts"
 
 const decodeTrigger = Schema.decodeUnknownEither(Trigger)
 const decodeState = Schema.decodeUnknownEither(EntryState)
 const decodeOutcome = Schema.decodeUnknownEither(EntryOutcome)
+const decodeEnv = Schema.decodeUnknownEither(StoredEnv)
 
 const parseJson = (raw: string): unknown => {
   try {
@@ -32,10 +38,27 @@ const parseJson = (raw: string): unknown => {
 }
 
 /**
- * A row back into an Entry, or null if it is not one. The trigger crosses the
- * wire as a JSON string — `AttrValue` carries no map type — so it is the one
- * field decoded rather than read, and a row whose trigger no longer parses is
- * dropped rather than launched on a guess.
+ * The environment attribute as an Entry holds it, or null if the row carries
+ * one that can no longer be read.
+ *
+ * **Absent is not a failure.** Every row written before Entries carried an
+ * environment lacks the attribute, and `entryFromItem`'s null is dropped
+ * *silently* by `listOf` — so treating absent as a decode failure would make
+ * the whole pre-existing table vanish from `ls` and from the tick, with no
+ * error reported anywhere. Only a present-but-unparseable value costs the row.
+ */
+const envFromItem = (item: Item): StoredEnv | null => {
+  const raw = readS(item, "env")
+  if (raw === undefined) return []
+  const decoded = decodeEnv(parseJson(raw))
+  return Either.isRight(decoded) ? decoded.right : null
+}
+
+/**
+ * A row back into an Entry, or null if it is not one. The trigger and the
+ * environment cross the wire as JSON strings — `AttrValue` carries no map type
+ * — so they are the two fields decoded rather than read, and a row whose
+ * trigger no longer parses is dropped rather than launched on a guess.
  */
 export const entryFromItem = (item: Item): StoredEntry | null => {
   const scheduleId = readS(item, "schedule_id")
@@ -48,6 +71,8 @@ export const entryFromItem = (item: Item): StoredEntry | null => {
 
   const state = decodeState(readS(item, "state") ?? "pending")
   if (Either.isLeft(state)) return null
+  const env = envFromItem(item)
+  if (env === null) return null
   const outcome = decodeOutcome(readS(item, "outcome"))
 
   return {
@@ -58,6 +83,7 @@ export const entryFromItem = (item: Item): StoredEntry | null => {
     ref: readS(item, "ref") ?? "",
     command: readS(item, "command") ?? "",
     image: readS(item, "image") ?? "",
+    env,
     owner: readS(item, "owner") ?? "",
     timeoutHours: readN(item, "timeout_hours") ?? 0,
     onDemand: readB(item, "on_demand") ?? false,
@@ -97,6 +123,9 @@ export const itemFromEntry = (e: StoredEntry): Item => ({
   on_demand: B(e.onDemand),
   submitted_at: S(e.submittedAt),
   launch_attempts: N(e.launchAttempts),
+  // `.length`, not truthiness: `[]` is truthy, and writing "[]" onto every
+  // minimal row would add a key the round-trip test asserts is absent.
+  ...(e.env.length > 0 ? { env: S(JSON.stringify(e.env)) } : {}),
   ...(e.lastError ? { last_error: S(e.lastError) } : {}),
   ...(e.instanceType ? { instance_type: S(e.instanceType) } : {}),
   ...(e.notBefore ? { not_before: S(e.notBefore) } : {}),

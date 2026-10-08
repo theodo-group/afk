@@ -2,6 +2,7 @@ import { Args, Command } from "@effect/cli"
 import { Effect } from "effect"
 import { readFileSync } from "node:fs"
 import { ScheduleService } from "../../services/ScheduleService.ts"
+import type { StoredEnv } from "../../schema/Schedule.ts"
 import { renderTrigger } from "../../services/Triggers.ts"
 import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
@@ -43,6 +44,17 @@ const readSchedule = (path: string | undefined) =>
           new UserError({ message: `cannot read ${path}: ${String(cause)}` }),
       })
 
+const renderEnv = (env: StoredEnv): string => {
+  const refs = env.flatMap((e) =>
+    e.kind === "secret" ? [`${e.name}→${e.secretName}`] : [],
+  )
+  const plain = env.flatMap((e) => (e.kind === "plain" ? [e.name] : []))
+  return [
+    refs.length > 0 ? refs.join(", ") : "no secret references",
+    ...(plain.length > 0 ? [`plain: ${plain.join(", ")}`] : []),
+  ].join(" | ")
+}
+
 export const submit = Command.make("submit", { file }, ({ file }) =>
   Effect.gen(function* () {
     const schedules = yield* ScheduleService
@@ -63,6 +75,11 @@ export const submit = Command.make("submit", { file }, ({ file }) =>
               ? `image already exists: ${report.image}`
               : `pushed: ${report.image}`,
             `submitted ${report.scheduleId} (${report.entries.length} entries)`,
+            // The one moment a developer sees what their Schedule will run
+            // with. Names on both sides of the arrow, so a mis-paired
+            // reference — the right variable holding the wrong credential —
+            // is visible rather than discovered at 3am.
+            `  env: ${renderEnv(report.env)}`,
             ...report.entries.map(
               (e) =>
                 `  ${e.entryId.padEnd(24)} ${renderTrigger(e.trigger)}${

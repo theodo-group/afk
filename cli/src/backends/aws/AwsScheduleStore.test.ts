@@ -18,6 +18,14 @@ const full: StoredEntry = {
   command:
     "node scripts/afk-claude/cli.ts --skip-model-check '/create-spec contrat'",
   image: "1234.dkr.ecr.eu-west-1.amazonaws.com/afk/cip:main-abc123def456",
+  env: [
+    {
+      kind: "secret",
+      name: "GITLAB_TOKEN",
+      secretName: "gitlab-token-jjauzion",
+    },
+    { kind: "plain", name: "AFK_SKIP_SETUP", value: "1" },
+  ],
   owner: "AROAEXAMPLE:jjauzion",
   timeoutHours: 24,
   onDemand: true,
@@ -41,6 +49,7 @@ const minimal: StoredEntry = {
   ref: "docs/contrat-spec",
   command: "echo hi",
   image: "1234.dkr.ecr.eu-west-1.amazonaws.com/afk/cip:main-abc123def456",
+  env: [],
   owner: "AROAEXAMPLE:jjauzion",
   timeoutHours: 4,
   onDemand: false,
@@ -92,6 +101,32 @@ describe("the schedule row mapping", () => {
     const back = entryFromItem(legacy)
     expect(back?.launchAttempts).toBe(0)
     expect(back?.lastError).toBeUndefined()
+  })
+
+  it("reads a row written before Entries carried an environment, not null", () => {
+    // The most load-bearing assertion in this file. `listOf` filters nulls
+    // *silently*, so decoding an absent `env` as a failure would empty the
+    // whole table out of `ls` and out of the tick with nothing reported
+    // anywhere — every Schedule submitted before this change, gone.
+    const { env: _dropped, ...legacy } = itemFromEntry(full)
+    const back = entryFromItem(legacy)
+    expect(back).not.toBeNull()
+    expect(back?.env).toEqual([])
+  })
+
+  it("keeps a corrupt environment from launching a Run on a guess", () => {
+    // Present-but-unreadable is the opposite case: nothing here can say what
+    // credentials the Entry wanted, so the row is dropped rather than run with
+    // whatever survives.
+    expect(
+      entryFromItem({ ...itemFromEntry(full), env: { S: "[not json" } }),
+    ).toBeNull()
+    expect(
+      entryFromItem({
+        ...itemFromEntry(full),
+        env: { S: '[{"kind":"what"}]' },
+      }),
+    ).toBeNull()
   })
 
   it("drops a row it cannot read rather than guessing at it", () => {
