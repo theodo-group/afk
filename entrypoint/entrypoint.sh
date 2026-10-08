@@ -15,7 +15,7 @@
 #   124     wall-clock timeout (from `timeout`)
 #   64      missing required env
 #   65      git clone or checkout failed
-#   66      AFK_GIT_SHA mismatch (resolved ref != expected sha)
+#   66      AFK_GIT_SHA mismatch (HEAD != the sha we checked out)
 
 set -euo pipefail
 
@@ -71,15 +71,23 @@ fi
 
 cd "${WORKSPACE}"
 
-if ! git -c advice.detachedHead=false checkout --quiet "${AFK_GIT_REF}"; then
-  die "git checkout ${AFK_GIT_REF} failed" 65
+# Check out the sha the CLI already resolved, not the ref it resolved it from.
+# The CLI answered "what is <ref> right now?" minutes ago; re-asking it here,
+# after a clone that can take several minutes on a large repo, is a different
+# question — and on an active branch it gets a different answer.
+checkout_target="${AFK_GIT_SHA:-${AFK_GIT_REF}}"
+if ! git -c advice.detachedHead=false checkout --quiet "${checkout_target}"; then
+  # A ref that moved is fine; a sha that is gone is not. The usual cause is a
+  # force-push between the CLI resolving the ref and this clone finishing.
+  die "git checkout ${checkout_target} failed — was ${AFK_GIT_REF} force-pushed since this Run was launched?" 65
 fi
 
-# Verify the resolved sha matches what the CLI expected, if provided.
+# Now an invariant rather than a race: we checked out the sha itself, so this
+# can only fail if the clone or checkout did something other than it claimed.
 if [[ -n "${AFK_GIT_SHA:-}" ]]; then
   actual_sha="$(git rev-parse HEAD)"
   if [[ "${actual_sha}" != "${AFK_GIT_SHA}" ]]; then
-    die "ref ${AFK_GIT_REF} resolved to ${actual_sha}, expected ${AFK_GIT_SHA}" 66
+    die "checked out ${AFK_GIT_SHA} but HEAD is ${actual_sha}" 66
   fi
 fi
 
