@@ -19,12 +19,11 @@ prepare() {
   mkdir -p "$PROJECT_DIR"
   printf '%s' "${AFK_CONFIG_JSON}" > "$PROJECT_DIR/afk.config.json"
 
-  # The Run's environment, same as the config: ConfigService reads `.afk.env`
-  # from beside afk.config.json, and absent it a Run gets no env and no
-  # secrets at all — it would die at clone. This file names secrets, it does
-  # not carry them: a `secret:` entry becomes an SSM path in the Run Plan and
-  # the Run's own VM dereferences it with its instance role.
-  printf '%s' "${AFK_ENV_FILE:-}" > "$PROJECT_DIR/.afk.env"
+  # No .afk.env is written, deliberately. A scheduled Run carries the
+  # environment its submitter pinned on the Entry, so the Lambda holding one
+  # would mean every developer's Runs authenticating as whoever deployed it.
+  # ConfigService treats the file as absent and yields no entries, which is
+  # correct here: the Scheduler itself needs no project environment.
 
   if [ -n "${AFK_GIT_TOKEN_PARAM:-}" ]; then
     # No apostrophes in this message: the shell parses quotes inside ${x:?...}

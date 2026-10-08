@@ -337,7 +337,6 @@ resource "aws_lambda_function" "scheduler" {
   environment {
     variables = {
       AFK_CONFIG_JSON     = var.scheduler_config_json
-      AFK_ENV_FILE        = var.scheduler_env_file
       AFK_GIT_TOKEN_PARAM = var.scheduler_git_token_param
       AFK_GIT_HOST        = var.scheduler_git_host
       AFK_GIT_USER        = var.scheduler_git_user

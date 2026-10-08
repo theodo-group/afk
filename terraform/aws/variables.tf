@@ -95,12 +95,6 @@ variable "scheduler_config_json" {
   default     = ""
 }
 
-variable "scheduler_env_file" {
-  description = "The project's .afk.env, verbatim. Without it a scheduled Run gets no environment and no secrets and dies at clone. It names secrets rather than carrying them — a `secret:` entry is an SSM path the Run's own VM dereferences — so it holds no credential unless the project put a plain value in it."
-  type        = string
-  default     = ""
-}
-
 variable "scheduler_git_host" {
   description = "Forge host of afk.config.json's gitUrl (e.g. gitlab.com, github.com), for the credential the fire-time `git ls-remote` needs. Required whenever scheduler_git_token_param is set."
   type        = string
