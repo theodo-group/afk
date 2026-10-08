@@ -19,14 +19,29 @@ prepare() {
   mkdir -p "$PROJECT_DIR"
   printf '%s' "${AFK_CONFIG_JSON}" > "$PROJECT_DIR/afk.config.json"
 
+  # The Run's environment, same as the config: ConfigService reads `.afk.env`
+  # from beside afk.config.json, and absent it a Run gets no env and no
+  # secrets at all — it would die at clone. This file names secrets, it does
+  # not carry them: a `secret:` entry becomes an SSM path in the Run Plan and
+  # the Run's own VM dereferences it with its instance role.
+  printf '%s' "${AFK_ENV_FILE:-}" > "$PROJECT_DIR/.afk.env"
+
   if [ -n "${AFK_GIT_TOKEN_PARAM:-}" ]; then
+    # No apostrophes in this message: the shell parses quotes inside ${x:?...}
+    # even within double quotes, and one would break the script at load.
+    : "${AFK_GIT_HOST:?must name the forge host of the configured gitUrl, e.g. gitlab.com, whenever AFK_GIT_TOKEN_PARAM is set}"
     token=$(aws ssm get-parameter \
       --name "$AFK_GIT_TOKEN_PARAM" \
       --with-decryption \
       --query Parameter.Value \
       --output text)
     umask 077
-    printf 'https://x-access-token:%s@github.com\n' "$token" > /tmp/.git-credentials
+    # Host and user are configured rather than assumed: the forge is whatever
+    # gitUrl points at, and the user half differs between forges (GitLab wants
+    # `oauth2` with a PAT; GitHub ignores it). printf rather than building a
+    # URL by substitution — a token may contain any character.
+    printf 'https://%s:%s@%s\n' "${AFK_GIT_USER:-oauth2}" "$token" "$AFK_GIT_HOST" \
+      > /tmp/.git-credentials
     git config --global credential.helper 'store --file=/tmp/.git-credentials'
   fi
 }

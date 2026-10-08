@@ -24,7 +24,10 @@ by hand, so there is one implementation of the rules rather than two.
 | env | why |
 |---|---|
 | `AFK_CONFIG_JSON` | The Lambda has no checkout to discover an `afk.config.json` in. `bootstrap` writes this to `/tmp/project/` and runs the CLI from there, exactly where a developer's checkout would put it. |
+| `AFK_ENV_FILE` | The project's `.afk.env`, written beside it. Without it a scheduled Run gets no environment and no secrets, and dies at clone. It *names* secrets rather than carrying them: a `secret:` entry becomes an SSM path in the Run Plan and the Run's own VM dereferences it with its instance role, so the Lambda never holds a credential. |
 | `AFK_GIT_TOKEN_PARAM` | SSM parameter holding a read-only git token, for a private origin. Empty for a public one. |
+| `AFK_GIT_HOST` | Forge host of `gitUrl` — `gitlab.com`, `github.com`. Required whenever the token param is set; Terraform refuses the plan without it. |
+| `AFK_GIT_USER` | Username half of that credential, default `oauth2`. GitLab wants `oauth2` with a PAT; GitHub ignores the username. |
 
 ## Build
 

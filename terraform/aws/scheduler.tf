@@ -332,7 +332,19 @@ resource "aws_lambda_function" "scheduler" {
   environment {
     variables = {
       AFK_CONFIG_JSON     = var.scheduler_config_json
+      AFK_ENV_FILE        = var.scheduler_env_file
       AFK_GIT_TOKEN_PARAM = var.scheduler_git_token_param
+      AFK_GIT_HOST        = var.scheduler_git_host
+      AFK_GIT_USER        = var.scheduler_git_user
+    }
+  }
+
+  # Catch the mismatch at plan time rather than on every tick: without a host
+  # the credential cannot be written, and every Entry's ref resolution fails.
+  lifecycle {
+    precondition {
+      condition     = var.scheduler_git_token_param == "" || var.scheduler_git_host != ""
+      error_message = "scheduler_git_host must name the forge host (e.g. gitlab.com) when scheduler_git_token_param is set."
     }
   }
 
