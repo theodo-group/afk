@@ -249,5 +249,12 @@ BunRuntime.runMain(
       }),
     ),
   ),
-  { teardown: (exit, onExit) => onExit(exitCodeOf(exit, signal)) },
+  {
+    teardown: (exit, onExit) => onExit(exitCodeOf(exit, signal)),
+    // runMain otherwise installs Effect's pretty logger alongside ours, and it
+    // writes to stdout: every warning printed twice, and `--json` output
+    // prefixed with a WARN line — which is what the Scheduler Lambda posts back
+    // as its response. `consoleLogger` is the one sink, on stderr.
+    disablePrettyLogger: true,
+  },
 )
