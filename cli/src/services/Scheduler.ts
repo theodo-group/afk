@@ -1,9 +1,11 @@
 import { Context, DateTime, Effect, Layer } from "effect"
 import { HistoryService } from "./HistoryService.ts"
-import { RunService } from "./RunService.ts"
+import { RunService, type RunStarted } from "./RunService.ts"
 import { ScheduleStore, type StoredEntry } from "./backend/ScheduleStore.ts"
+import { SecretStore } from "./backend/SecretStore.ts"
 import { decide, type Decision, type RunFact } from "./Triggers.ts"
 import { launchFailureAction, launchFailureDetail } from "./LaunchAttempt.ts"
+import { missingRefs } from "./ScheduleEnv.ts"
 import { parseSince } from "./SinceWindow.ts"
 import {
   AwsError,
@@ -104,86 +106,112 @@ export const SchedulerLive = Layer.effect(
     const store = yield* ScheduleStore
     const history = yield* HistoryService
     const runs = yield* RunService
+    const secrets = yield* SecretStore
 
-    const launch = (entry: StoredEntry, at: string) =>
-      runs
-        .start({
-          // One element: the VM joins the argv with spaces and hands the
-          // result to `sh -c`, so the developer's own quoting survives intact.
-          command: [entry.command],
-          ref: entry.ref,
-          image: entry.image,
-          timeoutHours: entry.timeoutHours,
-          backendOverrides: {
-            ...(entry.onDemand ? { onDemand: true } : {}),
-            ...(entry.instanceType ? { instanceType: entry.instanceType } : {}),
-          },
-        })
-        .pipe(
-          Effect.flatMap((started) =>
-            store
-              .markLaunched({
+    const launch = (
+      entry: StoredEntry,
+      at: string,
+      storedSecretNames: ReadonlyArray<string>,
+    ) => {
+      // Checked again here, not only at submit: a secret deleted since then
+      // would otherwise cost a whole Run. `UserData` runs `set -uo pipefail`
+      // with no `-e`, so a failed SSM fetch writes `NAME=` and the agent works
+      // for hours with an empty credential — a refused launch is the cheap
+      // outcome. A UserError also settles on the first attempt rather than
+      // spending the retry budget, since nothing will fix it by the next tick.
+      const missing = missingRefs(
+        entry.env.flatMap((e) => (e.kind === "secret" ? [e.secretName] : [])),
+        storedSecretNames,
+      )
+      const attempt: Effect.Effect<RunStarted, TickError> =
+        missing.length > 0
+          ? Effect.fail(
+              new UserError({
+                message:
+                  missing.length === 1
+                    ? `secret '${missing[0]}' is referenced by this Entry but no longer exists`
+                    : `secrets ${missing.map((m) => `'${m}'`).join(", ")} are referenced by this Entry but no longer exist`,
+                hint: `Restore with \`afk secrets put <name>\`, then re-submit '${entry.scheduleId}'.`,
+              }),
+            )
+          : runs.start({
+              // One element: the VM joins the argv with spaces and hands the
+              // result to `sh -c`, so the developer's quoting survives intact.
+              command: [entry.command],
+              ref: entry.ref,
+              image: entry.image,
+              envEntries: entry.env,
+              timeoutHours: entry.timeoutHours,
+              backendOverrides: {
+                ...(entry.onDemand ? { onDemand: true } : {}),
+                ...(entry.instanceType
+                  ? { instanceType: entry.instanceType }
+                  : {}),
+              },
+            })
+      return attempt.pipe(
+        Effect.flatMap((started) =>
+          store
+            .markLaunched({
+              scheduleId: entry.scheduleId,
+              entryId: entry.entryId,
+              runId: started.runId,
+              launchedAt: at,
+            })
+            .pipe(
+              Effect.as({
+                kind: "launched" as const,
                 scheduleId: entry.scheduleId,
                 entryId: entry.entryId,
                 runId: started.runId,
-                launchedAt: at,
-              })
-              .pipe(
-                Effect.as({
-                  kind: "launched" as const,
+              }),
+            ),
+        ),
+        // A refused launch created no Run, so retrying it costs nothing and
+        // a Spot capacity blip must not end the Entry. `launchFailureAction`
+        // owns that call; the budget is what keeps an unlaunchable Entry
+        // from retrying on every tick forever.
+        Effect.catchAll((e): Effect.Effect<LaunchOutcome, TickError> => {
+          const attempts = entry.launchAttempts + 1
+          const detail = launchFailureDetail(e)
+          const where = `${entry.scheduleId}/${entry.entryId}`
+          const note = Effect.logWarning(
+            `${where}: launch attempt ${attempts} failed: ${e.message}`,
+          )
+          return launchFailureAction(e, attempts, SCHEDULER_LAUNCH_ATTEMPTS) ===
+            "retry"
+            ? store
+                .recordLaunchFailure({
                   scheduleId: entry.scheduleId,
                   entryId: entry.entryId,
-                  runId: started.runId,
-                }),
-              ),
-          ),
-          // A refused launch created no Run, so retrying it costs nothing and
-          // a Spot capacity blip must not end the Entry. `launchFailureAction`
-          // owns that call; the budget is what keeps an unlaunchable Entry
-          // from retrying on every tick forever.
-          Effect.catchAll((e): Effect.Effect<LaunchOutcome, TickError> => {
-            const attempts = entry.launchAttempts + 1
-            const detail = launchFailureDetail(e)
-            const where = `${entry.scheduleId}/${entry.entryId}`
-            const note = Effect.logWarning(
-              `${where}: launch attempt ${attempts} failed: ${e.message}`,
-            )
-            return launchFailureAction(
-              e,
-              attempts,
-              SCHEDULER_LAUNCH_ATTEMPTS,
-            ) === "retry"
-              ? store
-                  .recordLaunchFailure({
+                  attempts,
+                  error: detail,
+                })
+                .pipe(
+                  Effect.zipRight(note),
+                  Effect.as({
+                    kind: "retrying" as const,
                     scheduleId: entry.scheduleId,
                     entryId: entry.entryId,
                     attempts,
                     error: detail,
-                  })
-                  .pipe(
-                    Effect.zipRight(note),
-                    Effect.as({
-                      kind: "retrying" as const,
-                      scheduleId: entry.scheduleId,
-                      entryId: entry.entryId,
-                      attempts,
-                      error: detail,
-                    }),
-                  )
-              : store
-                  .markSettled({
-                    scheduleId: entry.scheduleId,
-                    entryId: entry.entryId,
-                    outcome: "failure",
-                    reason: `launch failed after ${attempts} attempts: ${detail}`,
-                    settledAt: at,
-                  })
-                  .pipe(
-                    Effect.zipRight(note),
-                    Effect.as({ kind: "gave-up" as const }),
-                  )
-          }),
-        )
+                  }),
+                )
+            : store
+                .markSettled({
+                  scheduleId: entry.scheduleId,
+                  entryId: entry.entryId,
+                  outcome: "failure",
+                  reason: `launch failed after ${attempts} attempts: ${detail}`,
+                  settledAt: at,
+                })
+                .pipe(
+                  Effect.zipRight(note),
+                  Effect.as({ kind: "gave-up" as const }),
+                )
+        }),
+      )
+    }
 
     const tick = Effect.gen(function* () {
       const all = yield* store.list()
@@ -256,8 +284,12 @@ export const SchedulerLive = Layer.effect(
         const entry = byKey.get(`${d.scheduleId}\u0000${d.entryId}`)
         return entry ? [entry] : []
       })
+      // One list for the whole tick, and only when something is actually due:
+      // the preflight is per Entry but the round trip need not be.
+      const storedSecretNames =
+        launches.length > 0 ? (yield* secrets.list).map((s) => s.name) : []
       const outcomes = yield* Effect.all(
-        launches.map((e) => launch(e, nowIso)),
+        launches.map((e) => launch(e, nowIso, storedSecretNames)),
         { concurrency: 4 },
       )
 
