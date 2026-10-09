@@ -26,6 +26,17 @@ import { DEFAULT_REGION } from "../constants.ts"
  * from flags + config. Image-build details (image URI, sha, branch) are
  * filled in by RunService itself before calling Compute.
  */
+/**
+ * What `afk schedule submit` fixes on an Entry besides its image, read from the
+ * submitter's checkout. Both halves travel together: a Run given one without
+ * the other would mix the submitter's environment with the launcher's.
+ */
+export interface PinnedEnvironment {
+  readonly envEntries: ReadonlyArray<EnvEntry>
+  /** `afk.compose.yml` as submitted; undefined when the project had none. */
+  readonly composeContent: string | undefined
+}
+
 export interface RunRequest {
   readonly command: ReadonlyArray<string>
   readonly ref?: string
@@ -37,12 +48,13 @@ export interface RunRequest {
   readonly image?: string
   readonly timeoutHours?: number
   /**
-   * Launch with an environment other than this machine's `.afk.env` — the
-   * [[scheduler|Scheduler]] passes the submitter's, pinned on the Entry, so a
-   * scheduled Run authenticates as whoever scheduled it. Absent, the launching
-   * machine's own environment is used, which is what `afk run` wants.
+   * Launch with what a submitter pinned rather than what this machine holds —
+   * the [[scheduler|Scheduler]] passes an Entry's, so a scheduled Run gets the
+   * submitter's credentials and the stack they submitted. Absent, the
+   * launching machine's own `.afk.env` and `afk.compose.yml` are used, which
+   * is what `afk run` wants.
    */
-  readonly envEntries?: ReadonlyArray<EnvEntry>
+  readonly pinned?: PinnedEnvironment
   /** Retain the compute primitive past Run end for post-mortem `afk attach`
    *  (cloud On-Demand only; see StartInput.retain and CONTEXT.md "Retention"). */
   readonly retain?: boolean
@@ -224,7 +236,7 @@ export const RunServiceLive = Layer.effect(
 
     const prepare = (input: RunRequest) =>
       Effect.gen(function* () {
-        const { config, envEntries } = yield* cfg.load
+        const { config, envEntries, composeContent } = yield* cfg.load
         const region = config.aws?.region ?? DEFAULT_REGION
         const built = yield* input.image !== undefined
           ? build.adoptImage({ image: input.image, ref: input.ref })
@@ -235,8 +247,9 @@ export const RunServiceLive = Layer.effect(
           timeoutHours: input.timeoutHours,
           // The one fallback to this machine's environment, kept here rather
           // than in each Backend: four of them would be four chances to
-          // silently hand a scheduled Run the launcher's credentials.
-          envEntries: input.envEntries ?? envEntries,
+          // silently hand a scheduled Run the launcher's credentials, or the
+          // launcher's stack.
+          ...(input.pinned ?? { envEntries, composeContent }),
           retain: input.retain,
           backendOverrides: input.backendOverrides,
           built,

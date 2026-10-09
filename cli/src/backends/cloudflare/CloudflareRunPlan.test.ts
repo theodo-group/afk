@@ -27,6 +27,7 @@ const baseInput = (
   input: {
     command: ["claude", "go"],
     envEntries: [],
+    composeContent: undefined,
     built: {
       image: "registry.cloudflare.com/acct/widget:abc123",
       tag: "abc123",

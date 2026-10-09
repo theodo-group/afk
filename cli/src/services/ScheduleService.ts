@@ -13,6 +13,7 @@ import { SecretStore } from "./backend/SecretStore.ts"
 import { ScheduleFile, type StoredEnv } from "../schema/Schedule.ts"
 import { firstDueAt, parseTrigger, validateEntries } from "./Triggers.ts"
 import { resolveScheduleEnv } from "./ScheduleEnv.ts"
+import { lintCompose } from "./Compose.ts"
 import {
   AwsError,
   CloudflareError,
@@ -23,6 +24,8 @@ import {
   UserError,
 } from "../infra/Errors.ts"
 import {
+  COMPOSE_FILE,
+  DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
   DEFAULT_TIMEOUT_HOURS,
   ENV_FILE,
@@ -37,6 +40,8 @@ export interface SubmitReport {
    * reported once. References by name; no value is ever carried here.
    */
   readonly env: StoredEnv
+  /** Whether an `afk.compose.yml` was pinned; the file itself is not echoed. */
+  readonly composePinned: boolean
   readonly entries: ReadonlyArray<StoredEntry>
   /** Entries left as they stood because their Run was already in flight. */
   readonly preserved: ReadonlyArray<string>
@@ -128,7 +133,7 @@ export const ScheduleServiceLive = Layer.effect(
           // Run authenticates as whoever scheduled it rather than as whoever
           // deployed the Scheduler. One local read plus one list, so it sits
           // ahead of the ls-remotes.
-          const { config, envEntries } = yield* cfg.load
+          const { config, envEntries, composeContent } = yield* cfg.load
           const stored = yield* secrets.list
           const env = resolveScheduleEnv({
             envEntries,
@@ -141,6 +146,22 @@ export const ScheduleServiceLive = Layer.effect(
                 hint: "A scheduled Run dereferences its own secrets on its own VM, so a Schedule carries names and never values — a literal would be stored in clear.",
               }),
             )
+          }
+          // The compose file is pinned with it, so it is checked here too: a
+          // broken one would otherwise be found at fire time, by every Entry.
+          if (composeContent !== undefined) {
+            yield* Effect.try({
+              try: () =>
+                lintCompose({
+                  content: composeContent,
+                  mainService: config.mainService ?? DEFAULT_MAIN_SERVICE,
+                  backend: compute.backendName,
+                }),
+              catch: (e) =>
+                e instanceof UserError
+                  ? e
+                  : new UserError({ message: `${COMPOSE_FILE}: ${String(e)}` }),
+            })
           }
 
           // (c) Every ref exists on origin — at the developer's desk, not at
@@ -197,6 +218,7 @@ export const ScheduleServiceLive = Layer.effect(
               command: e.command,
               image: built.image,
               env: env.env,
+              ...(composeContent !== undefined ? { composeContent } : {}),
               owner: owner.id,
               timeoutHours: e.timeoutHours ?? defaultTimeout,
               onDemand: e.onDemand ?? false,
@@ -215,6 +237,7 @@ export const ScheduleServiceLive = Layer.effect(
             image: built.image,
             imageSkipped: built.skipped,
             env: env.env,
+            composePinned: composeContent !== undefined,
             entries,
             preserved: result.preserved,
             removed: result.removed,

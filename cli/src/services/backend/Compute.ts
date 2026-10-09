@@ -35,6 +35,13 @@ export interface StartInput {
    */
   readonly envEntries: ReadonlyArray<EnvEntry>
   /**
+   * Raw `afk.compose.yml`, or undefined for a no-compose Run. Resolved by the
+   * orchestrator for the same reason as `envEntries`: a Backend reading the
+   * launcher's checkout would give a scheduled Run whatever stack the machine
+   * launching it happens to hold — none at all on the Scheduler Lambda.
+   */
+  readonly composeContent: string | undefined
+  /**
    * Retain the compute primitive after the Run ends (stop instead of reclaim)
    * so `afk attach` can resume it for post-mortem inspection. Cloud-only and
    * On-Demand-only: a Spot Run cannot be retained (see CONTEXT.md "Retention").

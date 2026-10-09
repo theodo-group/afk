@@ -85,6 +85,9 @@ export const entryFromItem = (item: Item): StoredEntry | null => {
     command: readS(item, "command") ?? "",
     image: readS(item, "image") ?? "",
     env,
+    ...(readS(item, "compose") !== undefined
+      ? { composeContent: readS(item, "compose")! }
+      : {}),
     owner: readS(item, "owner") ?? "",
     timeoutHours: readN(item, "timeout_hours") ?? 0,
     onDemand: readB(item, "on_demand") ?? false,
@@ -130,6 +133,7 @@ export const itemFromEntry = (e: StoredEntry): Item => ({
   // `.length`, not truthiness: `[]` is truthy, and writing "[]" onto every
   // minimal row would add a key the round-trip test asserts is absent.
   ...(e.env.length > 0 ? { env: S(JSON.stringify(e.env)) } : {}),
+  ...(e.composeContent !== undefined ? { compose: S(e.composeContent) } : {}),
   ...(e.lastError ? { last_error: S(e.lastError) } : {}),
   ...(e.instanceType ? { instance_type: S(e.instanceType) } : {}),
   ...(e.notBefore ? { not_before: S(e.notBefore) } : {}),

@@ -1,6 +1,5 @@
 import { Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
-import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { ConfigService } from "../../services/ConfigService.ts"
 import { Subprocess } from "../../infra/Subprocess.ts"
@@ -15,7 +14,7 @@ import {
   type StartInput,
 } from "../../services/backend/Compute.ts"
 import { CloudflareError, ConfigError, UserError } from "../../infra/Errors.ts"
-import { COMPOSE_FILE, DEFAULT_MAIN_SERVICE } from "../../constants.ts"
+import { DEFAULT_MAIN_SERVICE } from "../../constants.ts"
 import type { Run } from "../../schema/Run.ts"
 import {
   type CloudflareBackendPlan,
@@ -97,17 +96,7 @@ export const CloudflareComputeLive = Layer.effect(
           )
         }
 
-        const composePath = resolve(projectRoot, COMPOSE_FILE)
-        const composeRaw = existsSync(composePath)
-          ? yield* Effect.try({
-              try: () => readFileSync(composePath, "utf8"),
-              catch: (cause) =>
-                new ConfigError({
-                  path: composePath,
-                  message: `cannot read: ${String(cause)}`,
-                }),
-            })
-          : undefined
+        const composeRaw = input.composeContent
 
         // Core: pure resolution + validation. Non-deterministic seeds are
         // generated here in the shell and injected, so the core stays testable.

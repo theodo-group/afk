@@ -1,6 +1,6 @@
 import { Effect, Layer, Schedule } from "effect"
 import { randomUUID } from "node:crypto"
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, rmSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { type LocalBackendPlan, planLocalRun } from "./LocalRunPlan.ts"
 import { userInfo } from "node:os"
@@ -16,9 +16,8 @@ import {
   type RunStarted,
   type StartInput,
 } from "../../services/backend/Compute.ts"
-import { ConfigError, UserError } from "../../infra/Errors.ts"
+import { UserError } from "../../infra/Errors.ts"
 import {
-  COMPOSE_FILE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_RETENTION_DAYS,
   LABEL_BRANCH,
@@ -164,17 +163,7 @@ export const LocalComputeLive = Layer.effect(
           )
         }
 
-        const composePath = resolve(projectRoot, COMPOSE_FILE)
-        const composeContent = existsSync(composePath)
-          ? yield* Effect.try({
-              try: () => readFileSync(composePath, "utf8"),
-              catch: (cause) =>
-                new ConfigError({
-                  path: composePath,
-                  message: `cannot read: ${String(cause)}`,
-                }),
-            })
-          : undefined
+        const composeContent = input.composeContent
 
         // Core: pure resolution + validation. Non-deterministic seeds are
         // generated here in the shell and injected, so the core stays testable.
