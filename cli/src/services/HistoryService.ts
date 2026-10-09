@@ -18,6 +18,8 @@ export interface RunHistoryRow {
   readonly runId: string
   readonly status: RunHistoryStatus
   readonly owner: string
+  /** The [[submitter]]; absent on rows older than the field. */
+  readonly submittedBy?: string
   readonly repo: string
   readonly branch: string
   readonly sha: string
@@ -79,6 +81,9 @@ export const HistoryServiceLive = Layer.effect(
                     ? "failed"
                     : "stopped",
               owner: r.owner,
+              ...(r.submittedBy !== undefined
+                ? { submittedBy: r.submittedBy }
+                : {}),
               repo: r.repo,
               branch: r.branch,
               sha: r.sha,

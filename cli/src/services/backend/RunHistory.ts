@@ -16,6 +16,8 @@ import {
 export interface HistoryRow {
   readonly runId: string
   readonly owner: string
+  /** The [[submitter]]; absent on rows older than the field. */
+  readonly submittedBy?: string
   readonly repo: string
   readonly branch: string
   readonly sha: string
@@ -40,6 +42,8 @@ export interface QueryInput {
 export interface RecordStartInput {
   readonly runId: string
   readonly owner: string
+  /** The [[submitter]]. Optional: a Backend's history store may not keep it. */
+  readonly submittedBy?: string
   readonly repo: string
   readonly branch: string
   readonly sha: string

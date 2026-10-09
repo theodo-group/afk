@@ -23,6 +23,9 @@ const rowFromItem = (item: Item): HistoryRow | null => {
   return {
     runId,
     owner: readS(item, "owner") ?? "",
+    ...(readS(item, "submitted_by") !== undefined
+      ? { submittedBy: readS(item, "submitted_by")! }
+      : {}),
     repo: readS(item, "repo") ?? "",
     branch: readS(item, "branch") ?? "",
     sha: readS(item, "sha") ?? "",
@@ -85,6 +88,9 @@ export const AwsRunHistoryLive = Layer.effect(
             run_id: S(input.runId),
             status: S("running"),
             owner: S(input.owner),
+            ...(input.submittedBy !== undefined
+              ? { submitted_by: S(input.submittedBy) }
+              : {}),
             repo: S(input.repo),
             branch: S(input.branch),
             sha: S(input.sha),

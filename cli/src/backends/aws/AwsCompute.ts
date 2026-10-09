@@ -183,6 +183,7 @@ export const AwsComputeLive = Layer.effect(
           .recordStart({
             runId: plan.runId,
             owner: plan.owner,
+            submittedBy: plan.submittedBy,
             repo: plan.repoName,
             branch: plan.branch,
             sha: plan.sha,

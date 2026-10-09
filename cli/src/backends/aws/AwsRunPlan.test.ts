@@ -13,6 +13,7 @@ import {
   TAG_OWNER,
   TAG_RETAIN,
   TAG_RUN_ID,
+  TAG_SUBMITTED_BY,
 } from "../../constants.ts"
 
 const baseInput = (
@@ -86,6 +87,43 @@ describe("planAwsRun", () => {
       )
       expect(tags[TAG_OWNER]).toBe("AROAEXAMPLE:alice.martin")
       expect(core.warnings).toEqual([])
+    }
+  })
+
+  it("makes a hand-launched Run's Submitter its Owner", () => {
+    const result = planAwsRun(
+      baseInput({ identity: { UserId: "AROAEXAMPLE:alice.martin" } }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const core = result.right
+      expect(core.preparedBase.submittedBy).toBe("AROAEXAMPLE:alice.martin")
+      const tags = Object.fromEntries(
+        core.backendPlanBase.tags.map((t) => [t.key, t.value]),
+      )
+      expect(tags[TAG_SUBMITTED_BY]).toBe("AROAEXAMPLE:alice.martin")
+    }
+  })
+
+  it("keeps a Scheduler-launched Run's Owner, and records who submitted it", () => {
+    // The launch permission only lets a caller tag its own identity as Owner,
+    // so the Scheduler stays the Owner; the submitter rides beside it.
+    const result = planAwsRun(
+      baseInput({
+        identity: { UserId: "AROASCHED:dev-afk-scheduler" },
+        startInput: { submittedBy: "AROAEXAMPLE:alice.martin" },
+      }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const core = result.right
+      expect(core.preparedBase.owner).toBe("AROASCHED:dev-afk-scheduler")
+      expect(core.preparedBase.submittedBy).toBe("AROAEXAMPLE:alice.martin")
+      const tags = Object.fromEntries(
+        core.backendPlanBase.tags.map((t) => [t.key, t.value]),
+      )
+      expect(tags[TAG_OWNER]).toBe("AROASCHED:dev-afk-scheduler")
+      expect(tags[TAG_SUBMITTED_BY]).toBe("AROAEXAMPLE:alice.martin")
     }
   })
 
@@ -220,6 +258,28 @@ describe("ec2InstanceToRun retention", () => {
       { key: TAG_MANAGED, value: "true" },
     ],
   }
+
+  it("reads the Submitter back off its tag", () => {
+    const run = ec2InstanceToRun(
+      {
+        ...baseInstance,
+        state: "running",
+        tags: [
+          ...baseInstance.tags,
+          { key: TAG_SUBMITTED_BY, value: "AROAEXAMPLE:alice.martin" },
+        ],
+      },
+      7,
+    )
+    expect(run?.owner).toBe("AIDAEXAMPLE")
+    expect(run?.submittedBy).toBe("AROAEXAMPLE:alice.martin")
+  })
+
+  it("leaves the Submitter absent on an instance launched before the tag", () => {
+    // Readers fall back to the Owner; inventing one here would hide that.
+    const run = ec2InstanceToRun({ ...baseInstance, state: "running" }, 7)
+    expect(run?.submittedBy).toBeUndefined()
+  })
 
   it("sets retainedUntil for a stopped, retained instance", () => {
     const run = ec2InstanceToRun(
