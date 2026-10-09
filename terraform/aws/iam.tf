@@ -11,9 +11,15 @@ locals {
   ec2_volume_arn   = "arn:aws:ec2:${local.region}:${local.account_id}:volume/*"
   ec2_nic_arn      = "arn:aws:ec2:${local.region}:${local.account_id}:network-interface/*"
   ec2_keypair_arn  = "arn:aws:ec2:${local.region}:${local.account_id}:key-pair/*"
-  ec2_subnet_arn   = "arn:aws:ec2:${local.region}:${local.account_id}:subnet/*"
-  ec2_sg_arn       = "arn:aws:ec2:${local.region}:${local.account_id}:security-group/*"
-  ec2_image_arn    = "arn:aws:ec2:${local.region}::image/*"
+  # A Spot launch — the default — is also authorized against the Spot request
+  # RunInstances creates; without it every Spot launch is denied.
+  ec2_spot_arn = "arn:aws:ec2:${local.region}:${local.account_id}:spot-instances-request/*"
+  # List actions such as DescribeLogGroups are evaluated against the account's
+  # log-group namespace, never a named group, so a prefix ARN cannot match them.
+  log_groups_list_arn = "arn:aws:logs:${local.region}:${local.account_id}:log-group:*"
+  ec2_subnet_arn      = "arn:aws:ec2:${local.region}:${local.account_id}:subnet/*"
+  ec2_sg_arn          = "arn:aws:ec2:${local.region}:${local.account_id}:security-group/*"
+  ec2_image_arn       = "arn:aws:ec2:${local.region}::image/*"
 }
 
 # ---------------------------------------------------------------------------
@@ -218,6 +224,7 @@ data "aws_iam_policy_document" "developer" {
       local.ec2_volume_arn,
       local.ec2_nic_arn,
       local.ec2_keypair_arn,
+      local.ec2_spot_arn,
     ]
   }
 
@@ -374,13 +381,18 @@ data "aws_iam_policy_document" "developer" {
     actions = [
       "logs:CreateLogGroup",
       "logs:PutRetentionPolicy",
-      "logs:DescribeLogGroups",
       "logs:DescribeLogStreams",
       "logs:GetLogEvents",
       "logs:FilterLogEvents",
       "logs:StartLiveTail",
     ]
     resources = [local.log_group_arn]
+  }
+
+  statement {
+    sid       = "ListLogGroups"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = [local.log_groups_list_arn]
   }
 
   # --- S3: retrieve Session Artifacts ---

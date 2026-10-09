@@ -55,17 +55,24 @@ while true; do
   request_id=$(grep -i '^Lambda-Runtime-Aws-Request-Id:' "$headers" \
     | tr -d '\r' | cut -d' ' -f2)
 
-  if out=$(cd "$PROJECT_DIR" && bun /opt/afk/cli/src/cli.ts --json schedule tick 2>/tmp/tick.err); then
+  status=0
+  out=$(cd "$PROJECT_DIR" && bun /opt/afk/cli/src/cli.ts --json schedule tick 2>/tmp/tick.err) || status=$?
+
+  # Forwarded whatever the outcome: a tick that succeeds can still carry the
+  # warning that explains a stuck Entry — "launch attempt N failed" for a
+  # launch left pending for a retry — and stderr is the only place it goes.
+  cat /tmp/tick.err >&2
+
+  if [ "$status" -eq 0 ]; then
     curl -sS -X POST \
       "http://${AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/${request_id}/response" \
       -H 'Content-Type: application/json' \
       --data-binary "$out" > /dev/null
   else
-    # The CLI's own stderr carries the `error:`/`hint:` lines; writing it here
-    # puts it in this invocation's CloudWatch log. The error payload stays a
-    # fixed string rather than the stderr, because escaping arbitrary text
-    # into JSON needs a tool this image has no reason to carry.
-    cat /tmp/tick.err >&2
+    # The `error:`/`hint:` lines are already in this invocation's log, above.
+    # The error payload stays a fixed string rather than the stderr, because
+    # escaping arbitrary text into JSON needs a tool this image has no reason
+    # to carry.
     curl -sS -X POST \
       "http://${AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/${request_id}/error" \
       -H 'Content-Type: application/json' \

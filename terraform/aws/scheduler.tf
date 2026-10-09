@@ -83,7 +83,7 @@ resource "null_resource" "scheduler_image" {
       registry=${local.account_id}.dkr.ecr.${local.region}.amazonaws.com
       aws ecr get-login-password --region ${local.region} \
         | docker login --username AWS --password-stdin "$registry"
-      docker build --platform linux/arm64 \
+      docker build --platform linux/arm64 --provenance=false --sbom=false \
         -f terraform/aws/lambda/scheduler/Dockerfile \
         -t ${local.scheduler_image} .
       docker push ${local.scheduler_image}
@@ -182,6 +182,7 @@ data "aws_iam_policy_document" "scheduler" {
       local.ec2_volume_arn,
       local.ec2_nic_arn,
       local.ec2_keypair_arn,
+      local.ec2_spot_arn,
     ]
   }
 
@@ -271,12 +272,18 @@ data "aws_iam_policy_document" "scheduler" {
     ]
   }
 
-  # The git token the fire-time `git ls-remote` needs, plus the Run's own
-  # secret references resolved into user_data at launch.
-  statement {
-    sid       = "ReadAfkSsmParameters"
-    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = [local.ssm_param_arn]
+  # The git token the fire-time `git ls-remote` needs — that one parameter and
+  # nothing else. A Run's secret references are never read here: they travel
+  # into user_data as SSM paths and the Run's VM dereferences them with its own
+  # instance role. A grant on the whole prefix would put every developer's
+  # credentials within the Lambda's reach for no reason it has.
+  dynamic "statement" {
+    for_each = var.scheduler_git_token_param != "" ? [var.scheduler_git_token_param] : []
+    content {
+      sid       = "ReadSchedulerGitToken"
+      actions   = ["ssm:GetParameter"]
+      resources = ["arn:aws:ssm:${local.region}:${local.account_id}:parameter/${trimprefix(statement.value, "/")}"]
+    }
   }
 
   # The fire-time check that an Entry's secret references still exist, before
@@ -304,10 +311,15 @@ data "aws_iam_policy_document" "scheduler" {
     sid = "EnsureRunLogGroups"
     actions = [
       "logs:CreateLogGroup",
-      "logs:DescribeLogGroups",
       "logs:PutRetentionPolicy",
     ]
     resources = [local.log_group_arn]
+  }
+
+  statement {
+    sid       = "ListLogGroups"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = [local.log_groups_list_arn]
   }
 
   statement {
