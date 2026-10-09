@@ -47,10 +47,14 @@ The image tag is a hash of everything that ends up inside it, so a no-op apply
 pushes nothing. To build by hand, from the repo root:
 
 ```sh
-docker build --platform linux/arm64 \
+docker build --platform linux/arm64 --provenance=false --sbom=false \
   -f terraform/aws/lambda/scheduler/Dockerfile \
   -t <account>.dkr.ecr.<region>.amazonaws.com/afk/scheduler:dev .
 ```
+
+`--provenance=false --sbom=false` is required, not tidiness: by default Docker
+wraps the image in a manifest list carrying an attestation, and Lambda refuses
+to create a function from one.
 
 ## Size
 
