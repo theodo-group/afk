@@ -55,6 +55,8 @@ export interface RunRequest {
    * is what `afk run` wants.
    */
   readonly pinned?: PinnedEnvironment
+  /** See `StartInput.submittedBy`. */
+  readonly submittedBy?: string
   /** Retain the compute primitive past Run end for post-mortem `afk attach`
    *  (cloud On-Demand only; see StartInput.retain and CONTEXT.md "Retention"). */
   readonly retain?: boolean
@@ -250,6 +252,9 @@ export const RunServiceLive = Layer.effect(
           // silently hand a scheduled Run the launcher's credentials, or the
           // launcher's stack.
           ...(input.pinned ?? { envEntries, composeContent }),
+          ...(input.submittedBy !== undefined
+            ? { submittedBy: input.submittedBy }
+            : {}),
           retain: input.retain,
           backendOverrides: input.backendOverrides,
           built,

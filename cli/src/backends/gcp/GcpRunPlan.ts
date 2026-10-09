@@ -312,6 +312,7 @@ export const planGcpRun = (
       timeoutHours,
       timeoutSeconds,
       owner: i.ownerAccount,
+      submittedBy: input.submittedBy ?? i.ownerAccount,
       repoName: i.sourceRepoName,
       env,
       secrets,

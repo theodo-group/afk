@@ -182,6 +182,7 @@ export const planCloudflareRun = (
     timeoutHours,
     timeoutSeconds,
     owner: i.principalId,
+    submittedBy: input.submittedBy ?? i.principalId,
     repoName: i.sourceRepoName,
     env,
     secrets,

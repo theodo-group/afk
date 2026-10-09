@@ -34,6 +34,12 @@ export const Run = Schema.Struct({
   resourceId: Schema.String,
   status: RunStatus,
   owner: Schema.String,
+  /**
+   * Who the Run was launched for (see CONTEXT.md "Submitter"). Differs from
+   * `owner` only on a Scheduler-launched Run. Absent on Runs older than the
+   * field and on Backends that do not record it; readers fall back to `owner`.
+   */
+  submittedBy: Schema.optional(Schema.String),
   branch: Schema.String,
   sha: Schema.String,
   image: Schema.String,

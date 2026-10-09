@@ -79,7 +79,12 @@ export const ls = Command.make("ls", { all, status }, ({ all, status }) =>
                 return `${t}${spot ? "/spot" : ""}`
               },
             },
-            { header: "OWNER", value: (r) => r.owner },
+            // The Submitter, not the Owner: a scheduled Run's Owner is the
+            // Scheduler, which answers nobody's "whose Run is this".
+            {
+              header: "SUBMITTED BY",
+              value: (r) => r.submittedBy ?? r.owner,
+            },
             { header: "STARTED", value: (r) => r.startedAt ?? "-" },
             {
               header: "COST",

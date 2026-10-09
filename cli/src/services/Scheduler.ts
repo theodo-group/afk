@@ -145,6 +145,9 @@ export const SchedulerLive = Layer.effect(
               command: [entry.command],
               ref: entry.ref,
               image: entry.image,
+              // The Lambda is the Owner — it makes the call — but the Run is
+              // the submitter's, and that is what people should see.
+              submittedBy: entry.owner,
               pinned: {
                 envEntries: entry.env,
                 composeContent: entry.composeContent,

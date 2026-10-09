@@ -70,6 +70,12 @@ The developer principal that launched a Run. The form of the principal is [[back
 
 On AWS the session name is the only half that differs between two developers sharing one role, so it is what makes them distinct Owners. A session nobody named — the aws CLI's `botocore-session-<epoch>`, minted afresh on every credential refresh — cannot be tagged, since the Run would drop out of its own `afk ls` within the hour; such a caller falls back to the role itself as Owner, sees every Run the role launched as if it were theirs, and is warned.
 
+## Submitter
+
+The developer a Run was launched *for*, as opposed to its [[owner|Owner]], the principal that launched it. For a Run a developer starts by hand the two are the same person. They part only for a [[scheduler|Scheduler]]-launched Run: the Scheduler is the Owner — it made the call, and the launch permission only lets a principal tag a Run with its own identity — while the Submitter is whoever submitted the [[schedule|Schedule]], read off the Entry.
+
+The Owner keeps everything it governs: who may see, attach to or terminate a Run. The Submitter is for people — it is what `afk ls` and `afk history` show — because "the Scheduler" answers nobody's question about whose Run this is. Recorded beside the Owner (an `afk:submitted-by` EC2 tag and a `submitted_by` history field on AWS); where a Backend does not record it, or on a Run older than it, the Owner stands in.
+
 ## Dockerfile Contract
 
 The set of rules a developer's `afk.Dockerfile` must follow for their image to be usable as a Run. The file lives at the repo root and is named `afk.Dockerfile` to namespace it away from any other Dockerfile the project uses for its own deployment. It installs the toolchain and dependencies needed by the Run's command, but does **not** copy the source code (the source is cloned at Run start by the entrypoint). The entrypoint script is owned by the CLI and injected at build time — the developer's `afk.Dockerfile` does not declare it.

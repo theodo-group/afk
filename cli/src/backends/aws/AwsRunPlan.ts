@@ -25,6 +25,7 @@ import {
   TAG_BRANCH,
   TAG_MANAGED,
   TAG_OWNER,
+  TAG_SUBMITTED_BY,
   TAG_REPO,
   TAG_RETAIN,
   TAG_RUN_ID,
@@ -93,6 +94,7 @@ export const ec2InstanceToRun = (
   const runId = m[TAG_RUN_ID]
   const owner = m[TAG_OWNER]
   if (!runId || !owner) return null
+  const submittedBy = m[TAG_SUBMITTED_BY]
   const spot = Boolean(i.spotInstanceRequestId)
   const startedAt = m[TAG_STARTED_AT] ?? i.launchTime
 
@@ -115,6 +117,7 @@ export const ec2InstanceToRun = (
     status: mapEc2State(i.state),
     backend: "aws",
     owner,
+    ...(submittedBy !== undefined ? { submittedBy } : {}),
     branch: m[TAG_BRANCH] ?? "",
     sha: m[TAG_SHA] ?? "",
     image: i.imageId,
@@ -292,9 +295,11 @@ export const planAwsRun = (
   const spot = !onDemand
 
   const owner = resolveOwner(identity.UserId)
+  const submittedBy = input.submittedBy ?? owner.id
 
   const tags: ReadonlyArray<Ec2Tag> = [
     { key: TAG_OWNER, value: owner.id },
+    { key: TAG_SUBMITTED_BY, value: submittedBy },
     { key: TAG_RUN_ID, value: i.runId },
     { key: TAG_BRANCH, value: built.branch },
     { key: TAG_SHA, value: built.sha },
@@ -322,6 +327,7 @@ export const planAwsRun = (
       timeoutHours,
       timeoutSeconds,
       owner: owner.id,
+      submittedBy,
       repoName: i.sourceRepoName,
       env,
       secrets,

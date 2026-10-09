@@ -99,6 +99,7 @@ export const planLocalRun = (
     timeoutHours,
     timeoutSeconds,
     owner: LOCAL_OWNER_ID,
+    submittedBy: input.submittedBy ?? LOCAL_OWNER_ID,
     repoName: i.sourceRepoName,
     env,
     secrets,

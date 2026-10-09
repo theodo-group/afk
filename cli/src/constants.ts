@@ -97,6 +97,8 @@ export const SESSION_ARTIFACT_DIR = "session-artifacts"
 
 // Tags applied to every Run's EC2 instance.
 export const TAG_OWNER = "afk:owner"
+/** The [[submitter]] — equal to the Owner except on a Scheduler-launched Run. */
+export const TAG_SUBMITTED_BY = "afk:submitted-by"
 export const TAG_RUN_ID = "afk:run-id"
 export const TAG_BRANCH = "afk:branch"
 export const TAG_SHA = "afk:sha"

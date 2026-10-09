@@ -22,6 +22,11 @@ import type { Run } from "../../schema/Run.ts"
  */
 export interface StartInput {
   readonly command: ReadonlyArray<string>
+  /**
+   * The [[submitter]] when it is not the caller — the Scheduler passes the
+   * Entry's owner. Absent, the Run is submitted by whoever launches it.
+   */
+  readonly submittedBy?: string
   readonly ref?: string
   readonly timeoutHours?: number
   /**
@@ -105,6 +110,8 @@ export interface PreparedRun {
   readonly timeoutHours: number
   readonly timeoutSeconds: number
   readonly owner: string
+  /** The [[submitter]]: `StartInput.submittedBy`, or `owner` when none was given. */
+  readonly submittedBy: string
   readonly repoName: string
   readonly env: ReadonlyArray<{ readonly name: string; readonly value: string }>
   readonly secrets: ReadonlyArray<{

@@ -117,8 +117,9 @@ export const history = Command.make(
                 ...(all
                   ? [
                       {
-                        header: "OWNER",
-                        value: (r: (typeof filtered)[number]) => r.owner,
+                        header: "SUBMITTED BY",
+                        value: (r: (typeof filtered)[number]) =>
+                          r.submittedBy ?? r.owner,
                       },
                     ]
                   : []),
