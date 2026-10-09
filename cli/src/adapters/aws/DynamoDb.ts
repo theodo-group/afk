@@ -108,18 +108,18 @@ export const DynamoDbLive = Layer.effect(
           "--update-expression",
           input.updateExpression,
         ]
-        if (input.expressionAttributeNames) {
-          args.push(
+        args.push(
+          ...attributeMapArgs(
             "--expression-attribute-names",
-            JSON.stringify(input.expressionAttributeNames),
-          )
-        }
-        if (input.expressionAttributeValues) {
-          args.push(
+            input.expressionAttributeNames,
+          ),
+        )
+        args.push(
+          ...attributeMapArgs(
             "--expression-attribute-values",
-            JSON.stringify(input.expressionAttributeValues),
-          )
-        }
+            input.expressionAttributeValues,
+          ),
+        )
         return aws.run("dynamodb:UpdateItem", args)
       },
 
@@ -152,12 +152,12 @@ export const DynamoDbLive = Layer.effect(
         if (input.filterExpression) {
           args.push("--filter-expression", input.filterExpression)
         }
-        if (input.expressionAttributeNames) {
-          args.push(
+        args.push(
+          ...attributeMapArgs(
             "--expression-attribute-names",
-            JSON.stringify(input.expressionAttributeNames),
-          )
-        }
+            input.expressionAttributeNames,
+          ),
+        )
         if (input.scanIndexForward === false)
           args.push("--no-scan-index-forward")
         if (input.limit !== undefined) args.push("--limit", String(input.limit))
@@ -178,18 +178,18 @@ export const DynamoDbLive = Layer.effect(
         if (input.filterExpression) {
           args.push("--filter-expression", input.filterExpression)
         }
-        if (input.expressionAttributeNames) {
-          args.push(
+        args.push(
+          ...attributeMapArgs(
             "--expression-attribute-names",
-            JSON.stringify(input.expressionAttributeNames),
-          )
-        }
-        if (input.expressionAttributeValues) {
-          args.push(
+            input.expressionAttributeNames,
+          ),
+        )
+        args.push(
+          ...attributeMapArgs(
             "--expression-attribute-values",
-            JSON.stringify(input.expressionAttributeValues),
-          )
-        }
+            input.expressionAttributeValues,
+          ),
+        )
         if (input.limit !== undefined) args.push("--limit", String(input.limit))
         return aws
           .json<{ Items: ReadonlyArray<Item> }>("dynamodb:Scan", args)
@@ -204,6 +204,20 @@ export const DynamoDbLive = Layer.effect(
 export const S = (v: string): AttrValue => ({ S: v })
 export const N = (v: number | string): AttrValue => ({ N: String(v) })
 export const B = (v: boolean): AttrValue => ({ BOOL: v })
+
+/**
+ * The CLI flag for an expression attribute map, or nothing when the map is
+ * empty. DynamoDB treats an empty map as an error rather than as "none" — it
+ * rejects the whole call with "ExpressionAttributeNames must not be empty" —
+ * so absent and empty both have to mean "omit the flag".
+ */
+export const attributeMapArgs = (
+  flag: "--expression-attribute-names" | "--expression-attribute-values",
+  map: Readonly<Record<string, unknown>> | undefined,
+): ReadonlyArray<string> =>
+  map !== undefined && Object.keys(map).length > 0
+    ? [flag, JSON.stringify(map)]
+    : []
 
 export const readS = (item: Item, k: string): string | undefined =>
   "S" in (item[k] ?? {}) ? (item[k] as { S: string }).S : undefined
