@@ -279,6 +279,15 @@ data "aws_iam_policy_document" "scheduler" {
     resources = [local.ssm_param_arn]
   }
 
+  # The fire-time check that an Entry's secret references still exist, before
+  # its Run is launched. Names and metadata only — DescribeParameters never
+  # returns a value — and AWS offers no resource-level scoping for it.
+  statement {
+    sid       = "ListAfkSecretNames"
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "DecryptDefaultSsmKey"
     actions   = ["kms:Decrypt"]
