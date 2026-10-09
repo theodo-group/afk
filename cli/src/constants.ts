@@ -22,6 +22,9 @@ export const SSM_RUNTIME_PREFIX = "/afk/runs"
 
 export const ECR_REPO_PREFIX = "afk"
 export const ECR_LIFECYCLE_DAYS = 7
+// Tag prefix of content-addressed Run images (image.tag: "content", services/ImageTag.ts).
+// The ECR lifecycle policy keys on it to keep those images instead of ageing them out.
+export const CONTENT_TAG_PREFIX = "c-"
 
 // Root block device of the Amazon Linux AMIs the Golden Image is built from.
 // Named explicitly because overriding the root volume's size at launch requires
