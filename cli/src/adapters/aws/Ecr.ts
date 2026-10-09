@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { AwsError } from "../../infra/Errors.ts"
 import { makeAwsCli } from "./awsCli.ts"
+import { CONTENT_TAG_PREFIX } from "../../constants.ts"
 
 export class Ecr extends Context.Tag("Ecr")<
   Ecr,
@@ -74,8 +75,24 @@ export const EcrLive = Layer.effect(
             ])
             const policy = {
               rules: [
+                // A content-tagged image (image.tag: "content") is pushed once and
+                // reused until afk.Dockerfile changes — expiring it by age would
+                // delete the image every launcher counts on. Keep the newest few
+                // instead; an image a higher-priority rule selects is never
+                // expired by a lower one.
                 {
                   rulePriority: 1,
+                  description: "keep the 5 newest content-tagged images",
+                  selection: {
+                    tagStatus: "tagged",
+                    tagPrefixList: [CONTENT_TAG_PREFIX],
+                    countType: "imageCountMoreThan",
+                    countNumber: 5,
+                  },
+                  action: { type: "expire" },
+                },
+                {
+                  rulePriority: 2,
                   description: `expire after ${lifecycleDays} days`,
                   selection: {
                     tagStatus: "any",
