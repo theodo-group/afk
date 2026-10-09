@@ -1,6 +1,5 @@
 import { Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
-import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { Ec2 } from "../../adapters/aws/Ec2.ts"
 import { resolveAfkNetworkPlacement } from "./AwsNetworkPlacement.ts"
@@ -16,10 +15,9 @@ import {
   type PreparedRun,
   type StartInput,
 } from "../../services/backend/Compute.ts"
-import { ConfigError, UserError } from "../../infra/Errors.ts"
+import { UserError } from "../../infra/Errors.ts"
 import type { Run } from "../../schema/Run.ts"
 import {
-  COMPOSE_FILE,
   DEFAULT_MAIN_SERVICE,
   DEFAULT_REGION,
   DEFAULT_RETENTION_DAYS,
@@ -126,17 +124,7 @@ export const AwsComputeLive = Layer.effect(
           )
         }
 
-        const composePath = resolve(projectRoot, COMPOSE_FILE)
-        const composeContent = existsSync(composePath)
-          ? yield* Effect.try({
-              try: () => readFileSync(composePath, "utf8"),
-              catch: (cause) =>
-                new ConfigError({
-                  path: composePath,
-                  message: `cannot read: ${String(cause)}`,
-                }),
-            })
-          : undefined
+        const composeContent = input.composeContent
 
         // Core: pure resolution + validation. Non-deterministic seeds are
         // generated here in the shell and injected, so the core stays testable.

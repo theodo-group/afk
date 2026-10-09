@@ -23,6 +23,7 @@ const baseInput = (
   input: {
     command: ["claude", "go"],
     envEntries: [],
+    composeContent: undefined,
     built: {
       image: "acme/widget:abc123",
       tag: "abc123",

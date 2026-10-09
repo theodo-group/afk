@@ -26,6 +26,18 @@ const full: StoredEntry = {
     },
     { kind: "plain", name: "AFK_SKIP_SETUP", value: "1" },
   ],
+  // Verbatim, placeholders and quotes included: the VM interpolates
+  // ${AFK_COMMAND} and ${AFK_ENV_FILE} itself, so the row must not.
+  composeContent: [
+    "services:",
+    "  agent:",
+    "    image: ${AFK_IMAGE}",
+    '    command: ["bash", "-lc", "bash scripts/afk-run.sh"]',
+    '    env_file: ["${AFK_ENV_FILE}"]',
+    "    environment:",
+    '      AFK_COMMAND_INNER: "${AFK_COMMAND}"',
+    "",
+  ].join("\n"),
   owner: "AROAEXAMPLE:jjauzion",
   timeoutHours: 24,
   onDemand: true,

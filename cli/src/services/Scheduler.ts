@@ -145,7 +145,10 @@ export const SchedulerLive = Layer.effect(
               command: [entry.command],
               ref: entry.ref,
               image: entry.image,
-              envEntries: entry.env,
+              pinned: {
+                envEntries: entry.env,
+                composeContent: entry.composeContent,
+              },
               timeoutHours: entry.timeoutHours,
               backendOverrides: {
                 ...(entry.onDemand ? { onDemand: true } : {}),

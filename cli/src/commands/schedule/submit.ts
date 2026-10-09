@@ -6,6 +6,7 @@ import type { StoredEnv } from "../../schema/Schedule.ts"
 import { renderTrigger } from "../../services/Triggers.ts"
 import { Output } from "../../infra/Output.ts"
 import { UserError } from "../../infra/Errors.ts"
+import { COMPOSE_FILE } from "../../constants.ts"
 
 const file = Args.text({ name: "file" }).pipe(
   Args.optional,
@@ -80,6 +81,7 @@ export const submit = Command.make("submit", { file }, ({ file }) =>
             // reference — the right variable holding the wrong credential —
             // is visible rather than discovered at 3am.
             `  env: ${renderEnv(report.env)}`,
+            `  compose: ${report.composePinned ? `${COMPOSE_FILE} pinned` : `none — no ${COMPOSE_FILE}, Runs start without a stack`}`,
             ...report.entries.map(
               (e) =>
                 `  ${e.entryId.padEnd(24)} ${renderTrigger(e.trigger)}${

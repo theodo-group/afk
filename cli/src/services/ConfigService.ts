@@ -3,11 +3,18 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve, basename } from "node:path"
 import { AfkConfig, EnvEntry } from "../schema/Config.ts"
 import { ConfigError, UserError } from "../infra/Errors.ts"
-import { CONFIG_FILE, ENV_FILE, ssmSecretPrefix } from "../constants.ts"
+import {
+  COMPOSE_FILE,
+  CONFIG_FILE,
+  ENV_FILE,
+  ssmSecretPrefix,
+} from "../constants.ts"
 
 export interface ResolvedConfig {
   readonly config: AfkConfig
   readonly envEntries: ReadonlyArray<EnvEntry>
+  /** Raw `afk.compose.yml` from the project root; undefined when there is none. */
+  readonly composeContent: string | undefined
   readonly projectRoot: string
   readonly sourceRepoName: string
 }
@@ -135,9 +142,22 @@ export const ConfigServiceLive = Layer.succeed(
         }
       }
 
+      const composePath = resolve(root, COMPOSE_FILE)
+      const composeContent = existsSync(composePath)
+        ? yield* Effect.try({
+            try: () => readFileSync(composePath, "utf8"),
+            catch: (cause) =>
+              new ConfigError({
+                path: composePath,
+                message: `cannot read: ${String(cause)}`,
+              }),
+          })
+        : undefined
+
       return {
         config,
         envEntries,
+        composeContent,
         projectRoot: root,
         sourceRepoName: deriveRepoName(config.gitUrl),
       }

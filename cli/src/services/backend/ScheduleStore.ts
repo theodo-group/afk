@@ -32,6 +32,12 @@ export interface StoredEntry {
    * them, and the Scheduler never holds a credential (see CONTEXT.md "Entry").
    */
   readonly env: StoredEnv
+  /**
+   * The submitter's `afk.compose.yml`, pinned at submit for the same reason as
+   * `env`: the Scheduler has no checkout, so without it a scheduled Run would
+   * launch with no stack at all. Absent when the project has no compose file.
+   */
+  readonly composeContent?: string
   readonly owner: string
   readonly timeoutHours: number
   readonly onDemand: boolean
