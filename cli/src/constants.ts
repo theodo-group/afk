@@ -53,6 +53,11 @@ export const runsTableName = (
   prefix: string = DEFAULT_RESOURCE_PREFIX,
 ): string => `${prefix}-runs`
 
+/** DynamoDB table holding submitted Schedules (`<prefix>-schedule`). */
+export const scheduleTableName = (
+  prefix: string = DEFAULT_RESOURCE_PREFIX,
+): string => `${prefix}-schedule`
+
 /** S3 Session-Artifacts bucket prefix (`<prefix>-artifacts`, suffixed `-<account>-<region>`). */
 export const artifactsBucketPrefix = (
   prefix: string = DEFAULT_RESOURCE_PREFIX,
@@ -145,6 +150,26 @@ export const GOLDEN_IMAGE_STALE_DAYS = 30
 
 // Sweeper grace window past the declared timeout.
 export const SWEEPER_GRACE_MINUTES = 30
+
+// ---------- Scheduler ----------
+//
+// How long a launched Entry may go without a Run-history row before the tick
+// declares it failed. `recordStart` is best-effort, so a Run can exist with no
+// row at all; generous enough to outlast a slow write, short enough that a
+// dependent is not blocked for an hour.
+export const SCHEDULER_STALE_MINUTES = 10
+// Slack past an Entry's declared timeout before its still-`running` row is
+// read as hung. Matches the sweeper's own grace so the two agree on when a Run
+// has overrun.
+export const SCHEDULER_GRACE_MINUTES = SWEEPER_GRACE_MINUTES
+// How many times the Scheduler tries to launch one Entry before giving up. A
+// refused launch created no Run, so retrying costs nothing and a Spot capacity
+// blip must not kill an overnight Schedule; the budget is what stops a
+// genuinely unlaunchable Entry retrying on every tick forever.
+export const SCHEDULER_LAUNCH_ATTEMPTS = 3
+// Window of Run history the tick loads to resolve launched Entries. Must
+// comfortably exceed the longest Entry timeout.
+export const SCHEDULER_HISTORY_WINDOW = "30d"
 
 export const CONFIG_FILE = "afk.config.json"
 export const ENV_FILE = ".afk.env"

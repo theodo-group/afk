@@ -37,10 +37,12 @@ cli/src/
 ├── services/           Backend-neutral business logic.
 │   ├── backend/          Interface tags only — NO implementations.
 │   │   └── Compute.ts, ImageRegistry.ts, SecretStore.ts, LogStore.ts,
-│   │       RunHistory.ts, GoldenImage.ts, BackendDoctor.ts, Team.ts,
-│   │       Provisioner.ts, SessionArtifactStore.ts
+│   │       RunHistory.ts, ScheduleStore.ts, GoldenImage.ts, BackendDoctor.ts,
+│   │       Team.ts, Provisioner.ts, SessionArtifactStore.ts
 │   ├── RunService.ts      Orchestrator: build image, delegate to Compute, stream logs.
+│   ├── Scheduler.ts       The Schedule tick: decide via Triggers, then launch.
 │   └── BuildService, ConfigService, HistoryService, BootstrapService,
+│       ScheduleService, Triggers,
 │       Compose, RunPlan, DindGolden, GoldenImageVersion, Pricing,
 │       RunIdPrefix, retention, SessionArtifact, SessionArtifactFs,
 │       SinceWindow, TerraformBackend, UserData
@@ -52,7 +54,8 @@ cli/src/
 │   └── local/            LocalCompute, …  (rootless dind) + index.ts aggregate
 │
 └── commands/           @effect/cli Command definitions, one per file.
-    └── golden/, secrets/, team/   subcommand groups (each an index.ts dispatcher)
+    └── golden/, secrets/, team/,  subcommand groups (each an index.ts dispatcher)
+        schedule/
 ```
 
 ```
@@ -110,7 +113,7 @@ const Leaves = Layer.mergeAll(
 export const AwsBackendLive = AwsComputeLive.pipe(Layer.provideMerge(Leaves))
 ```
 
-**Adding a Backend:** implement the ten `services/backend/` tags (Compute, ImageRegistry, SecretStore, LogStore, RunHistory, GoldenImageStore, BackendDoctor, Team, Provisioner, SessionArtifactStore) under `backends/<new>/`, write `<New>BackendLive` in its `index.ts`, add one branch to `cli.ts`. No command changes — the GCP Backend landed exactly this way.
+**Adding a Backend:** implement the eleven `services/backend/` tags (Compute, ImageRegistry, SecretStore, LogStore, RunHistory, ScheduleStore, GoldenImageStore, BackendDoctor, Team, Provisioner, SessionArtifactStore) under `backends/<new>/`, write `<New>BackendLive` in its `index.ts`, add one branch to `cli.ts`. No command changes — the GCP Backend landed exactly this way.
 
 ## Layer composition in `cli.ts`
 
@@ -133,6 +136,8 @@ Two subtleties before editing this file:
 - **`.env` loads even earlier.** `loadProjectDotenv()` runs at import time, walking up to the project root and loading the `.env` beside `afk.config.json`. It does not override already-exported variables.
 
 Output mode and log level come from `argv` (`--json/--verbose/--quiet`) and are provided as separate layers at the call site. `OutputLive` is provided _outside_ `AppLive` (after it in the provide chain): backend layers stream progress through the `Output` tag (the `Provisioner` prints its `terraform`/`wrangler` steps), so `AppLive` carries an `Output` requirement this outer provide satisfies.
+
+**One tag may outrun the Backends.** `ScheduleStore` is implemented on AWS only; the other three aggregates provide a layer whose every operation fails with a `UserError` naming the Backend. That keeps the `afk schedule` commands written against one neutral seam and keeps `AppLive` resolved, and the refusal says why rather than surfacing as a missing-service defect. It is not a stub of *another* Backend's work — which is the thing the next paragraph rules out.
 
 **No cross-backend stubs.** Every command depends only on neutral tags resolved by the active aggregate, so no aggregate stubs another's impls. (An earlier design stubbed the inactive backend's golden builder to keep `AppLive`'s type resolved; folding every builder into the one `GoldenImageStore` seam removed the need.)
 
@@ -167,6 +172,7 @@ These do not use Effect and follow their own conventions:
 - **`worker/cloudflare/`** — launcher Worker. Hono + Durable Objects, async/await.
 - **`terraform/aws/`**, **`terraform/gcp/`** — HCL.
 - **`terraform/aws/lambda/sweeper/`** — TypeScript Lambda, plain AWS SDK.
+- **`terraform/aws/lambda/scheduler/`** — a Lambda *container image* (bun + git + the AWS CLI) whose custom-runtime `bootstrap` answers each tick with `afk schedule tick`. A container because afk is Bun-only, and the CLI rather than a handler module so the tick a developer runs by hand and the deployed one are the same code path. Opt-in: `scheduler_enabled`.
 - **`terraform/gcp/function/sweeper/`** — TypeScript Cloud Function, plain Google SDKs.
 - **`entrypoint/entrypoint.sh`** — CLI-owned bash entrypoint baked into agent images at build time.
 

@@ -38,6 +38,8 @@ import { ConfigServiceLive } from "./services/ConfigService.ts"
 import { BuildServiceLive } from "./services/BuildService.ts"
 import { HistoryServiceLive } from "./services/HistoryService.ts"
 import { RunServiceLive } from "./services/RunService.ts"
+import { ScheduleServiceLive } from "./services/ScheduleService.ts"
+import { SchedulerLive } from "./services/Scheduler.ts"
 import { BootstrapServiceLive } from "./services/BootstrapService.ts"
 
 import { AwsBackendLive } from "./backends/aws/index.ts"
@@ -61,6 +63,7 @@ import { sessionArtifact } from "./commands/session-artifact.ts"
 import { attach } from "./commands/attach.ts"
 import { kill } from "./commands/kill.ts"
 import { history } from "./commands/history.ts"
+import { schedule } from "./commands/schedule/index.ts"
 import { secrets } from "./commands/secrets/index.ts"
 import { team } from "./commands/team/index.ts"
 
@@ -90,10 +93,12 @@ const local = Options.boolean("local").pipe(
 //                 └── Backend layer (<Backend>BackendLive — aws, cloudflare,
 //                      gcp, or local, picked by pickBackendName() — provides
 //                      every abstract service tag: Compute, ImageRegistry,
-//                      SecretStore, LogStore, RunHistory, GoldenImageStore, …)
+//                      SecretStore, LogStore, RunHistory, ScheduleStore,
+//                      GoldenImageStore, …)
 //                      └── BuildService (cross-cutting, uses ImageRegistry)
 //                            └── orchestrating services (RunService,
-//                                 HistoryService) + Bootstrap
+//                                 HistoryService, then ScheduleService +
+//                                 Scheduler) + Bootstrap
 //
 // Developer-facing secret CRUD goes straight to the SecretStore tag the Backend
 // provides — there is no SecretService facade.
@@ -153,7 +158,12 @@ const backendLayer =
 const buildLayer = BuildServiceLive.pipe(Layer.provideMerge(backendLayer))
 const runLayer = RunServiceLive.pipe(Layer.provideMerge(buildLayer))
 const historyLayer = HistoryServiceLive.pipe(Layer.provideMerge(runLayer))
-const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(historyLayer))
+// The Scheduler sits above RunService (it launches Runs) and HistoryService
+// (it reads their outcomes); ScheduleService sits beside it on the same tags.
+const scheduleLayer = Layer.mergeAll(ScheduleServiceLive, SchedulerLive).pipe(
+  Layer.provideMerge(historyLayer),
+)
+const AppLive = BootstrapServiceLive.pipe(Layer.provideMerge(scheduleLayer))
 
 // ---------- Root command ----------
 const rootCommand = Command.make("afk", { json, verbose, quiet, local }, () =>
@@ -178,6 +188,7 @@ const rootCommand = Command.make("afk", { json, verbose, quiet, local }, () =>
     attach,
     kill,
     history,
+    schedule,
     secrets,
     team,
   ]),
@@ -238,5 +249,12 @@ BunRuntime.runMain(
       }),
     ),
   ),
-  { teardown: (exit, onExit) => onExit(exitCodeOf(exit, signal)) },
+  {
+    teardown: (exit, onExit) => onExit(exitCodeOf(exit, signal)),
+    // runMain otherwise installs Effect's pretty logger alongside ours, and it
+    // writes to stdout: every warning printed twice, and `--json` output
+    // prefixed with a WARN line — which is what the Scheduler Lambda posts back
+    // as its response. `consoleLogger` is the one sink, on stderr.
+    disablePrettyLogger: true,
+  },
 )

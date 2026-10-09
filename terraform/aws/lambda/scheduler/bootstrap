@@ -1,0 +1,75 @@
+#!/bin/sh
+# Custom-runtime entrypoint. Polls the Lambda Runtime API and answers each
+# invocation with one `afk schedule tick`.
+#
+# There is no handler module: the tick is a CLI subcommand, so the whole
+# scheduler is the CLI the developer already runs by hand. That is what
+# keeps `afk schedule tick` on a laptop and the deployed Lambda the same code
+# path rather than two implementations of the same rules.
+set -eu
+
+# Lambda gives us one writable directory. git needs a HOME to read its global
+# config out of, and ConfigService discovers the project by walking up from
+# cwd — so the config travels as an env var and lands on disk here, exactly
+# where a developer's checkout would put it.
+export HOME=/tmp
+PROJECT_DIR=/tmp/project
+
+prepare() {
+  mkdir -p "$PROJECT_DIR"
+  printf '%s' "${AFK_CONFIG_JSON}" > "$PROJECT_DIR/afk.config.json"
+
+  # No .afk.env is written, deliberately. A scheduled Run carries the
+  # environment its submitter pinned on the Entry, so the Lambda holding one
+  # would mean every developer's Runs authenticating as whoever deployed it.
+  # ConfigService treats the file as absent and yields no entries, which is
+  # correct here: the Scheduler itself needs no project environment.
+
+  if [ -n "${AFK_GIT_TOKEN_PARAM:-}" ]; then
+    # No apostrophes in this message: the shell parses quotes inside ${x:?...}
+    # even within double quotes, and one would break the script at load.
+    : "${AFK_GIT_HOST:?must name the forge host of the configured gitUrl, e.g. gitlab.com, whenever AFK_GIT_TOKEN_PARAM is set}"
+    token=$(aws ssm get-parameter \
+      --name "$AFK_GIT_TOKEN_PARAM" \
+      --with-decryption \
+      --query Parameter.Value \
+      --output text)
+    umask 077
+    # Host and user are configured rather than assumed: the forge is whatever
+    # gitUrl points at, and the user half differs between forges (GitLab wants
+    # `oauth2` with a PAT; GitHub ignores it). printf rather than building a
+    # URL by substitution — a token may contain any character.
+    printf 'https://%s:%s@%s\n' "${AFK_GIT_USER:-oauth2}" "$token" "$AFK_GIT_HOST" \
+      > /tmp/.git-credentials
+    git config --global credential.helper 'store --file=/tmp/.git-credentials'
+  fi
+}
+
+prepare
+
+while true; do
+  headers=$(mktemp)
+  curl -sS -LD "$headers" \
+    "http://${AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/next" \
+    -o /tmp/event.json
+  request_id=$(grep -i '^Lambda-Runtime-Aws-Request-Id:' "$headers" \
+    | tr -d '\r' | cut -d' ' -f2)
+
+  if out=$(cd "$PROJECT_DIR" && bun /opt/afk/cli/src/cli.ts --json schedule tick 2>/tmp/tick.err); then
+    curl -sS -X POST \
+      "http://${AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/${request_id}/response" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$out" > /dev/null
+  else
+    # The CLI's own stderr carries the `error:`/`hint:` lines; writing it here
+    # puts it in this invocation's CloudWatch log. The error payload stays a
+    # fixed string rather than the stderr, because escaping arbitrary text
+    # into JSON needs a tool this image has no reason to carry.
+    cat /tmp/tick.err >&2
+    curl -sS -X POST \
+      "http://${AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/${request_id}/error" \
+      -H 'Content-Type: application/json' \
+      --data-binary '{"errorType":"TickFailed","errorMessage":"afk schedule tick failed — see this invocation log"}' \
+      > /dev/null
+  fi
+done

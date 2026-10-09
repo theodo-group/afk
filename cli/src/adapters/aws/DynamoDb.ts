@@ -30,6 +30,12 @@ export interface UpdateItemInput {
   readonly expressionAttributeValues?: Readonly<Record<string, AttrValue>>
 }
 
+export interface DeleteItemInput {
+  readonly region: string
+  readonly table: string
+  readonly key: Item
+}
+
 export interface QueryInput {
   readonly region: string
   readonly table: string
@@ -57,6 +63,9 @@ export class DynamoDb extends Context.Tag("DynamoDb")<
     readonly putItem: (input: PutItemInput) => Effect.Effect<void, AwsError>
     readonly updateItem: (
       input: UpdateItemInput,
+    ) => Effect.Effect<void, AwsError>
+    readonly deleteItem: (
+      input: DeleteItemInput,
     ) => Effect.Effect<void, AwsError>
     readonly query: (
       input: QueryInput,
@@ -113,6 +122,18 @@ export const DynamoDbLive = Layer.effect(
         }
         return aws.run("dynamodb:UpdateItem", args)
       },
+
+      deleteItem: (input) =>
+        aws.run("dynamodb:DeleteItem", [
+          "dynamodb",
+          "delete-item",
+          "--region",
+          input.region,
+          "--table-name",
+          input.table,
+          "--key",
+          JSON.stringify(input.key),
+        ]),
 
       query: (input) => {
         const args: string[] = [

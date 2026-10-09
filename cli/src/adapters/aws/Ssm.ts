@@ -259,8 +259,16 @@ export const SsmLive = Layer.effect(
             "describe-parameters",
             "--region",
             region,
+            // A Path filter, not Name/BeginsWith: BeginsWith is applied to
+            // each scanned page of the whole account, so it walked every
+            // parameter ten at a time — 26 calls for 37 hits, enough to be
+            // throttled by a single `afk schedule tick`. Path is served from
+            // the hierarchy: one call. `--page-size` keeps the CLI paging
+            // (unlike `--max-results`, which would silently truncate).
             "--parameter-filters",
-            `Key=Name,Option=BeginsWith,Values=${prefix}`,
+            `Key=Path,Option=Recursive,Values=${prefix}`,
+            "--page-size",
+            "50",
           ])
           .pipe(
             Effect.map((r) =>

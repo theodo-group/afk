@@ -8,6 +8,7 @@ import {
   GitError,
   UserError,
 } from "../../infra/Errors.ts"
+import type { EnvEntry } from "../../schema/Config.ts"
 import type { Run } from "../../schema/Run.ts"
 
 /**
@@ -23,6 +24,16 @@ export interface StartInput {
   readonly command: ReadonlyArray<string>
   readonly ref?: string
   readonly timeoutHours?: number
+  /**
+   * The Run's environment, resolved by the orchestrator rather than read here.
+   *
+   * Required, and deliberately not optional: a Backend that fell back to
+   * `cfg.load` would hand a scheduled Run the *launcher's* credentials, which
+   * on the Scheduler Lambda means one person's tokens for the whole team. The
+   * failure mode of that mistake is "it works", so the only `??` in the system
+   * lives in `RunService.prepare` where it can be read in one place.
+   */
+  readonly envEntries: ReadonlyArray<EnvEntry>
   /**
    * Retain the compute primitive after the Run ends (stop instead of reclaim)
    * so `afk attach` can resume it for post-mortem inspection. Cloud-only and

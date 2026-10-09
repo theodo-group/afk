@@ -152,8 +152,7 @@ export const LocalComputeLive = Layer.effect(
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
-        const { config, envEntries, projectRoot, sourceRepoName } =
-          yield* cfg.load
+        const { config, projectRoot, sourceRepoName } = yield* cfg.load
 
         const latestGolden = yield* golden.findLatest
         if (!latestGolden) {
@@ -181,7 +180,7 @@ export const LocalComputeLive = Layer.effect(
         // generated here in the shell and injected, so the core stays testable.
         const core = yield* planLocalRun({
           config,
-          envEntries,
+          envEntries: input.envEntries,
           sourceRepoName,
           goldenImageId: latestGolden.id,
           composeContent,

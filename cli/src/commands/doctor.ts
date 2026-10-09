@@ -14,6 +14,7 @@ import {
   type CheckResult,
 } from "../services/backend/BackendDoctor.ts"
 import { Compute } from "../services/backend/Compute.ts"
+import { missingRefs } from "../services/ScheduleEnv.ts"
 import { DOCKERFILE, ENV_FILE, GOLDEN_IMAGE_STALE_DAYS } from "../constants.ts"
 
 /**
@@ -109,8 +110,10 @@ export const doctor = Command.make("doctor", {}, () =>
       if (refs.length > 0) {
         const stored = yield* secrets.list.pipe(Effect.either)
         if (stored._tag === "Right") {
-          const have = new Set(stored.right.map((s) => s.name))
-          const missing = refs.filter((r) => !have.has(r))
+          const missing = missingRefs(
+            refs,
+            stored.right.map((s) => s.name),
+          )
           checks.push({
             name: "secret references",
             ok: missing.length === 0,

@@ -76,3 +76,39 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "scheduler_enabled" {
+  description = "Deploy the scheduler Lambda, which ticks submitted Schedules and launches the Entries that are due. Off by default: the image is built and pushed at apply time, so turning it on makes `terraform apply` require Docker."
+  type        = bool
+  default     = false
+}
+
+variable "scheduler_tick_expression" {
+  description = "EventBridge cadence of the scheduler's tick. This is afk's own wake interval, NOT a developer's Schedule — see CONTEXT.md 'Schedule'."
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "scheduler_config_json" {
+  description = "The project's afk.config.json, verbatim. The Lambda has no checkout to discover one in, so it writes this to disk at startup and runs the CLI against it."
+  type        = string
+  default     = ""
+}
+
+variable "scheduler_git_host" {
+  description = "Forge host of afk.config.json's gitUrl (e.g. gitlab.com, github.com), for the credential the fire-time `git ls-remote` needs. Required whenever scheduler_git_token_param is set."
+  type        = string
+  default     = ""
+}
+
+variable "scheduler_git_user" {
+  description = "Username half of that credential. GitLab wants `oauth2` with a personal access token; GitHub ignores the username entirely."
+  type        = string
+  default     = "oauth2"
+}
+
+variable "scheduler_git_token_param" {
+  description = "SSM parameter holding a read-only git token. The tick resolves each Entry's ref with `git ls-remote` at fire time, so a private origin needs a credential. Empty for a public origin."
+  type        = string
+  default     = ""
+}

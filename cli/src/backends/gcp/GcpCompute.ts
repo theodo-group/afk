@@ -97,8 +97,7 @@ export const GcpComputeLive = Layer.effect(
 
     const prepare = (input: StartInput) =>
       Effect.gen(function* () {
-        const { config, envEntries, projectRoot, sourceRepoName } =
-          yield* cfg.load
+        const { config, projectRoot, sourceRepoName } = yield* cfg.load
         const ownerAccount = yield* auth.callerAccount
         const project = config.gcp?.projectId ?? (yield* auth.activeProject)
 
@@ -133,7 +132,7 @@ export const GcpComputeLive = Layer.effect(
 
         const core = yield* planGcpRun({
           config,
-          envEntries,
+          envEntries: input.envEntries,
           sourceRepoName,
           project,
           ownerAccount,

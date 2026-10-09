@@ -26,6 +26,7 @@ const baseInput = (
   composeContent: overrides.composeContent,
   input: {
     command: ["claude", "go"],
+    envEntries: [],
     built: {
       image: "registry.cloudflare.com/acct/widget:abc123",
       tag: "abc123",

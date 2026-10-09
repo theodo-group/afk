@@ -26,6 +26,38 @@ const ENTRYPOINT_SOURCE = resolve(
   "entrypoint.sh",
 )
 
+/**
+ * The tag portion of an image reference, or "" when it carries none. A registry
+ * host may itself hold a port (`host:5000/repo`), so only a colon that falls
+ * after the last slash delimits a tag.
+ */
+export const tagOf = (image: string): string => {
+  const colon = image.lastIndexOf(":")
+  return colon > image.lastIndexOf("/") ? image.slice(colon + 1) : ""
+}
+
+/**
+ * `git ls-remote` against a remote the machine cannot authenticate to fails
+ * deep inside a credential helper, and the raw stderr names neither the cause
+ * nor the fix. Both the build path and the `--image` path go through it.
+ */
+const withCredentialHint =
+  (gitUrl: string) =>
+  (e: GitError | UserError): GitError | UserError => {
+    if (
+      e._tag === "GitError" &&
+      /git-credential|could not read Username|Authentication failed|Permission denied/i.test(
+        e.message ?? "",
+      )
+    ) {
+      return new UserError({
+        message: `git ls-remote against ${gitUrl} failed: ${e.message}`,
+        hint: "Configure a git credential helper. With the GitHub CLI: `gh auth setup-git`. Otherwise ensure your global git config has a working credential.helper for github.com.",
+      })
+    }
+    return e
+  }
+
 export interface BuildOutput {
   readonly image: string
   readonly tag: string
@@ -59,6 +91,22 @@ export class BuildService extends Context.Tag("BuildService")<
       | GitError
       | ConfigError
     >
+    /**
+     * Take an image the caller vouches for rather than building one.
+     *
+     * This is what lets a launcher with no git work tree — the scheduler's
+     * Lambda — start a Run at all. `build` reaches `git.isClean` and
+     * `git.currentBranch` before it ever consults the registry cache, so even a
+     * guaranteed cache hit would still force a full checkout onto the caller.
+     *
+     * The sha is still resolved against origin: the VM hard-checks
+     * `AFK_GIT_SHA` and exits 66 on a mismatch. `git ls-remote` needs no work
+     * tree, which is the whole point.
+     */
+    readonly adoptImage: (opts: {
+      readonly image: string
+      readonly ref?: string
+    }) => Effect.Effect<BuildOutput, UserError | GitError | ConfigError>
   }
 >() {}
 
@@ -98,22 +146,7 @@ export const BuildServiceLive = Layer.effect(
             ref
               ? git.resolveRemoteRef(config.gitUrl, ref)
               : git.resolveRemoteRef(config.gitUrl, branch)
-          ).pipe(
-            Effect.mapError((e) => {
-              if (
-                e._tag === "GitError" &&
-                /git-credential|could not read Username|Authentication failed|Permission denied/i.test(
-                  e.message ?? "",
-                )
-              ) {
-                return new UserError({
-                  message: `git ls-remote against ${config.gitUrl} failed: ${e.message}`,
-                  hint: "Configure a git credential helper. With the GitHub CLI: `gh auth setup-git`. Otherwise ensure your global git config has a working credential.helper for github.com.",
-                })
-              }
-              return e
-            }),
-          )
+          ).pipe(Effect.mapError(withCredentialHint(config.gitUrl)))
 
           const repoName = `${ecrRepoPrefix(config.aws?.resourcePrefix)}/${sourceRepoName}`
           // Docker tags allow only [A-Za-z0-9_.-]; collapse anything else to '-'
@@ -192,6 +225,19 @@ export const BuildServiceLive = Layer.effect(
           yield* registry.push(image)
 
           return { image, tag, sha, branch, skipped: false }
+        }),
+
+      adoptImage: ({ image, ref }) =>
+        Effect.gen(function* () {
+          const { config } = yield* cfg.load
+          // With no work tree there is no local HEAD to ask, so the ref doubles
+          // as the branch. The fallback keeps `afk run --image <x>` (no --ref)
+          // usable from a laptop, where a HEAD does exist.
+          const branch = ref ?? (yield* git.currentBranch)
+          const sha = yield* git
+            .resolveRemoteRef(config.gitUrl, branch)
+            .pipe(Effect.mapError(withCredentialHint(config.gitUrl)))
+          return { image, tag: tagOf(image), sha, branch, skipped: true }
         }),
     })
   }),

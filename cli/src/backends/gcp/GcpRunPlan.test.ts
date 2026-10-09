@@ -33,6 +33,7 @@ const baseInput = (
   composeContent: undefined,
   input: {
     command: ["claude", "go"],
+    envEntries: [],
     built: {
       image: "us-central1-docker.pkg.dev/acme-prod/afk/widget:abc123",
       tag: "abc123",

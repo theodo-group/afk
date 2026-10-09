@@ -108,3 +108,64 @@ afk is agent-agnostic and therefore knows nothing about the artifact's shape or 
 Distinct from **logs**: logs are the per-service stdout/stderr stream tailed live by `afk logs`; a Session Artifact is a file collected once, at Run end, from the agent's own on-disk state. A Run with no declared Session Artifacts collects nothing — the feature is opt-in.
 
 The single collection point — the Run command's graceful exit — also bounds what is captured, on every [[backend]]: a Session Artifact is the artifact of *the Run's own execution*, not of any later [[attach]] session. Running a fresh agent inside an `afk attach` shell and then exiting happens outside that one collection moment, so it is never captured. Attach is for observing and intervening on a Run; reconstructing an attach session is outside the Session Artifact's scope.
+
+## Schedule
+
+A developer-authored declaration of [[run|Runs]] to launch unattended, and of what each one waits for. A Schedule is a YAML file, named by its `schedule:` id, holding a list of [[entry|Entries]]. It is submitted with `afk schedule submit`, which validates it, builds the environment once, and persists it; from then on it is the [[scheduler|Scheduler]]'s standing instruction, revisable only by re-submitting.
+
+**Submitting is what makes it real; the file is only how it was written.** Nothing reads the file again after submit — the submitted copy is the one the tick obeys, and `afk schedule ls` is what tells you what is actually scheduled. So a Schedule file kept beside the code is a convenience for re-submitting and reviewing, never a record of what is running: edit it without re-submitting and it says one thing while the Scheduler does another. Where the file lives is the developer's business, with one practical constraint — `submit` builds from the current checkout and refuses a dirty tree, so a Schedule file sitting untracked inside that repo will fail its own submit. Keep it outside the repo, or ignored by it, or committed; all three work — as does piping it straight into `afk schedule submit` and never writing it down at all.
+
+A Schedule exists because the alternative is a developer staying awake. Before it, the only way to defer a Run was an in-VM `sleep` burned into the command at launch: unrevisable once fired, invisible to every other Run, and with no way to say "C once A succeeds". A Schedule makes both the clock and the dependency edge first-class and inspectable (`afk schedule ls`).
+
+**A Schedule is not the [[scheduler|Scheduler]]'s cadence.** The Scheduler wakes on a fixed interval — *the tick* — and on each wake reads every live Schedule and launches whatever is due. The tick is afk's own infrastructure, identical for every project and invisible to the developer; the Schedule is the developer's document.
+
+Not to be confused with a [[run-plan|Run Plan]] (the fully-resolved description of *one* Run, computed at launch) or with the [[backend]]'s own reclamation timers (the sweeper's retention and timeout backstops, which no Schedule governs).
+
+## Entry
+
+One [[run|Run]]-to-be inside a [[schedule|Schedule]]: a `ref`, a command, a [[trigger|Trigger]], and the per-Run knobs `afk run` already exposes (timeout, on-demand). Each Entry carries an `id` unique within its Schedule, which is how another Entry's Trigger names it.
+
+An Entry is a Run the system has not launched yet, so it has a lifecycle of its own that a Run does not: `pending` until its Trigger is satisfied, `launched` once a Run exists for it, then `done` or `failed` once that Run has ended, or `cancelled` if the Schedule was withdrawn first. A `cron` Entry goes round that loop once per occurrence: when its Run settles it returns to `pending` for the next match after *now* — a slot missed while a Run was still going is skipped, not caught up, and an Entry never has two Runs at once. **Cancelling stops the loop even mid-occurrence**: the Run in flight is left to finish, since the Scheduler never kills, but its Entry is marked so it settles and stays settled rather than re-arming. An Entry's terminal state is read off its Run's history row — a Run that exited 0 settles its Entry `done`, anything else `failed` — so `failed` means *this Entry did not succeed*, never *afk malfunctioned*.
+
+**The environment is pinned to an Entry; the code is not.** `submit` builds the agent image once and pins it on every Entry, so a scheduled night runs the environment that was tested. The `ref` is resolved to a sha only when the Entry actually fires, so an Entry that runs after another sees the commits that one pushed. This asymmetry is what makes a chain of Entries on a shared branch work at all.
+
+**An Entry carries its submitter's environment, as references.** `submit` reads the submitter's `.afk.env` and pins what it finds on every Entry, so a scheduled [[run|Run]] authenticates as whoever scheduled it rather than as whoever deployed the [[scheduler|Scheduler]] — without which one person's tokens would push every developer's commits and spend their agent quota. What is pinned is *names*: `secret:` references the Run's own VM dereferences with its own instance role. The sole literal a Schedule may hold is `AFK_SKIP_SETUP`; every other plain value is refused at submit, by name, because the alternative is a credential stored in clear next to the command that uses it.
+
+The *values* behind those names stay late-bound, which is the second asymmetry with the image: `afk secrets put` rotates a credential for every future scheduled Run without re-submitting anything. The cost is that a reference can be deleted after submit, so the Scheduler checks again at fire time and refuses the launch rather than starting a Run with an empty credential.
+
+Not to be confused with the Run it launches: an Entry is the intent and outlives the Run; the Run is one execution and is recorded in the ordinary Run history, indistinguishable from a hand-launched one except by its [[owner|Owner]].
+
+## Trigger
+
+The condition that must hold before an [[entry|Entry]]'s [[run|Run]] is launched. Evaluated on every tick against the clock and the Run history; the first tick on which it holds is the one that launches.
+
+Three kinds, and deliberately only three:
+
+- **Clock** — `at: <iso-8601>` (an instant), `after: <duration>` (relative to submit), or `cron: <expr>`. Every Schedule needs at least one, since a graph of nothing but dependency edges can never start.
+- **Finished** — `after: <entry-id>`: that Entry's Run has ended, whatever its outcome.
+- **Succeeded** — `after: <entry-id>, require: success`: that Entry's Run ended with exit code 0.
+
+"Ended" is read as `status != running` on the history row, and success strictly as `exit_code == 0`. **An absent exit code is a failure, never "keep waiting"** — a reclaimed or crashed VM may never record one, and treating that as pending would block its dependents forever.
+
+A Trigger's dependency edges are checked at submit time, not at fire time: every `after:` must name an Entry in the same Schedule, the graph must be acyclic, and every Entry must be reachable from a clock Trigger. A Schedule that fails any of those is refused whole, before anything is built or written.
+
+Not to be confused with the tick (afk's fixed wake interval, which is what *evaluates* Triggers — see [[schedule]]), nor with a Run's own exit code, which is the evidence a Trigger reads rather than the Trigger itself.
+
+## Scheduler
+
+The component that reads submitted [[schedule|Schedules]] and launches the [[entry|Entries]] whose [[trigger|Triggers]] are satisfied. One Scheduler serves a whole [[backend]]: it is afk's own infrastructure, not something a developer deploys per project.
+
+It wakes on a fixed interval — **the tick** — and each tick is one complete, self-contained pass: read every live Entry, read the Run history, settle the Entries whose Runs have ended, then launch what is now due. Nothing carries over between ticks, so a tick that dies half-way leaves the Entries it already moved in their new state and reconsiders the rest next time. A developer can run exactly one such pass by hand with `afk schedule tick`; the deployed Scheduler is that same command on a timer, not a second implementation of the same rules.
+
+**A refused launch is retried; a Run that started is not.** The two sit on
+opposite sides of one line: a launch the provider refused created nothing, so
+trying again costs nothing — and on Spot capacity, a refusal at 23:00 is
+ordinary rather than exceptional. A Run that began and then died is the
+opposite: it may already have pushed commits, commented on a ticket or spent
+an agent's quota, so it settles on its history row and is never re-run.
+Retries are bounded, so an Entry that can never launch still reports instead
+of retrying on every tick forever.
+
+Deliberately narrow. The Scheduler **never builds** — `afk schedule submit` builds on the developer's machine and pins the image on every Entry, which is what lets the Scheduler run somewhere with no Docker and no checkout. It **never kills** — `afk kill` and the Backend's own reclamation cover that. It **holds no project credentials** — each Entry brings its submitter's, and the Scheduler's own git token is read-only and attributes nothing. And it decides nothing on its own authority: an Entry's fate is read off its Run's history row, never inferred.
+
+Not to be confused with the tick (the Scheduler's interval, which Terraform is forced to call `schedule_expression` — the one place the two words collide), nor with the **Run orchestrator**, which is what `RunService` has always been called: that one resolves and launches a single Run on demand, and the Scheduler is one of its callers.

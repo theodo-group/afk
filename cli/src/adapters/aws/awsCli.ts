@@ -4,6 +4,15 @@ import { AwsError } from "../../infra/Errors.ts"
 
 type Sub = Context.Tag.Service<typeof Subprocess>
 
+/**
+ * The API error code the aws CLI names in its stderr, e.g.
+ * `An error occurred (InsufficientInstanceCapacity) when calling …`. One word
+ * that says what went wrong, where the surrounding text says it at length —
+ * worth lifting out so callers can branch and render on it.
+ */
+export const awsErrorCode = (stderr: string): string | undefined =>
+  /An error occurred \(([A-Za-z0-9._#-]+)\)/.exec(stderr)?.[1]
+
 /** Map a Subprocess/Parse failure into a domain AwsError tagged with the API operation. */
 export const awsError =
   (operation: string) =>
@@ -11,11 +20,15 @@ export const awsError =
     readonly _tag: string
     readonly stderr?: string
     readonly cause?: unknown
-  }) =>
-    new AwsError({
-      operation,
-      message: e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? ""),
-    })
+  }) => {
+    // Trimmed: the CLI's stderr opens with a blank line, which renders any
+    // `${err.message}` interpolation as an empty first line.
+    const message = (
+      e._tag === "ParseError" ? String(e.cause) : (e.stderr ?? "")
+    ).trim()
+    const code = awsErrorCode(message)
+    return new AwsError({ operation, message, ...(code ? { code } : {}) })
+  }
 
 /**
  * A `Subprocess`-bound view of the `aws` CLI that bakes in the three things

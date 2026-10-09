@@ -80,8 +80,7 @@ export const CloudflareComputeLive = Layer.effect(
         }
 
         // Shell: gather the effectful inputs the core needs.
-        const { config, envEntries, projectRoot, sourceRepoName } =
-          yield* cfg.load
+        const { config, projectRoot, sourceRepoName } = yield* cfg.load
         const workerUrl = yield* resolveWorkerUrl
 
         // Refuse to launch if no Golden Image has been built. The agent's
@@ -114,7 +113,7 @@ export const CloudflareComputeLive = Layer.effect(
         // generated here in the shell and injected, so the core stays testable.
         const core = yield* planCloudflareRun({
           config,
-          envEntries,
+          envEntries: input.envEntries,
           sourceRepoName,
           workerUrl,
           principalId,
