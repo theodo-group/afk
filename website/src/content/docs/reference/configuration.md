@@ -71,6 +71,38 @@ are non-destructive of the other blocks.
   `standard-1`) is the CF Containers tier per Run. `cachedImages` is the list
   passed to `afk golden build`.
 
+## Image tag
+
+`image.tag` picks how the Run image is named in the registry:
+
+- `"ref"` (default): `<branch>-<sha12>`. One image per commit, so every launch
+  rebuilds it (from cache) and pushes it again.
+- `"content"`: `c-<hash>` of what the image is built **from**:
+  - `afk.Dockerfile`;
+  - afk's entrypoint;
+  - the platform;
+  - every local `COPY`/`ADD` source.
+
+  The name stays the same until one of those changes. A launch then finds the
+  image already pushed and never calls `docker`, not even `docker login`. That
+  lets a machine with no Docker daemon, such as a CI job, launch Runs. After a
+  change to `afk.Dockerfile`, build the image once from a machine with Docker
+  (`afk build`). A launch that finds no image and has no Docker stops and says so.
+
+```json
+{ "image": { "tag": "content" } }
+```
+
+Use `"content"` only when `afk.Dockerfile` bakes in **no per-commit source**,
+meaning the entrypoint's clone brings the code. Otherwise one image would serve
+every commit. A `COPY`/`ADD` source that is a glob or a build arg cannot be
+hashed, and the launch refuses it.
+
+On AWS, repositories afk creates keep the 5 newest `c-` images instead of
+expiring them after 7 days. **A repository created elsewhere (Terraform) needs
+the same lifecycle rule.** Otherwise the image a CI launcher relies on expires a
+week after its last push.
+
 ## Session Artifacts
 
 `sessionArtifacts` is a list of container-side path globs, resolved **inside the
