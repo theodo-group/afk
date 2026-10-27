@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Scheduler Lambda image.
 #
-# A container image rather than the sweeper's nodejs20 zip because afk is
+# A container image rather than the sweeper's nodejs22 zip because afk is
 # Bun-only: Bun.spawn (infra/Subprocess.ts), Bun.Glob (SessionArtifact.ts) and
 # @effect/platform-bun are all load-bearing. The tick runs the real CLI, so the
 # image also carries the AWS CLI (every AWS adapter shells out to it) and git

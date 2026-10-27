@@ -9,7 +9,7 @@ therefore require Docker.
 
 ## Why a container image
 
-The sweeper is an esbuild zip on `nodejs20`. The scheduler cannot be: afk is
+The sweeper is an esbuild zip on `nodejs22`. The scheduler cannot be: afk is
 Bun-only — `Bun.spawn` (`cli/src/infra/Subprocess.ts`), `Bun.Glob`
 (`cli/src/services/SessionArtifact.ts`) and `@effect/platform-bun`. So the image
 carries bun, plus `git` (the fire-time `git ls-remote` that resolves each

@@ -101,7 +101,7 @@ resource "aws_lambda_function" "sweeper" {
   filename         = data.archive_file.sweeper.output_path
   source_code_hash = data.archive_file.sweeper.output_base64sha256
   handler          = "index.handler"
-  runtime          = "nodejs20.x"
+  runtime          = "nodejs22.x"
   timeout          = 60
   memory_size      = 256
 

@@ -2,7 +2,7 @@
 # Scheduler Lambda — ticks submitted Schedules and launches what is due.
 #
 # Opt-in (`scheduler_enabled`). Unlike the sweeper's esbuild zip this is a
-# container image: afk is Bun-only, so the tick cannot run on nodejs20. The
+# container image: afk is Bun-only, so the tick cannot run on nodejs22. The
 # image carries bun, git and the AWS CLI and runs `afk schedule tick` — the
 # same subcommand a developer runs by hand, not a second implementation of the
 # same rules.

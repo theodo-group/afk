@@ -98,7 +98,7 @@ resource "google_cloudfunctions2_function" "sweeper" {
   location = var.region
 
   build_config {
-    runtime     = "nodejs20"
+    runtime     = "nodejs22"
     entry_point = "sweeper"
     source {
       storage_source {
