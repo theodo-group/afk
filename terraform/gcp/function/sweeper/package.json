@@ -5,7 +5,7 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "build": "esbuild index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/index.js --external:@google-cloud/* && node -e \"require('fs').writeFileSync('dist/package.json', JSON.stringify({name:'afk-gcp-sweeper',version:'0.0.0',main:'index.js',dependencies:{'@google-cloud/firestore':'^7.0.0','@google-cloud/compute':'^4.0.0'}},null,2))\""
+    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/index.js --external:@google-cloud/* && node -e \"require('fs').writeFileSync('dist/package.json', JSON.stringify({name:'afk-gcp-sweeper',version:'0.0.0',main:'index.js',dependencies:{'@google-cloud/firestore':'^7.0.0','@google-cloud/compute':'^4.0.0'}},null,2))\""
   },
   "dependencies": {
     "@google-cloud/firestore": "^7.0.0",
