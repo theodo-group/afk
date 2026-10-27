@@ -168,6 +168,20 @@ export const AfkConfig = Schema.Struct({
   defaultInstanceType: Schema.optional(Schema.String),
   allowedInstanceTypes: Schema.optional(Schema.Array(Schema.String)),
 
+  /**
+   * How the Run image is tagged in the registry. `"ref"` (absent ⇒ default) is
+   * `<branch>-<sha12>`: one image per commit. `"content"` is `c-<hash>` of what
+   * the image is built FROM (afk.Dockerfile, afk's entrypoint, the platform and
+   * every COPY/ADD source — services/ImageTag.ts): one image per Dockerfile
+   * state, so a launcher finds it already pushed and never runs docker. Opt in
+   * only when afk.Dockerfile bakes no per-commit source in.
+   */
+  image: Schema.optional(
+    Schema.Struct({
+      tag: Schema.optional(Schema.Literal("ref", "content")),
+    }),
+  ),
+
   golden: Schema.optional(LegacyGoldenConfig), // backwards compat — migrate to aws.cachedImages
   aws: Schema.optional(AwsBackendConfig),
   cloudflare: Schema.optional(CloudflareBackendConfig),
