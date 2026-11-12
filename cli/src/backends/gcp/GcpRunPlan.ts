@@ -153,6 +153,8 @@ export interface PlanGcpRunInput {
   readonly sourceRepoName: string
   readonly project: string
   readonly ownerAccount: string
+  /** The Owner's OS Login uid; absent where they have no OS Login profile. */
+  readonly ownerUid: string | undefined
   /** The Golden custom-image family the Run boots from. */
   readonly goldenImageFamily: string
   /** Raw `afk.compose.yml`, pre-read by the shell; absent when none. */
@@ -278,6 +280,7 @@ export const planGcpRun = (
       secretName: s.secretName,
     })),
     compose: composeContent,
+    ownerUid: i.ownerUid,
     sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
     sessionArtifactBucket: bucket,
     sessionArtifactPrefix: `${i.sourceRepoName}/${i.runId}/session-artifacts/`,
@@ -300,7 +303,15 @@ export const planGcpRun = (
     region,
     zone,
     project: i.project,
-    warnings: assembled.warnings,
+    // An Owner with no readable OS Login uid still gets a Run; only `afk attach`
+    // would fail on it, and much later, so say so now rather than at attach time.
+    warnings:
+      i.ownerUid === undefined
+        ? [
+            ...assembled.warnings,
+            "no OS Login uid for the caller — `afk attach` will not reach the Docker daemon on this Run",
+          ]
+        : assembled.warnings,
     preparedBase: {
       runId: i.runId,
       command: input.command,

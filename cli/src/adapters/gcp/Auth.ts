@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import { Subprocess } from "../../infra/Subprocess.ts"
 import { GcpError } from "../../infra/Errors.ts"
 import { makeGcloudCli } from "./gcloudCli.ts"
@@ -18,6 +18,13 @@ export class Auth extends Context.Tag("Auth")<
     readonly activeProject: Effect.Effect<string, GcpError>
     /** A short-lived OAuth access token, for REST-only calls. */
     readonly accessToken: Effect.Effect<string, GcpError>
+    /**
+     * The caller's OS Login POSIX uid — the uid `afk attach` lands as over SSH,
+     * which a Run's VM grants the Docker socket to. `None` where the caller has
+     * no OS Login profile (a service-account Owner), which is a normal outcome:
+     * such a Run is never attached to by hand.
+     */
+    readonly osLoginUid: Effect.Effect<Option.Option<string>, GcpError>
   }
 >() {}
 
@@ -68,6 +75,24 @@ export const GcpAuthLive = Layer.effect(
       "print-access-token",
     ])
 
-    return Auth.of({ callerAccount, activeProject, accessToken })
+    const osLoginUid = gcloud
+      .json<{
+        readonly posixAccounts?: ReadonlyArray<{ readonly uid?: string }>
+      }>("compute:os-login:describe-profile", [
+        "compute",
+        "os-login",
+        "describe-profile",
+      ])
+      .pipe(
+        Effect.map((p) => Option.fromNullable(p.posixAccounts?.[0]?.uid)),
+        Effect.catchAll(() => Effect.succeed(Option.none<string>())),
+      )
+
+    return Auth.of({
+      callerAccount,
+      activeProject,
+      accessToken,
+      osLoginUid,
+    })
   }),
 )

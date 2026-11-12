@@ -185,6 +185,12 @@ export const AFK_IMAGE_PLACEHOLDER = "${AFK_IMAGE}"
 export const VM_AFK_DIR = "/etc/afk"
 export const VM_COMPOSE_PATH = "/etc/afk/compose.yml"
 
+// A Run reaches RUNNING when its compute primitive does, which on a cold image
+// pull is minutes before the workload's container exists; `afk attach` waits
+// this long for it rather than reporting a missing service.
+export const ATTACH_CONTAINER_WAIT_TRIES = 40
+export const ATTACH_CONTAINER_WAIT_SECONDS = 3
+
 // ---------- Local Backend ----------
 //
 // Docker container labels are the Local Backend's truth source — the analogue

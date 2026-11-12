@@ -49,9 +49,44 @@ export interface GcpStartupScriptInput {
   readonly sessionArtifactBucket: string
   readonly sessionArtifactPrefix: string
   readonly sessionArtifactMaxBytes: number
+  /**
+   * The Owner's OS Login uid, handed the Docker socket so `afk attach` reaches
+   * the daemon without sudo. Absent where the Owner has no OS Login profile.
+   */
+  readonly ownerUid?: string
 }
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
+
+/** Seconds to wait for systemd to have activated the Docker socket at boot. */
+const DOCKER_SOCKET_WAIT_TRIES = 30
+
+/**
+ * `afk attach` lands over SSH as an OS Login user, and an OS Login principal is
+ * not a local account: it holds no `/etc/group` entry, so it is never in the
+ * `docker` group, and the guest agent's `[Accounts] groups` list — which does
+ * name `docker` — only ever applied to metadata-key accounts. Granting the
+ * socket to the Owner's uid is what lets attach run plain `docker`; the
+ * alternative, a sudoers drop-in, would make attach need root on the VM.
+ *
+ * The socket's own group stays `docker`, so the grant names exactly one
+ * principal: the Owner. systemd owns the socket (docker.socket's
+ * `SocketGroup=docker`), not dockerd, so a `daemon.json` group would be ignored
+ * — and re-creating the socket would take the workload's containers down with
+ * it. Re-owning the live socket avoids that; nothing restarts docker.socket for
+ * the rest of the Run, and a retained Run's resume re-runs this script.
+ *
+ * Runs before the image pull, which on a cold Golden Image takes minutes: the
+ * socket is systemd-activated and already there, so waiting for the pull would
+ * leave every attach in that window hitting `permission denied`.
+ */
+const renderDockerSocketGrant = (ownerUid: string | undefined): string =>
+  ownerUid === undefined
+    ? "# (no OS Login uid for the Owner — socket left to root)"
+    : [
+        `for _ in $(seq 1 ${DOCKER_SOCKET_WAIT_TRIES}); do [ -S /var/run/docker.sock ] && break; sleep 1; done`,
+        `chown ${shellQuote(ownerUid)} /var/run/docker.sock || true`,
+      ].join("\n")
 
 const renderEnvFileWrites = (
   env: ReadonlyArray<{ name: string; value: string }>,
@@ -176,6 +211,9 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
     `export AFK_INSTANCE=${shellQuote(input.instanceName)}`,
     "",
     `mkdir -p ${shellQuote(VM_AFK_DIR)}`,
+    "",
+    "# --- Hand the Docker socket to the Owner (for `afk attach`) ---",
+    renderDockerSocketGrant(input.ownerUid),
     "",
     "# --- Pull agent image (instance SA has Artifact Registry read) ---",
     // A stock VM's Docker isn't wired to authenticate to Artifact Registry, so

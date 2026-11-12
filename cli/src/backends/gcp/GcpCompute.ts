@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { randomUUID } from "node:crypto"
 import { Gce } from "../../adapters/gcp/Gce.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
@@ -25,6 +25,8 @@ import {
   GCP_LABEL_MANAGED,
   GCP_LABEL_OWNER,
   VM_AFK_DIR,
+  ATTACH_CONTAINER_WAIT_SECONDS,
+  ATTACH_CONTAINER_WAIT_TRIES,
 } from "../../constants.ts"
 import {
   type GcpBackendPlan,
@@ -96,6 +98,7 @@ export const GcpComputeLive = Layer.effect(
       Effect.gen(function* () {
         const { config, projectRoot, sourceRepoName } = yield* cfg.load
         const ownerAccount = yield* auth.callerAccount
+        const ownerUid = yield* auth.osLoginUid
         const project = config.gcp?.projectId ?? (yield* auth.activeProject)
 
         const latestGolden = yield* golden.findLatest
@@ -123,6 +126,7 @@ export const GcpComputeLive = Layer.effect(
           sourceRepoName,
           project,
           ownerAccount,
+          ownerUid: Option.getOrUndefined(ownerUid),
           goldenImageFamily: GCP_GOLDEN_IMAGE_FAMILY,
           composeContent,
           input,
@@ -233,6 +237,11 @@ export const GcpComputeLive = Layer.effect(
               "--tunnel-through-iap",
               "--command",
               command,
+              // ssh allocates a remote TTY only when it is given no command, and
+              // `docker exec -it` refuses to run without one. Everything after
+              // `--` is passed through to ssh.
+              "--",
+              "-t",
             ])
             .pipe(
               Effect.mapError(
@@ -254,12 +263,24 @@ export const GcpComputeLive = Layer.effect(
           yield* gce.startInstance(project, zone, instanceName)
         }
 
+        // Plain `docker`, never `sudo`: the startup script hands the socket to
+        // the Owner's OS Login uid, so a developer holding only
+        // `roles/compute.osLogin` can attach (see GcpStartupScript).
+
         // Locate the service container by its compose service label (name
         // fallback for the no-compose Run), including exited containers (`-a`).
+        // A Run reaches RUNNING the moment its instance does, minutes before a
+        // cold image pull yields a container, so poll rather than report a
+        // missing service — and keep docker's own stderr out of the way, since
+        // the socket grant lands a beat after boot too.
         const findCid = (svc: string) =>
-          `C=$(docker ps -aqf "label=com.docker.compose.service=${svc}" | head -n1); ` +
-          `[ -n "$C" ] || C=$(docker ps -aqf "name=^${svc}$" | head -n1); ` +
-          `if [ -z "$C" ]; then echo "service ${svc} not found" >&2; exit 1; fi; `
+          `for i in $(seq 1 ${ATTACH_CONTAINER_WAIT_TRIES}); do ` +
+          `C=$(docker ps -aqf "label=com.docker.compose.service=${svc}" 2>/dev/null | head -n1); ` +
+          `[ -n "$C" ] || C=$(docker ps -aqf "name=^${svc}$" 2>/dev/null | head -n1); ` +
+          `[ -n "$C" ] && break; ` +
+          `[ "$i" = 1 ] && echo "afk: waiting for ${svc} to start (the Run may still be pulling its image)..." >&2; ` +
+          `sleep ${ATTACH_CONTAINER_WAIT_SECONDS}; done; ` +
+          `if [ -z "$C" ]; then echo "afk: ${svc} never started - follow it with \`afk logs\`" >&2; exit 1; fi; `
 
         const liveCmd = (svc: string) =>
           findCid(svc) +
