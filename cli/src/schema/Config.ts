@@ -138,7 +138,35 @@ export const GcpBackendConfig = Schema.Struct({
 })
 export type GcpBackendConfig = typeof GcpBackendConfig.Type
 
-export const BackendName = Schema.Literal("aws", "cloudflare", "local", "gcp")
+/**
+ * Azure-specific config block. Read only when `backend == "azure"`.
+ */
+export const AzureBackendConfig = Schema.Struct({
+  /** Subscription every Azure call targets. Absent ⇒ `az account show`. */
+  subscriptionId: Schema.optional(Schema.String),
+  /** Location (region) of the resource group and every Run VM. */
+  location: Schema.optional(Schema.String),
+  /** The resource group the Terraform module creates and Runs live in. */
+  resourceGroup: Schema.optional(Schema.String),
+  defaultVmSize: Schema.optional(Schema.String),
+  allowedVmSizes: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * OS disk size (GB) for Run VMs. Absent ⇒ the Golden Image's own size, which
+   * an agent image plus a cloned workspace can fill (as on AWS/GCP).
+   */
+  osDiskSizeGb: Schema.optional(Schema.Number),
+  /** Images pre-pulled into the Azure Golden managed image by `afk golden build`. */
+  cachedImages: Schema.optional(Schema.Array(Schema.String)),
+})
+export type AzureBackendConfig = typeof AzureBackendConfig.Type
+
+export const BackendName = Schema.Literal(
+  "aws",
+  "cloudflare",
+  "local",
+  "gcp",
+  "azure",
+)
 export type BackendName = typeof BackendName.Type
 
 export const AfkConfig = Schema.Struct({
@@ -180,6 +208,7 @@ export const AfkConfig = Schema.Struct({
   cloudflare: Schema.optional(CloudflareBackendConfig),
   local: Schema.optional(LocalBackendConfig),
   gcp: Schema.optional(GcpBackendConfig),
+  azure: Schema.optional(AzureBackendConfig),
 })
 export type AfkConfig = typeof AfkConfig.Type
 

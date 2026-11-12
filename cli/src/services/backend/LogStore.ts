@@ -3,6 +3,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
@@ -32,7 +33,12 @@ export class LogStore extends Context.Tag("LogStore")<
       input: TailInput,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
   }
 >() {}

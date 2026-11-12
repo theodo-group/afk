@@ -11,7 +11,7 @@ gave it. In steps, the CLI:
 2. **Builds** your `afk.Dockerfile` into an agent image, wrapped with a
    CLI-owned entrypoint (skipped if the `<branch>-<sha>` image already exists).
 3. **Launches one compute primitive** for the Run — an EC2 VM on AWS, a Compute
-   Engine VM on GCP, a Container instance on Cloudflare, a local `dind`
+   Engine VM on GCP, an Azure VM on Azure, a Container instance on Cloudflare, a local `dind`
    container on Local — booted from the project's [Golden
    Image](/afk/concepts/glossary/#golden-image).
 4. That primitive **clones your repo** at the ref into `/workspace`, then runs
@@ -19,7 +19,7 @@ gave it. In steps, the CLI:
    else `docker run` — inside a wall-clock timeout, shipping each service's
    logs.
 5. On exit the primitive is **reclaimed** — or, on a Run launched with
-   `--retain` (AWS/GCP), stopped and held for post-mortem `afk attach` until the
+   `--retain` (AWS/GCP/Azure), stopped and held for post-mortem `afk attach` until the
    [retention period](/afk/concepts/glossary/#retention) elapses. The CLI does not
    stay resident; the Run lives on the primitive, so a dead laptop doesn't
    affect it.

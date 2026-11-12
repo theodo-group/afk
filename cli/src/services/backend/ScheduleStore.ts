@@ -3,6 +3,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
@@ -113,6 +114,8 @@ type StoreError =
   | AwsError
   | CloudflareError
   | GcpError
+  | AzureError
+  | AzureError
   | ConfigError
   | UserError
 

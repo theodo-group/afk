@@ -288,3 +288,74 @@ export const GCP_VM_SERVICE_ACCOUNT = "afk-vm"
 // IAP brokers the SSH tunnel; this is the env var the startup-script exports so
 // the CLI-owned entrypoint can self-delete the instance on exit.
 export const GCP_BACKEND_ENV = "AFK_BACKEND"
+
+// ---------- Azure Backend ----------
+//
+// Azure VM tags are the Azure Backend's truth source — the analogue of the
+// `afk:*` EC2 tags. Tag *names* may not contain `<>%&\?/`, so the dash
+// convention of GCP is kept; tag *values* hold up to 256 arbitrary chars, so
+// unlike GCE labels the Owner and the ref are stored verbatim.
+export const AZURE_TAG_OWNER = "afk-owner"
+export const AZURE_TAG_SUBMITTED_BY = "afk-submitted-by"
+export const AZURE_TAG_RUN_ID = "afk-run-id"
+export const AZURE_TAG_BRANCH = "afk-branch"
+export const AZURE_TAG_SHA = "afk-sha"
+export const AZURE_TAG_MANAGED = "afk-managed"
+export const AZURE_TAG_REPO = "afk-repo"
+export const AZURE_TAG_TIMEOUT_HOURS = "afk-timeout-hours"
+export const AZURE_TAG_STARTED_AT = "afk-started-at"
+// Marks a Run launched with `--retain`: its VM deallocates (not deletes) on
+// exit and is resumable via `afk attach` until the sweeper Function reaps it.
+export const AZURE_TAG_RETAIN = "afk-retain"
+// Azure records no "last stopped" time on a VM, so a retained Run's VM stamps
+// it on itself just before it deallocates; the retention window runs from it.
+export const AZURE_TAG_STOPPED_AT = "afk-stopped-at"
+export const AZURE_TAG_GOLDEN = "afk-golden"
+export const AZURE_TAG_GOLDEN_VERSION = "afk-golden-version"
+// A managed image records no creation time of its own, so the build stamps one.
+export const AZURE_TAG_BUILT_AT = "afk-built-at"
+// Azure tags hold strings ≤256 chars, enough for the pre-pulled image list as
+// JSON — the analogue of the AWS `afk:cached-images` tag.
+export const AZURE_TAG_CACHED_IMAGES = "afk-cached-images"
+export const AZURE_TAG_VALUE_MAX = 256
+
+export const AZURE_DEFAULT_LOCATION = "westeurope"
+export const AZURE_DEFAULT_RESOURCE_GROUP = "afk"
+export const AZURE_DEFAULT_VM_SIZE = "Standard_D4s_v5"
+export const AZURE_DEFAULT_ALLOWED_VM_SIZES = [
+  "Standard_D2s_v5",
+  "Standard_D4s_v5",
+  "Standard_D8s_v5",
+  "Standard_D16s_v5",
+  "Standard_E4s_v5",
+] as const
+
+// Names the Terraform module gives by convention inside the resource group, so
+// the CLI derives them rather than reading Terraform outputs.
+export const AZURE_VNET_NAME = "afk-vnet"
+export const AZURE_RUN_IDENTITY = "afk-vm"
+export const AZURE_BASTION_NAME = "afk-bastion"
+// The admin account baked into every VM. Nobody logs in as it — attach goes
+// through Microsoft Entra ID — but Azure refuses a Linux VM without one.
+export const AZURE_ADMIN_USERNAME = "afk"
+
+// Storage account / ACR / Key Vault names are global across Azure, so each is
+// `afk` + a hash of (subscription, resource group): deterministic, so every
+// developer of the project derives the same names without a Terraform read.
+export const AZURE_NAME_SUFFIX_LENGTH = 12
+
+// Key Vault secret names allow only [0-9a-zA-Z-], so the SSM
+// `/afk/secrets/<n>` path collapses to `afk-secret-<n>`, as on GCP.
+export const AZURE_SECRET_PREFIX = "afk-secret"
+// Table Storage table holding the run index (the DynamoDB `afk-runs` analogue).
+export const AZURE_RUNS_TABLE = "afkruns"
+// Blob containers: Session Artifacts, and the per-service log objects a Run
+// ships while it is alive (Azure has no Docker log driver of its own).
+export const AZURE_ARTIFACTS_CONTAINER = "afk-artifacts"
+export const AZURE_LOGS_CONTAINER = "afk-logs"
+export const AZURE_STATE_CONTAINER = "tfstate"
+// Seconds between two uploads of a live Run's log files.
+export const AZURE_LOG_SHIP_INTERVAL_SECONDS = 5
+// Grace past the Run timeout before the VM's own backstop timer reclaims it,
+// so the workload's `timeout` fires first and its exit code is recorded.
+export const AZURE_BACKSTOP_GRACE_SECONDS = 600
