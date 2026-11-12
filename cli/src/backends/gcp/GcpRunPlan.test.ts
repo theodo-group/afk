@@ -19,6 +19,7 @@ const baseInput = (
   overrides: {
     readonly config?: Partial<AfkConfig>
     readonly startInput?: Partial<StartInput>
+    readonly ownerUid?: string
   } = {},
 ): PlanGcpRunInput => ({
   config: {
@@ -29,6 +30,7 @@ const baseInput = (
   sourceRepoName: "widget",
   project: "acme-prod",
   ownerAccount: "dev@acme.com",
+  ownerUid: overrides.ownerUid,
   goldenImageFamily: "afk-golden",
   composeContent: undefined,
   input: {
@@ -97,6 +99,37 @@ describe("planGcpRun", () => {
     expect(Either.isRight(result)).toBe(true)
     if (Either.isRight(result)) {
       expect(result.right.backendPlanBase.machineType).toBe("n2-standard-8")
+    }
+  })
+
+  it("hands the Docker socket to the Owner's OS Login uid, never sudo", () => {
+    const result = planGcpRun(baseInput({ ownerUid: "680307560" }))
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const script = result.right.backendPlanBase.startupScript
+      expect(script).toContain("chown '680307560' /var/run/docker.sock")
+      expect(script).not.toContain("sudo")
+    }
+  })
+
+  it("grants the socket before the image pull, which can take minutes", () => {
+    const result = planGcpRun(baseInput({ ownerUid: "680307560" }))
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const script = result.right.backendPlanBase.startupScript
+      expect(script.indexOf("/var/run/docker.sock")).toBeLessThan(
+        script.indexOf("docker pull"),
+      )
+    }
+  })
+
+  it("leaves the socket to root when the Owner has no OS Login uid", () => {
+    const result = planGcpRun(baseInput())
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const script = result.right.backendPlanBase.startupScript
+      expect(script).not.toContain("/var/run/docker.sock")
+      expect(script).toContain("socket left to root")
     }
   })
 
