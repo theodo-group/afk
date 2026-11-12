@@ -41,12 +41,14 @@ This document covers what the backend provisions and how its attach / lifecycle 
       "e2-standard-4",
       "n2-standard-4"
     ],
+    "bootDiskSizeGb": 100,
     "cachedImages": ["postgres:16", "redis:7"]
   }
 }
 ```
 
 - `defaultMachineType` is used when `afk run` is called without `--machine-type`.
+- `bootDiskSizeGb` sizes each Run's boot disk. Absent, a Run inherits the Golden Image's size, which an agent image plus a cloned workspace and its build outputs can fill (`No space left on device` mid-Run). Debian grows the filesystem to the disk on boot, so the Golden Image needs no rebuild; the value can only grow the image's size.
 - `allowedMachineTypes` is the whitelist the CLI validates `--machine-type` against (and which the `afk-developer` IAM condition mirrors where expressible).
 - `cachedImages` is the sidecar pre-pull list baked into the Golden Image by `afk golden build`.
 
