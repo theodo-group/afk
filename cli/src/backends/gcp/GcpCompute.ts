@@ -148,6 +148,7 @@ export const GcpComputeLive = Layer.effect(
           zone: gcp.zone,
           name: gcp.instanceName,
           machineType: gcp.machineType,
+          bootDiskSizeGb: gcp.bootDiskSizeGb,
           image: `family/${gcp.imageFamily}`,
           serviceAccount: gcp.serviceAccount,
           subnet: gcp.subnet,

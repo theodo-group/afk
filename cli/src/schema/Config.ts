@@ -126,6 +126,13 @@ export const GcpBackendConfig = Schema.Struct({
   zone: Schema.optional(Schema.String),
   defaultMachineType: Schema.optional(Schema.String),
   allowedMachineTypes: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Boot disk size (GB) for Run VMs. A Run inherits the Golden Image's disk
+   * size, sized for Docker and the pre-pulled sidecars, which an agent image
+   * plus a cloned workspace and its build outputs fill — ENOSPC mid-Run.
+   * Absent ⇒ the image's own size (historical behavior).
+   */
+  bootDiskSizeGb: Schema.optional(Schema.Number),
   /** Images pre-pulled into the GCE Golden custom image by `afk golden build`. */
   cachedImages: Schema.optional(Schema.Array(Schema.String)),
 })

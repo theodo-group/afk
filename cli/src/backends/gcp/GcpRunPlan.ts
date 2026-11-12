@@ -133,6 +133,8 @@ export type GcpBackendPlan = {
   readonly zone: string
   readonly imageFamily: string
   readonly machineType: string
+  /** Boot disk size (GB); absent ⇒ the Golden Image's own size. */
+  readonly bootDiskSizeGb: number | undefined
   /** Spot (`provisioningModel: SPOT`) vs On-Demand (`STANDARD`). */
   readonly spot: boolean
   /** Retain (stop, not delete) on exit for post-mortem attach. On-Demand only. */
@@ -335,6 +337,7 @@ export const planGcpRun = (
       zone,
       imageFamily: i.goldenImageFamily,
       machineType,
+      bootDiskSizeGb: config.gcp?.bootDiskSizeGb,
       spot,
       retain,
       serviceAccount: "",

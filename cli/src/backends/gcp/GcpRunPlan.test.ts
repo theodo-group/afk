@@ -133,6 +133,19 @@ describe("planGcpRun", () => {
     }
   })
 
+  it("carries the configured boot disk size, else leaves the image's", () => {
+    const sized = planGcpRun(
+      baseInput({ config: { gcp: { bootDiskSizeGb: 100 } } }),
+    )
+    const unsized = planGcpRun(baseInput())
+    expect(
+      Either.isRight(sized) && sized.right.backendPlanBase.bootDiskSizeGb,
+    ).toBe(100)
+    expect(
+      Either.isRight(unsized) && unsized.right.backendPlanBase.bootDiskSizeGb,
+    ).toBeUndefined()
+  })
+
   it("defaults to Spot capacity", () => {
     const result = planGcpRun(baseInput())
     expect(Either.isRight(result)).toBe(true)

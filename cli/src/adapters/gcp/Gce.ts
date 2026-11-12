@@ -21,6 +21,8 @@ export interface CreateInstanceInput {
   readonly serviceAccount: string
   readonly subnet: string
   readonly startupScript: string
+  /** Boot disk size (GB); absent ⇒ the image's own size. */
+  readonly bootDiskSizeGb?: number
   /** Spot capacity (`provisioningModel: SPOT`) when true, else STANDARD on-demand. */
   readonly spot: boolean
   /**
@@ -175,6 +177,9 @@ export const GceLive = Layer.effect(
             `--zone=${input.zone}`,
             `--machine-type=${input.machineType}`,
             `--image=${input.image}`,
+            ...(input.bootDiskSizeGb === undefined
+              ? []
+              : [`--boot-disk-size=${input.bootDiskSizeGb}GB`]),
             `--service-account=${input.serviceAccount}`,
             `--subnet=${input.subnet}`,
             // No external IP: egress is via Cloud NAT, ingress via IAP only.
