@@ -3,6 +3,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   DockerError,
   GitError,
@@ -139,7 +140,7 @@ export class Compute extends Context.Tag("Compute")<
      * Identify the Backend at runtime. Used by `afk doctor` and surfaced in
      * `afk ls`/`afk history` output.
      */
-    readonly backendName: "aws" | "cloudflare" | "local" | "gcp"
+    readonly backendName: "aws" | "cloudflare" | "local" | "gcp" | "azure"
 
     /**
      * Resolve everything needed to launch a Run without launching anything.
@@ -156,6 +157,8 @@ export class Compute extends Context.Tag("Compute")<
       | AwsError
       | CloudflareError
       | GcpError
+      | AzureError
+      | AzureError
       | UserError
       | DockerError
       | GitError
@@ -167,7 +170,12 @@ export class Compute extends Context.Tag("Compute")<
       plan: PreparedRun,
     ) => Effect.Effect<
       RunStarted,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
 
     /** List Runs owned by a specific principal. */
@@ -175,13 +183,23 @@ export class Compute extends Context.Tag("Compute")<
       ownerUserId: string,
     ) => Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
 
     /** List every Run visible to the caller (admin scope). */
     readonly listAll: Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
 
     /** Resolve a Run by id. Returns UserError if not found. */
@@ -189,7 +207,12 @@ export class Compute extends Context.Tag("Compute")<
       runId: string,
     ) => Effect.Effect<
       Run,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
 
     /** Terminate a Run. */
@@ -197,7 +220,12 @@ export class Compute extends Context.Tag("Compute")<
       runId: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
 
     /** Open an interactive session into a running Run's main (or named) service. */
@@ -206,7 +234,12 @@ export class Compute extends Context.Tag("Compute")<
       opts: AttachOptions,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
 
     /**
@@ -224,7 +257,12 @@ export class Compute extends Context.Tag("Compute")<
         readonly displayName: string
         readonly ownerWarning?: string
       },
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
   }
 >() {}

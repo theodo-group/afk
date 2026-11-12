@@ -3,6 +3,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   DockerError,
   UserError,
@@ -51,6 +52,8 @@ export class GoldenImageStore extends Context.Tag("GoldenImageStore")<
       | AwsError
       | CloudflareError
       | GcpError
+      | AzureError
+      | AzureError
       | DockerError
       | UserError
       | ConfigError
@@ -60,6 +63,8 @@ export class GoldenImageStore extends Context.Tag("GoldenImageStore")<
       | AwsError
       | CloudflareError
       | GcpError
+      | AzureError
+      | AzureError
       | DockerError
       | UserError
       | ConfigError
@@ -69,6 +74,8 @@ export class GoldenImageStore extends Context.Tag("GoldenImageStore")<
       | AwsError
       | CloudflareError
       | GcpError
+      | AzureError
+      | AzureError
       | DockerError
       | UserError
       | ConfigError
@@ -80,6 +87,8 @@ export class GoldenImageStore extends Context.Tag("GoldenImageStore")<
       | AwsError
       | CloudflareError
       | GcpError
+      | AzureError
+      | AzureError
       | DockerError
       | UserError
       | ConfigError

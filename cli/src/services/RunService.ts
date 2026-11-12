@@ -14,6 +14,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   DockerError,
   GitError,
@@ -84,6 +85,8 @@ export class RunService extends Context.Tag("RunService")<
       | AwsError
       | CloudflareError
       | GcpError
+      | AzureError
+      | AzureError
       | UserError
       | DockerError
       | GitError
@@ -93,7 +96,12 @@ export class RunService extends Context.Tag("RunService")<
       plan: PreparedRun,
     ) => Effect.Effect<
       RunStarted,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
     readonly start: (
       input: RunRequest,
@@ -102,6 +110,8 @@ export class RunService extends Context.Tag("RunService")<
       | AwsError
       | CloudflareError
       | GcpError
+      | AzureError
+      | AzureError
       | UserError
       | DockerError
       | GitError
@@ -111,30 +121,55 @@ export class RunService extends Context.Tag("RunService")<
       ownerUserId: string,
     ) => Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
     readonly listAll: Effect.Effect<
       ReadonlyArray<Run>,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
     readonly findByRunId: (
       runId: string,
     ) => Effect.Effect<
       Run,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
     readonly kill: (
       runId: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
     readonly attach: (
       runId: string,
       opts: AttachOptions,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | UserError | ConfigError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | UserError
+      | ConfigError
     >
     /**
      * Block until the Run leaves PROVISIONING, returning its first settled
@@ -160,7 +195,7 @@ export class RunService extends Context.Tag("RunService")<
       repoName: string,
     ) => Effect.Effect<void>
     /** Identifier of the active Backend (`"aws"`, `"cloudflare"`, `"local"`, `"gcp"`). */
-    readonly backendName: "aws" | "cloudflare" | "local" | "gcp"
+    readonly backendName: "aws" | "cloudflare" | "local" | "gcp" | "azure"
   }
 >() {}
 

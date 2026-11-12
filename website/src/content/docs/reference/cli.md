@@ -117,11 +117,12 @@ afk team rm <name>                             # admin: revoke access
   container's CMD becomes `sh -c "<joined command>"`, so quoting and shell
   features (`&&`, `|`, `$VARS`) work as you'd expect.
 - The region a cloud command operates on comes from `afk.config.json` →
-  `aws.region` / `gcp.region` (zone/machine type live in the `gcp` block). There
+  `aws.region` / `gcp.region` / `azure.location` (zone/machine type live in the
+  `gcp` block). There
   is no per-command `--region` flag (apart from `afk init`, which writes the
   region into the rendered `backend.tf` and scaffolded config).
-- `aws`, `gcp`, `cloudflare`, and `local` Backends are supported; Azure VMs are
-  still anticipated. `--local` overrides the persisted backend for one
+- `aws`, `gcp`, `azure`, `cloudflare`, and `local` Backends are supported.
+  `--local` overrides the persisted backend for one
   invocation and may appear anywhere on the line.
 
 All AWS calls go through the standard credential chain (`AWS_PROFILE`, env vars,

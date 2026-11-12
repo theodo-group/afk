@@ -3,6 +3,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   DockerError,
 } from "../../infra/Errors.ts"
 
@@ -20,14 +21,17 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
     /** Registry host, e.g. "<account>.dkr.ecr.eu-west-1.amazonaws.com". */
     readonly registryUri: Effect.Effect<
       string,
-      AwsError | CloudflareError | GcpError
+      AwsError | CloudflareError | GcpError | AzureError
     >
 
     /** True if `<repo>:<tag>` already exists in the registry. */
     readonly imageExists: (
       repoName: string,
       tag: string,
-    ) => Effect.Effect<boolean, AwsError | CloudflareError | GcpError>
+    ) => Effect.Effect<
+      boolean,
+      AwsError | CloudflareError | GcpError | AzureError
+    >
 
     /**
      * Newest tags matching `<repo>:<tagPrefix>*`. Used by BuildService for
@@ -40,7 +44,7 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
       limit: number,
     ) => Effect.Effect<
       ReadonlyArray<string>,
-      AwsError | CloudflareError | GcpError
+      AwsError | CloudflareError | GcpError | AzureError
     >
 
     /**
@@ -51,7 +55,7 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
       repoName: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | DockerError
+      AwsError | CloudflareError | GcpError | AzureError | DockerError
     >
 
     /**
@@ -63,7 +67,7 @@ export class ImageRegistry extends Context.Tag("ImageRegistry")<
       imageUri: string,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | DockerError
+      AwsError | CloudflareError | GcpError | AzureError | DockerError
     >
   }
 >() {}

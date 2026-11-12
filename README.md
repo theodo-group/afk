@@ -1,6 +1,6 @@
 # AFK
 
-A CLI to run AI development workloads inside your own cloud environment. Launch a coding agent in your AWS, GCP, or Cloudflare account and come back to the results.
+A CLI to run AI development workloads inside your own cloud environment. Launch a coding agent in your AWS, GCP, Azure, or Cloudflare account and come back to the results.
 
 ```sh
 # In any repo with an afk.Dockerfile:
@@ -13,7 +13,7 @@ afk ls                                                     # see it running
 afk logs <run-id>                                          # tail its output
 ```
 
-That Run boots an ephemeral instance in your own AWS account, does the work, and terminates. The same commands work unchanged on GCP, Cloudflare, or your local Docker daemon.
+That Run boots an ephemeral instance in your own AWS account, does the work, and terminates. The same commands work unchanged on GCP, Azure, Cloudflare, or your local Docker daemon.
 
 ## Documentation
 
@@ -22,7 +22,7 @@ Everything lives on the docs site: **<https://theodo-group.github.io/afk/>**
 - [Introduction](https://theodo-group.github.io/afk/getting-started/introduction/) — what AFK is and the model behind it
 - [How it works](https://theodo-group.github.io/afk/getting-started/how-it-works/) — the shape every Backend follows
 - [Installation](https://theodo-group.github.io/afk/getting-started/installation/) — per-Backend prerequisites
-- [Quickstart](https://theodo-group.github.io/afk/getting-started/quickstart/) — first Run on AWS, GCP, Cloudflare, or Local
+- [Quickstart](https://theodo-group.github.io/afk/getting-started/quickstart/) — first Run on AWS, GCP, Azure, Cloudflare, or Local
 - [CLI reference](https://theodo-group.github.io/afk/reference/cli/) — the full command surface
 - [Consumer contract](https://theodo-group.github.io/afk/reference/consumer-contract/) — the files your repo must provide
 - [Backends](https://theodo-group.github.io/afk/backends/overview/) — provisioning, attach, lifecycle, and cost per provider
@@ -50,7 +50,7 @@ Updating: `git pull && bun install`. Prerequisites (Bun, Docker, per-Backend too
 ├── docs/                   # contributor docs (architecture, code style) + per-backend deep dives
 ├── entrypoint/             # CLI-injected container entrypoint (shared across Backends)
 ├── integrations/           # agent/tool integrations
-├── terraform/              # copyable infra modules: aws/, gcp/ (afk init drops one into your repo)
+├── terraform/              # copyable infra modules: aws/, gcp/, azure/ (afk init drops one into your repo)
 ├── website/                # the docs site (Astro Starlight)
 └── worker/                 # copyable Cloudflare launcher Worker
 ```

@@ -1,6 +1,6 @@
 ---
 title: Backends overview
-description: The same CLI surface runs on four shipped Backends — AWS EC2, GCP Compute Engine, Cloudflare Containers, and Local — plus an anticipated Azure Backend.
+description: The same CLI surface runs on five shipped Backends — AWS EC2, GCP Compute Engine, Azure Virtual Machines, Cloudflare Containers, and Local.
 ---
 
 A **Backend** is a provider-specific implementation of the operations a Run
@@ -16,13 +16,9 @@ specifics, and teardown — lives in its own page.
 | --- | --- | --- | --- | --- | --- |
 | **[AWS EC2](/afk/backends/aws/)** | One EC2 VM per Run | Terraform (VPC, IAM, sweeper Lambda, DynamoDB, S3 state) | Spot by default; `--on-demand` available | Opt-in (`--retain`, On-Demand only) | Full Compose Contract; host Docker daemon |
 | **[GCP Compute Engine](/afk/backends/gcp/)** | One Compute Engine VM per Run | Terraform (VPC + NAT + IAP, service accounts, Firestore, Artifact Registry, GCS state) | Spot by default; `--on-demand` available | Opt-in (`--retain`, On-Demand only) | Full Compose Contract; attach over IAP tunnel |
+| **[Azure Virtual Machines](/afk/backends/azure/)** | One Azure VM per Run | Terraform (VNet + NAT + Bastion, managed identity, ACR, Key Vault, Storage, sweeper Function) | Spot by default; `--on-demand` available | Opt-in (`--retain`, On-Demand only) | Full Compose Contract; attach through Bastion + Entra ID |
 | **[Cloudflare Containers](/afk/backends/cloudflare/)** | One Container instance per Run | Customer-deployed launcher Worker (rootless `dind`) | n/a | Not possible | Requires the Workers Paid plan |
 | **[Local](/afk/backends/local/)** | One container per Run on your own daemon | None (`afk provision` is a no-op) | n/a | Every Run retained | Rootless `dind`; needs only Docker |
-
-**Azure (Virtual Machines)** is anticipated. It is expected to follow the same
-one-compute-primitive-per-Run shape as AWS, with its own image-build pipeline
-mapped onto `afk golden build` and its own exec primitive mapped onto
-`afk attach`.
 
 ## What stays the same
 

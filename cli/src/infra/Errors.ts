@@ -68,6 +68,11 @@ export class GcpError extends Data.TaggedError("GcpError")<{
   readonly message: string
 }> {}
 
+export class AzureError extends Data.TaggedError("AzureError")<{
+  readonly operation: string
+  readonly message: string
+}> {}
+
 export type AfkError =
   | UserError
   | SubprocessError
@@ -78,6 +83,7 @@ export type AfkError =
   | ConfigError
   | CloudflareError
   | GcpError
+  | AzureError
 
 /**
  * The single render point for a failed program. A tagged failure (an AfkError,

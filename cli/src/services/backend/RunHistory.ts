@@ -3,6 +3,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
@@ -67,21 +68,36 @@ export class RunHistory extends Context.Tag("RunHistory")<
       input: RecordStartInput,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
 
     readonly recordComplete: (
       input: RecordCompleteInput,
     ) => Effect.Effect<
       void,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
 
     readonly query: (
       input: QueryInput,
     ) => Effect.Effect<
       ReadonlyArray<HistoryRow>,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
   }
 >() {}

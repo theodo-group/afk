@@ -42,12 +42,12 @@ description: The afk.config.json schema, the .afk.env file, and how secrets are 
 }
 ```
 
-`backend` and `gitUrl` are required (`backend` is one of `aws`, `gcp`,
+`backend` and `gitUrl` are required (`backend` is one of `aws`, `gcp`, `azure`,
 `cloudflare`, `local`). `mainService` defaults to `agent`. `sessionArtifacts` is
 optional — see [Session Artifacts](#session-artifacts) below.
 
 Only the block matching the active `backend` is consulted — `aws:`, `gcp:`,
-`cloudflare:`, and `local:` may coexist, and `afk init --provider <other>` re-runs
+`azure:`, `cloudflare:`, and `local:` may coexist, and `afk init --provider <other>` re-runs
 are non-destructive of the other blocks.
 
 ### Per-Backend blocks
@@ -65,6 +65,12 @@ are non-destructive of the other blocks.
   `--instance-type`; `allowedMachineTypes` is the whitelist it is validated
   against. `cachedImages` is the sidecar pre-pull list baked into the Golden
   Image.
+- **Azure.** `azure.subscriptionId`, `location`, and `resourceGroup` locate
+  every Azure call (scaffolded by `afk init` from `az account show`); the
+  subscription must be the one `az` is signed in to. `defaultVmSize` is used
+  when `afk run` is called without `--instance-type`; `allowedVmSizes` is the
+  whitelist it is validated against. `osDiskSizeGb` sizes each Run's OS disk.
+  `cachedImages` is the sidecar pre-pull list baked into the Golden Image.
 - **Cloudflare.** `cloudflare.accountId` and `cloudflare.workerUrl` are required
   for any CF command after `afk init`. `placement` (default `smart`) maps to
   Cloudflare Containers placement hints. `defaultInstanceTier` (default
@@ -93,7 +99,7 @@ mechanics are the same on every Backend:
   `--out` (default `./session-artifacts/`). Owner-scoped like `afk logs`.
 
 Where the blob lands between exit and retrieval is Backend-specific — S3 on AWS,
-GCS on GCP, R2 (via the launcher Worker) on Cloudflare, `~/.afk/runs/<id>/` on
+GCS on GCP, Blob storage on Azure, R2 (via the launcher Worker) on Cloudflare, `~/.afk/runs/<id>/` on
 Local; each backend page documents its transport and expiry.
 
 ## `.afk.env` (gitignored)
@@ -132,4 +138,5 @@ values themselves are stored separately via `afk secrets put <name> <value>`.
 
 A Run needs at minimum a `github-token` secret to clone source. Where values are
 stored is Backend-specific — **SSM Parameter Store** on AWS, **Secret Manager**
-on GCP, **Workers Secrets** on Cloudflare, a `~/.afk/secrets/` file on **Local**.
+on GCP, **Key Vault** on Azure (names limited to letters, digits and `-`),
+**Workers Secrets** on Cloudflare, a `~/.afk/secrets/` file on **Local**.
