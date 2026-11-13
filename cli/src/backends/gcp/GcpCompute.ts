@@ -1,5 +1,8 @@
 import { Effect, Layer, Option } from "effect"
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { Gce } from "../../adapters/gcp/Gce.ts"
 import { Auth } from "../../adapters/gcp/Auth.ts"
 import { Subprocess } from "../../infra/Subprocess.ts"
@@ -27,6 +30,9 @@ import {
   VM_AFK_DIR,
   ATTACH_CONTAINER_WAIT_SECONDS,
   ATTACH_CONTAINER_WAIT_TRIES,
+  ATTACH_WORKSPACE_WAIT_TRIES,
+  SSHD_WAIT_SECONDS,
+  SSHD_WAIT_TRIES,
 } from "../../constants.ts"
 import {
   type GcpBackendPlan,
@@ -227,23 +233,30 @@ export const GcpComputeLive = Layer.effect(
           )
         }
 
+        const sshArgs = (
+          command: string,
+          sshOpts: ReadonlyArray<string>,
+          gcloudOpts: ReadonlyArray<string> = [],
+        ) => [
+          ...gcloudOpts,
+          "compute",
+          "ssh",
+          instanceName,
+          `--project=${project}`,
+          `--zone=${zone}`,
+          "--tunnel-through-iap",
+          "--command",
+          command,
+          // Everything after `--` is passed through to ssh.
+          "--",
+          ...sshOpts,
+        ]
+
         const ssh = (command: string) =>
           sub
-            .runInteractive("gcloud", [
-              "compute",
-              "ssh",
-              instanceName,
-              `--project=${project}`,
-              `--zone=${zone}`,
-              "--tunnel-through-iap",
-              "--command",
-              command,
-              // ssh allocates a remote TTY only when it is given no command, and
-              // `docker exec -it` refuses to run without one. Everything after
-              // `--` is passed through to ssh.
-              "--",
-              "-t",
-            ])
+            // ssh allocates a remote TTY only when it is given no command, and
+            // `docker exec -it` refuses to run without one.
+            .runInteractive("gcloud", sshArgs(command, ["-t"]))
             .pipe(
               Effect.mapError(
                 (e) =>
@@ -253,6 +266,46 @@ export const GcpComputeLive = Layer.effect(
                   }),
               ),
             )
+
+        // A Run is RUNNING the moment its instance is, before IAP can look the
+        // instance up and before sshd listens: an interactive ssh then dumps an
+        // IAP traceback (4047 / 4003) per attempt. Probe non-interactively and
+        // silently until sshd answers. "Permission denied" counts as an answer
+        // (sshd is up; only BatchMode refused a passphrase-protected key), so
+        // the interactive ssh that follows can still prompt for it.
+        const sshReachable = sub
+          .run(
+            "gcloud",
+            sshArgs(
+              "true",
+              ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"],
+              ["--quiet"],
+            ),
+          )
+          .pipe(
+            Effect.map((r) => r.exitCode === 0),
+            Effect.catchAll((e) =>
+              Effect.succeed(/Permission denied/.test(e.stderr)),
+            ),
+          )
+        // The probe runs with no stdin, so it can neither ask for a key's
+        // passphrase nor create a missing key: with no gcloud key yet, skip it
+        // and let the interactive ssh generate one with the developer.
+        const waitForSshd = Effect.gen(function* () {
+          if (!existsSync(join(homedir(), ".ssh", "google_compute_engine")))
+            return
+          for (let i = 0; i < SSHD_WAIT_TRIES; i++) {
+            if (yield* sshReachable) return
+            if (i === 0)
+              yield* Effect.sync(() =>
+                process.stderr.write(
+                  "afk: waiting for the VM to accept SSH...\n",
+                ),
+              )
+            yield* Effect.sleep(`${SSHD_WAIT_SECONDS} seconds`)
+          }
+          // Give up probing and let the interactive ssh show the real error.
+        })
 
         // Resume a retained primitive (start the stopped instance; `gcloud
         // compute ssh` then retries until sshd is back), and re-park it when the
@@ -281,11 +334,29 @@ export const GcpComputeLive = Layer.effect(
           `[ -n "$C" ] && break; ` +
           `[ "$i" = 1 ] && echo "afk: waiting for ${svc} to start (the Run may still be pulling its image)..." >&2; ` +
           `sleep ${ATTACH_CONTAINER_WAIT_SECONDS}; done; ` +
-          `if [ -z "$C" ]; then echo "afk: ${svc} never started - follow it with \`afk logs\`" >&2; exit 1; fi; `
+          // Single quotes: inside double quotes the shell would run `afk logs` as a
+          // command substitution on the VM, which has no afk.
+          `if [ -z "$C" ] && ! docker info >/dev/null 2>&1; then echo "afk: cannot reach the Docker daemon on this VM as $(id -un)" >&2; exit 1; fi; ` +
+          `if [ -z "$C" ]; then echo 'afk: ${svc} never started - follow it with \`afk logs ${run.runId}\`' >&2; exit 1; fi; `
+
+        // The main service is execable long before the entrypoint's clone has
+        // landed; wait for its ready marker (entrypoint.sh) so the shell does
+        // not open on an empty /workspace. Bounded, and stops early if the
+        // container exits (a failed clone), so an image built before the
+        // marker existed still attaches.
+        const waitWorkspace = (svc: string) =>
+          svc !== mainService
+            ? ""
+            : `for i in $(seq 1 ${ATTACH_WORKSPACE_WAIT_TRIES}); do ` +
+              `docker exec "$C" test -e /tmp/afk-workspace-ready 2>/dev/null && break; ` +
+              `[ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" = true ] || break; ` +
+              `[ "$i" = 1 ] && echo "afk: waiting for the source clone into /workspace..." >&2; ` +
+              `sleep ${ATTACH_CONTAINER_WAIT_SECONDS}; done; `
 
         const liveCmd = (svc: string) =>
           findCid(svc) +
           `docker start "$C" >/dev/null 2>&1 || true; ` +
+          waitWorkspace(svc) +
           `docker exec -it "$C" bash 2>/dev/null || docker exec -it "$C" sh`
 
         // Post-mortem: the container has exited, so commit its final filesystem
@@ -306,6 +377,8 @@ export const GcpComputeLive = Layer.effect(
             `docker image rm ${img} >/dev/null 2>&1 || true`
           )
         }
+
+        if (live) yield* waitForSshd
 
         const dropIn = opts.host
           ? ssh("bash -l")

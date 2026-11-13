@@ -96,6 +96,11 @@ fi
 git remote set-url origin "${AFK_GIT_URL}"
 unset GITHUB_TOKEN GITLAB_TOKEN
 
+# `afk attach` waits for this marker before opening a shell: the container is
+# execable from the first second, minutes before a large clone lands, and a
+# shell opened then sits in an empty /workspace.
+touch /tmp/afk-workspace-ready 2>/dev/null || true
+
 log "Workspace ready at $(git rev-parse HEAD)"
 log "Executing command under ${TIMEOUT_SECONDS}s timeout: $*"
 
