@@ -1,5 +1,11 @@
 import { Context, Effect, Layer } from "effect"
-import { existsSync, mkdirSync, writeFileSync, copyFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  copyFileSync,
+  readFileSync,
+} from "node:fs"
 import { resolve } from "node:path"
 import { Git } from "../adapters/Git.ts"
 import { Docker } from "../adapters/Docker.ts"
@@ -16,6 +22,11 @@ import {
   ConfigError,
 } from "../infra/Errors.ts"
 import { ecrRepoPrefix } from "../constants.ts"
+import {
+  CONTENT_TAG_PREFIX,
+  UnhashableSourceError,
+  contentTag,
+} from "./ImageTag.ts"
 
 const ENTRYPOINT_SOURCE = resolve(
   import.meta.dir,
@@ -57,6 +68,16 @@ const withCredentialHint =
     }
     return e
   }
+
+const PLATFORM = "linux/amd64"
+
+const missingDockerfile = (path: string) =>
+  Effect.fail(
+    new UserError({
+      message: `No afk.Dockerfile found at ${path}`,
+      hint: "AFK requires an `afk.Dockerfile` at the project root (namespaced away from any other Dockerfile).",
+    }),
+  )
 
 export interface BuildOutput {
   readonly image: string
@@ -153,27 +174,60 @@ export const BuildServiceLive = Layer.effect(
           // so refs with slashes ('refactor/afk'), colons, or other punctuation
           // don't break `docker build -t`.
           const safeBranch = branch.replace(/[^A-Za-z0-9_.-]/g, "-")
-          const tag = `${safeBranch}-${sha.slice(0, 12)}`
-
-          yield* phase("Authenticating against the image registry…")
-          yield* registry.ensureRepoAndAuth(repoName)
+          const userDockerfile = resolve(projectRoot, "afk.Dockerfile")
+          const byContent = config.image?.tag === "content"
+          if (byContent && !existsSync(userDockerfile)) {
+            return yield* missingDockerfile(userDockerfile)
+          }
+          const tag = byContent
+            ? yield* Effect.try({
+                try: () =>
+                  contentTag({
+                    contextDir: projectRoot,
+                    dockerfile: readFileSync(userDockerfile, "utf8"),
+                    entrypoint: readFileSync(ENTRYPOINT_SOURCE, "utf8"),
+                    platform: PLATFORM,
+                  }),
+                catch: (e) =>
+                  new UserError({
+                    message: `Cannot compute the content tag: ${e instanceof UnhashableSourceError ? e.message : String(e)}`,
+                    hint: 'Pin the COPY/ADD sources of afk.Dockerfile, or set image.tag to "ref" in afk.config.json.',
+                  }),
+              })
+            : `${safeBranch}-${sha.slice(0, 12)}`
           const registryHost = yield* registry.registryUri
           const image = `${registryHost}/${repoName}:${tag}`
 
-          const exists = yield* registry.imageExists(repoName, tag)
-          if (exists) {
+          // A content tag is the same for every commit, so it is usually already
+          // pushed: ask the registry first, so a hit never touches docker — not
+          // even `docker login`, which needs a daemon a CI job may not have.
+          if (byContent && (yield* registry.imageExists(repoName, tag))) {
             yield* phase(`Image already exists, skipping build: ${image}`)
             return { image, tag, sha, branch, skipped: true }
           }
 
-          const userDockerfile = resolve(projectRoot, "afk.Dockerfile")
+          yield* phase("Authenticating against the image registry…")
+          yield* registry.ensureRepoAndAuth(repoName).pipe(
+            Effect.mapError((e) =>
+              byContent && e._tag === "DockerError"
+                ? new UserError({
+                    message: `Image ${image} is not in the registry, and this machine cannot build it: ${e.message}`,
+                    hint: "Build it once from a machine with Docker (`afk build`) — needed after every change to afk.Dockerfile or the files it copies.",
+                  })
+                : e,
+            ),
+          )
+
+          if (!byContent) {
+            const exists = yield* registry.imageExists(repoName, tag)
+            if (exists) {
+              yield* phase(`Image already exists, skipping build: ${image}`)
+              return { image, tag, sha, branch, skipped: true }
+            }
+          }
+
           if (!existsSync(userDockerfile)) {
-            return yield* Effect.fail(
-              new UserError({
-                message: `No afk.Dockerfile found at ${userDockerfile}`,
-                hint: "AFK requires an `afk.Dockerfile` at the project root (namespaced away from any other Dockerfile).",
-              }),
-            )
+            return yield* missingDockerfile(userDockerfile)
           }
 
           const buildDir = resolve(projectRoot, ".afk", "build")
@@ -195,7 +249,7 @@ export const BuildServiceLive = Layer.effect(
 
           const prevTags = yield* registry.listLatestTagsByPrefix(
             repoName,
-            `${safeBranch}-`,
+            byContent ? CONTENT_TAG_PREFIX : `${safeBranch}-`,
             1,
           )
           const cacheFromImages = prevTags.map(
@@ -207,7 +261,7 @@ export const BuildServiceLive = Layer.effect(
             contextDir: projectRoot,
             dockerfile: userDockerfile,
             tag: userImageTag,
-            platform: "linux/amd64",
+            platform: PLATFORM,
             cacheFrom: cacheFromImages,
             inlineCache: true,
           })
@@ -216,7 +270,7 @@ export const BuildServiceLive = Layer.effect(
             contextDir: buildDir,
             dockerfile: wrapperDockerfile,
             tag: image,
-            platform: "linux/amd64",
+            platform: PLATFORM,
             cacheFrom: cacheFromImages,
             inlineCache: true,
           })
