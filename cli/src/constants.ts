@@ -190,6 +190,11 @@ export const VM_COMPOSE_PATH = "/etc/afk/compose.yml"
 // this long for it rather than reporting a missing service.
 export const ATTACH_CONTAINER_WAIT_TRIES = 40
 export const ATTACH_CONTAINER_WAIT_SECONDS = 3
+/** Polls (at ATTACH_CONTAINER_WAIT_SECONDS) for the main service's clone to land: 10 min. */
+export const ATTACH_WORKSPACE_WAIT_TRIES = 200
+/** Silent probes for a fresh VM's sshd before the interactive attach: ~3 min. */
+export const SSHD_WAIT_TRIES = 36
+export const SSHD_WAIT_SECONDS = 5
 
 // ---------- Local Backend ----------
 //
