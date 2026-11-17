@@ -97,9 +97,9 @@ not permanent storage.
 
 Realized automatically on the **Local Backend**, where every Run is retained —
 Local runs on no capacity-pricing model, so retaining a finished container is
-free. On **AWS and GCP** retention is available but **opt-in and
-On-Demand-only**: `afk run --retain` stops the instance instead of terminating
-it when the Run ends, preserving its disk for later `afk attach`. It requires
+free. On **AWS, GCP and Azure** retention is available but **opt-in and
+On-Demand-only**: `afk run --retain` stops (on Azure, deallocates) the instance
+instead of terminating it when the Run ends, preserving its disk for later `afk attach`. It requires
 [On-Demand](#spot) capacity because Spot cannot be stopped without losing its
 disk — so `--retain` implies On-Demand, and a Spot Run can never be retained.
 Because a stopped instance still bills for its disk, retention is off by default
@@ -108,7 +108,7 @@ Container instances are ephemeral, so a restarted one is a clean slate rather
 than preserved post-mortem state, the opposite of what retention promises.
 
 Post-mortem inspection of a finished cloud Run is therefore available only when
-it was launched with `--retain` (AWS/GCP); otherwise, and always on Cloudflare,
+it was launched with `--retain` (AWS/GCP/Azure); otherwise, and always on Cloudflare,
 `afk attach` enters only a Run that is still **live** (its command has not yet
 exited). To carry state past a non-retained cloud Run's end, declare a [Session
 Artifact](#session-artifact).
@@ -121,7 +121,7 @@ of retain).
 
 The capacity model a cloud Run launches under. **Spot** is interruptible,
 heavily discounted capacity the provider may reclaim at any time (an AWS Spot
-instance, a GCP `SPOT` VM); **On-Demand** is full-price capacity the provider
+instance, a GCP `SPOT` VM, an Azure Spot VM); **On-Demand** is full-price capacity the provider
 does not reclaim. A cloud Run defaults to Spot — the common case is cheap and
 disposable — and `--on-demand` opts up to On-Demand.
 
@@ -153,19 +153,20 @@ through two channels: it can be the persisted Backend (`afk init --provider
 local`) like any other, _and_ a per-command `--local` flag selects it for that
 invocation only regardless of the persisted Backend.
 
-The four shipped Backends — AWS EC2, GCP Compute Engine, Cloudflare Containers,
-and Local — plus the anticipated Azure Backend are detailed in the [Backends
+The five shipped Backends — AWS EC2, GCP Compute Engine, Azure Virtual
+Machines, Cloudflare Containers, and Local — are detailed in the [Backends
 overview](/afk/backends/overview/).
 
 ## Owner
 
 The developer principal that launched a Run. The form of the principal is
 Backend-specific — an IAM userid on AWS, a Cloudflare Access service-token
-client-id on Cloudflare, the authenticated gcloud account on GCP — but the role
-is the same: it scopes what the developer can see, attach to, or terminate. The
+client-id on Cloudflare, the authenticated gcloud account on GCP, the signed-in
+`az` principal on Azure — but the role is the same: it scopes what the developer can see, attach to, or terminate. The
 Owner is recorded on the underlying compute primitive (an `afk:owner` EC2 tag on
 AWS, a metadata field on the launcher Worker's run registry on Cloudflare, an
-`afk-owner` label on the Compute Engine instance on GCP). A developer is normally
+`afk-owner` label on the Compute Engine instance on GCP, an `afk-owner` tag on
+the VM on Azure). A developer is normally
 only permitted to act on Runs whose Owner matches their own principal; team-wide
 views (`afk ls --all`) are a separate, broader permission.
 
@@ -222,6 +223,9 @@ The concrete artifact type is Backend-specific:
 - On **GCP (Compute Engine)**, the Golden Image is a **custom image** (a VM disk
   image, the AMI analog) built by snapshotting a short-lived builder instance's
   disk after it pre-pulls the list.
+- On **Azure (Virtual Machines)**, the Golden Image is a **generalized managed
+  image** (the AMI analog) captured from a short-lived builder VM after it
+  installs Docker and the Azure CLI and pre-pulls the list.
 
 Golden Images are built explicitly by `afk golden build`, which reads the
 pre-pull list from the active Backend's section of `afk.config.json`. A Run

@@ -6,7 +6,7 @@ import { Output } from "../infra/Output.ts"
 const region = Options.text("region").pipe(
   Options.withDefault("us-east-1"),
   Options.withDescription(
-    "region to bootstrap in (provider=aws|gcp; ignored for cloudflare/local)",
+    "region to bootstrap in (provider=aws|gcp|azure, where it is the Azure location; ignored for cloudflare/local)",
   ),
 )
 
@@ -15,6 +15,7 @@ const provider = Options.choice("provider", [
   "cloudflare",
   "local",
   "gcp",
+  "azure",
 ]).pipe(
   Options.withDefault("aws"),
   Options.withDescription(
@@ -30,7 +31,7 @@ export const init = Command.make(
       const boot = yield* BootstrapService
       const out = yield* Output
       const result = yield* boot.init({
-        provider: provider as "aws" | "cloudflare" | "local" | "gcp",
+        provider: provider as "aws" | "cloudflare" | "local" | "gcp" | "azure",
         region,
         projectDir: process.cwd(),
       })

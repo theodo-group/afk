@@ -28,7 +28,7 @@ export interface ComposeLintInput {
    * rootless `dind`, so it needs the same `network_mode: host` + `extra_hosts`
    * addenda and the same port-collision hard error.
    */
-  readonly backend: "aws" | "cloudflare" | "local" | "gcp"
+  readonly backend: "aws" | "cloudflare" | "local" | "gcp" | "azure"
 }
 
 export interface ComposeLintResult {
@@ -69,11 +69,17 @@ const extractServicePorts = (svc: YAMLMap): string[] => {
  *  passed as an environment value for a wrapper to run. Both are honoured; see the refusal below. */
 const referencesAfkCommand = (main: YAMLMap): boolean => {
   const scalarText = (node: unknown): string =>
-    node instanceof Scalar && typeof node.value === "string" ? node.value : typeof node === "string" ? node : ""
+    node instanceof Scalar && typeof node.value === "string"
+      ? node.value
+      : typeof node === "string"
+        ? node
+        : ""
 
   const command = main.get("command")
   const commandItems =
-    command instanceof YAMLSeq ? command.items.map(scalarText) : [scalarText(command)]
+    command instanceof YAMLSeq
+      ? command.items.map(scalarText)
+      : [scalarText(command)]
   if (commandItems.some((item) => item.includes("${AFK_COMMAND}"))) return true
 
   const env = main.get("environment")
@@ -175,8 +181,12 @@ export const lintCompose = (input: ComposeLintInput): ComposeLintResult => {
 
   const warnings: string[] = []
 
-  if (input.backend === "aws" || input.backend === "gcp") {
-    // AWS/GCP: real VM host Docker daemon, full Compose Contract. Just warn on
+  if (
+    input.backend === "aws" ||
+    input.backend === "gcp" ||
+    input.backend === "azure"
+  ) {
+    // AWS/GCP/Azure: real VM host Docker daemon, full Compose Contract. Just warn on
     // `ports:` (the firewall denies inbound anyway).
     for (const name of serviceNames) {
       const svc = asMap(services.get(name))

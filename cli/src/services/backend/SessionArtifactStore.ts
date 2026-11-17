@@ -3,6 +3,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   UserError,
 } from "../../infra/Errors.ts"
@@ -45,7 +46,12 @@ export class SessionArtifactStore extends Context.Tag("SessionArtifactStore")<
       input: FetchInput,
     ) => Effect.Effect<
       FetchResult,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
   }
 >() {}

@@ -57,6 +57,7 @@ export default defineConfig({
             { label: "Overview", slug: "backends/overview" },
             { label: "AWS EC2", slug: "backends/aws" },
             { label: "GCP Compute Engine", slug: "backends/gcp" },
+            { label: "Azure Virtual Machines", slug: "backends/azure" },
             { label: "Cloudflare Containers", slug: "backends/cloudflare" },
             { label: "Local", slug: "backends/local" },
           ],

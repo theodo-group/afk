@@ -1,0 +1,21 @@
+{
+  "name": "afk-azure-sweeper",
+  "private": true,
+  "version": "0.0.0",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/index.js --external:@azure/functions-core && node -e \"const fs=require('fs');fs.copyFileSync('host.json','dist/host.json');fs.writeFileSync('dist/package.json',JSON.stringify({name:'afk-azure-sweeper',version:'0.0.0',main:'index.js'},null,2))\""
+  },
+  "dependencies": {
+    "@azure/arm-compute": "^22.0.0",
+    "@azure/data-tables": "^13.2.0",
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

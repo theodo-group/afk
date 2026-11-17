@@ -28,8 +28,10 @@ cli/src/
 ├── adapters/           Thin one-tag wrappers over external tools/SDKs.
 │   ├── Git.ts, Docker.ts, Terraform.ts
 │   ├── aws/              Sts, Ec2, S3, Ecr, Ssm, Iam, Logs, DynamoDb
-│   └── gcp/              Auth, Gce, Gcs, Firestore, SecretManager,
-│                         ArtifactRegistry, CloudLogging, Iam, gcloudCli
+│   ├── gcp/              Auth, Gce, Gcs, Firestore, SecretManager,
+│   │                     ArtifactRegistry, CloudLogging, Iam, gcloudCli
+│   └── azure/            AzAuth, AzVm, Acr, KeyVault, AzStorage, AzRbac,
+│                         AzureNames, azCli
 │
 ├── schema/             effect Schema definitions + branded types.
 │   └── Run.ts, Config.ts, Secret.ts, TeamMember.ts
@@ -51,6 +53,7 @@ cli/src/
 │   ├── aws/              AwsCompute, AwsImageRegistry, … + index.ts aggregate
 │   ├── cloudflare/       CloudflareCompute, …            + index.ts aggregate
 │   ├── gcp/              GcpCompute, …                   + index.ts aggregate
+│   ├── azure/            AzureCompute, …                 + index.ts aggregate
 │   └── local/            LocalCompute, …  (rootless dind) + index.ts aggregate
 │
 └── commands/           @effect/cli Command definitions, one per file.
@@ -77,7 +80,7 @@ The spine of the codebase.
 export class Compute extends Context.Tag("Compute")<
   Compute,
   {
-    readonly backendName: "aws" | "cloudflare" | "local" | "gcp"
+    readonly backendName: "aws" | "cloudflare" | "local" | "gcp" | "azure"
     readonly prepare: (input: StartInput) => Effect.Effect<PreparedRun, …>
     readonly launch:  (plan: PreparedRun) => Effect.Effect<RunStarted, …>
     // …kill, listMine, listAll, findByRunId, attach, callerPrincipal
@@ -113,7 +116,7 @@ const Leaves = Layer.mergeAll(
 export const AwsBackendLive = AwsComputeLive.pipe(Layer.provideMerge(Leaves))
 ```
 
-**Adding a Backend:** implement the eleven `services/backend/` tags (Compute, ImageRegistry, SecretStore, LogStore, RunHistory, ScheduleStore, GoldenImageStore, BackendDoctor, Team, Provisioner, SessionArtifactStore) under `backends/<new>/`, write `<New>BackendLive` in its `index.ts`, add one branch to `cli.ts`. No command changes — the GCP Backend landed exactly this way.
+**Adding a Backend:** implement the eleven `services/backend/` tags (Compute, ImageRegistry, SecretStore, LogStore, RunHistory, ScheduleStore, GoldenImageStore, BackendDoctor, Team, Provisioner, SessionArtifactStore) under `backends/<new>/`, write `<New>BackendLive` in its `index.ts`, add one branch to `cli.ts`. No command changes — the GCP and Azure Backends landed exactly this way.
 
 ## Layer composition in `cli.ts`
 
@@ -132,12 +135,12 @@ SubprocessLive (infra)                                   infraLayer
 
 Two subtleties before editing this file:
 
-- **The Backend is picked synchronously, before the runtime exists.** `pickBackendName()` walks up from cwd, reads `afk.config.json`, returns `"aws"` (default), `"cloudflare"`, `"gcp"`, or `"local"` — a layer can't be selected from inside an Effect because the layer _provides_ the runtime. The aggregates have different external deps (AWS SDK vs gcloud vs Docker) and can't be unified into one value, so `cli.ts` branches into four fully-resolved `backendLayer`s; downstream is identical. `pickBackendName()` also checks `argv` for `--local` _first_ — the Local Backend is reachable both as the persisted `backend` and as a per-command override (the only Backend with two selection channels). Because `--local` is consumed here, before the runtime, the `program` strips it from the argv handed to `@effect/cli` so a command's args never swallow it.
+- **The Backend is picked synchronously, before the runtime exists.** `pickBackendName()` walks up from cwd, reads `afk.config.json`, returns `"aws"` (default), `"cloudflare"`, `"gcp"`, `"azure"`, or `"local"` — a layer can't be selected from inside an Effect because the layer _provides_ the runtime. The aggregates have different external deps (AWS SDK vs gcloud vs az vs Docker) and can't be unified into one value, so `cli.ts` branches into five fully-resolved `backendLayer`s; downstream is identical. `pickBackendName()` also checks `argv` for `--local` _first_ — the Local Backend is reachable both as the persisted `backend` and as a per-command override (the only Backend with two selection channels). Because `--local` is consumed here, before the runtime, the `program` strips it from the argv handed to `@effect/cli` so a command's args never swallow it.
 - **`.env` loads even earlier.** `loadProjectDotenv()` runs at import time, walking up to the project root and loading the `.env` beside `afk.config.json`. It does not override already-exported variables.
 
 Output mode and log level come from `argv` (`--json/--verbose/--quiet`) and are provided as separate layers at the call site. `OutputLive` is provided _outside_ `AppLive` (after it in the provide chain): backend layers stream progress through the `Output` tag (the `Provisioner` prints its `terraform`/`wrangler` steps), so `AppLive` carries an `Output` requirement this outer provide satisfies.
 
-**One tag may outrun the Backends.** `ScheduleStore` is implemented on AWS only; the other three aggregates provide a layer whose every operation fails with a `UserError` naming the Backend. That keeps the `afk schedule` commands written against one neutral seam and keeps `AppLive` resolved, and the refusal says why rather than surfacing as a missing-service defect. It is not a stub of *another* Backend's work — which is the thing the next paragraph rules out.
+**One tag may outrun the Backends.** `ScheduleStore` is implemented on AWS only; the other four aggregates provide a layer whose every operation fails with a `UserError` naming the Backend. That keeps the `afk schedule` commands written against one neutral seam and keeps `AppLive` resolved, and the refusal says why rather than surfacing as a missing-service defect. It is not a stub of *another* Backend's work — which is the thing the next paragraph rules out.
 
 **No cross-backend stubs.** Every command depends only on neutral tags resolved by the active aggregate, so no aggregate stubs another's impls. (An earlier design stubbed the inactive backend's golden builder to keep `AppLive`'s type resolved; folding every builder into the one `GoldenImageStore` seam removed the need.)
 
@@ -159,7 +162,7 @@ All terminal output goes through the `Output` tag (`infra/Output.ts`) via `out.e
 
 Run-id is optional: omitted with a TTY, the command prompts (`Prompt.select`) from recent `HistoryService` rows so the developer picks a Run instead of copying an id; omitted without a TTY it errors rather than hang a pipe.
 
-Every Backend keys logs per service so the filter works identically. AWS: per-service CloudWatch streams — the compose path injects a per-service `logging.options.awslogs-stream: <runId>/<service>` at submit time (the daemon default `{{.Name}}` is the _container_ name, which doesn't match). GCP: the `gcplogs` driver injected per service (labelled `runId` + `service`); the tail filters on the labels under the entry's `jsonPayload.container.metadata`. CF: no log driver, so the golden bootstrap ships each service's new log bytes to the launcher every few seconds (`POST /runs/:id/logs-chunk`), which the RunDO stores as ordered R2 objects — live and untruncated; a budgeted `{ exitCode, services: { <name>: <b64> } }` map still rides `/runs/:id/complete` as the fallback read path for pre-chunk Goldens. Local: the outer container's bootstrap streams each service's `docker compose logs` _live_ into a bind-mounted `logs/<service>.log` (plus a prefixed `combined.log` for `--all`), which the CLI reads straight off disk — so scoping is correct while the Run is alive, not just after exit.
+Every Backend keys logs per service so the filter works identically. AWS: per-service CloudWatch streams — the compose path injects a per-service `logging.options.awslogs-stream: <runId>/<service>` at submit time (the daemon default `{{.Name}}` is the _container_ name, which doesn't match). GCP: the `gcplogs` driver injected per service (labelled `runId` + `service`); the tail filters on the labels under the entry's `jsonPayload.container.metadata`. Azure: no log driver either, so a loop on the VM re-uploads each service's whole `docker logs` to the blob `afk-logs/<runId>/<service>.log` (plus `combined.log`) every few seconds and drops a `.done` marker after its last pass; the tail polls the blob and stops on the marker. CF: no log driver, so the golden bootstrap ships each service's new log bytes to the launcher every few seconds (`POST /runs/:id/logs-chunk`), which the RunDO stores as ordered R2 objects — live and untruncated; a budgeted `{ exitCode, services: { <name>: <b64> } }` map still rides `/runs/:id/complete` as the fallback read path for pre-chunk Goldens. Local: the outer container's bootstrap streams each service's `docker compose logs` _live_ into a bind-mounted `logs/<service>.log` (plus a prefixed `combined.log` for `--all`), which the CLI reads straight off disk — so scoping is correct while the Run is alive, not just after exit.
 
 ## Errors
 
@@ -170,10 +173,11 @@ Failures travel in the Effect error channel — never thrown — as `Data.Tagged
 These do not use Effect and follow their own conventions:
 
 - **`worker/cloudflare/`** — launcher Worker. Hono + Durable Objects, async/await.
-- **`terraform/aws/`**, **`terraform/gcp/`** — HCL.
+- **`terraform/aws/`**, **`terraform/gcp/`**, **`terraform/azure/`** — HCL.
 - **`terraform/aws/lambda/sweeper/`** — TypeScript Lambda, plain AWS SDK.
 - **`terraform/aws/lambda/scheduler/`** — a Lambda *container image* (bun + git + the AWS CLI) whose custom-runtime `bootstrap` answers each tick with `afk schedule tick`. A container because afk is Bun-only, and the CLI rather than a handler module so the tick a developer runs by hand and the deployed one are the same code path. Opt-in: `scheduler_enabled`.
 - **`terraform/gcp/function/sweeper/`** — TypeScript Cloud Function, plain Google SDKs.
+- **`terraform/azure/`** — HCL; **`terraform/azure/function/sweeper/`** — TypeScript Azure Function (timer), plain Azure SDKs.
 - **`entrypoint/entrypoint.sh`** — CLI-owned bash entrypoint baked into agent images at build time.
 
 ## Tests

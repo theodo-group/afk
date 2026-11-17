@@ -31,6 +31,7 @@ The CLI surface is **identical across Backends**. `afk run`, `afk attach`,
 
 - an **EC2 instance** on AWS,
 - a **Compute Engine VM** on GCP,
+- an **Azure VM** on Azure,
 - a **Cloudflare Container instance**, or
 - a **Docker container** on your own machine (Local).
 
@@ -60,7 +61,7 @@ architecture-beta
 
 This repository is the **base layer**. It ships:
 
-- the per-Backend infrastructure (Terraform for AWS and GCP, a launcher Worker
+- the per-Backend infrastructure (Terraform for AWS, GCP and Azure, a launcher Worker
   for Cloudflare),
 - the CLI that drives them, and
 - the **contract** that consumer repos follow in order to run under AFK.

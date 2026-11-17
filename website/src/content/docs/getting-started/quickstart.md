@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: Stand up your first Run on Local, AWS, GCP, or Cloudflare — the CLI surface is identical from there.
+description: Stand up your first Run on Local, AWS, GCP, Azure, or Cloudflare — the CLI surface is identical from there.
 ---
 
 Pick a Backend; the CLI surface is identical from there. **Local** needs only
@@ -72,6 +72,32 @@ afk ls && afk logs <run-id>
 Teardown: `afk destroy` (dry-run) / `afk destroy --yes`. See the
 [GCP backend doc](/afk/backends/gcp/) for exactly what is removed.
 
+## On Azure
+
+Same one-VM-per-Run shape again — an Azure VM per Run, booted from a
+generalized managed-image Golden Image, self-deleted on exit. Differences:
+attach rides Azure Bastion with Microsoft Entra ID sign-in (no public IP) and
+the Owner is your signed-in `az` principal.
+
+In a fresh consumer repo (after `az login`, `az account set --subscription <id>`
+and `az extension add --name bastion && az extension add --name ssh`):
+
+```sh
+afk init --provider azure --region westeurope # resolves the subscription, creates the state storage + scaffolds files
+afk provision                                 # terraform apply: VNet + NAT + Bastion, identities, ACR, Key Vault, Storage, sweeper Function
+afk golden build                              # one-time per project (~10 min): captures a builder VM as a managed image
+afk secrets put github-token <PAT>            # a GitHub PAT (Key Vault) so the VM can clone source
+echo "GITHUB_TOKEN=secret:github-token" >> .afk.env
+
+# Author + push your contract files (same as AWS), then launch.
+git add afk.Dockerfile afk.compose.yml afk.config.json && git commit -m "configure AFK" && git push
+afk run bun --version                         # Spot capacity by default; --on-demand for interruption-resistance
+afk ls && afk logs <run-id>
+```
+
+Teardown: `afk destroy` (dry-run) / `afk destroy --yes` removes the whole afk
+resource group. See the [Azure backend doc](/afk/backends/azure/).
+
 ## On Cloudflare
 
 The CF Backend uses **rootless Docker-in-Docker** inside one Container instance
@@ -116,7 +142,7 @@ Two variations once the basics work, both detailed in the
   Run](/afk/concepts/glossary/#interactive-run) — a box with no command that you
   attach into and drive by hand. On-Demand by default (a Spot reclaim would kill
   your session); ends via `afk kill` or its timeout (default 24h).
-- **`afk run --retain`** (AWS/GCP, implies On-Demand) stops the instance instead
+- **`afk run --retain`** (AWS/GCP/Azure, implies On-Demand) stops the instance instead
   of terminating it when the Run ends, so `afk attach` can resume it later for
   [post-mortem inspection](/afk/concepts/glossary/#retention). Reclaimed after the
   retention period (default 7 days).

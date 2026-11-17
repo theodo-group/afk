@@ -58,6 +58,14 @@ whatever sha you checked out.
     - **OS Login + IAP TCP forwarding** (`roles/iap.tunnelResourceAccessor`,
       granted by the module) for `afk attach` — no public IP, no SSH
   </TabItem>
+  <TabItem label="Azure">
+    - **Terraform ≥ 1.10** and **npm** (the sweeper Function is bundled at apply)
+    - **`az` CLI** signed in (`az login`); the signed-in principal is the
+      Run's Owner. Owner (or Contributor + User Access Administrator) on the
+      subscription to provision
+    - The **`bastion`** and **`ssh`** az extensions for `afk attach`
+      (`az extension add --name bastion && az extension add --name ssh`)
+  </TabItem>
   <TabItem label="Cloudflare">
     - **`wrangler`** (Cloudflare's deploy CLI) on PATH
     - **`CLOUDFLARE_API_TOKEN`** in a gitignored `.env` at the repo root (afk

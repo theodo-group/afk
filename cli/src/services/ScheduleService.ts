@@ -20,6 +20,7 @@ import {
   ConfigError,
   DockerError,
   GcpError,
+  AzureError,
   GitError,
   UserError,
 } from "../infra/Errors.ts"
@@ -53,6 +54,8 @@ type SubmitError =
   | AwsError
   | CloudflareError
   | GcpError
+  | AzureError
+  | AzureError
   | DockerError
   | GitError
   | ConfigError

@@ -4,6 +4,7 @@ import {
   AwsError,
   CloudflareError,
   GcpError,
+  AzureError,
   ConfigError,
   UserError,
 } from "../infra/Errors.ts"
@@ -48,7 +49,12 @@ export class HistoryService extends Context.Tag("HistoryService")<
       input: QueryInput,
     ) => Effect.Effect<
       ReadonlyArray<RunHistoryRow>,
-      AwsError | CloudflareError | GcpError | ConfigError | UserError
+      | AwsError
+      | CloudflareError
+      | GcpError
+      | AzureError
+      | ConfigError
+      | UserError
     >
   }
 >() {}

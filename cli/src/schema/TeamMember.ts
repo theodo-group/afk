@@ -7,6 +7,7 @@ export const TeamMember = Schema.Struct({
     "trusted-principal",
     "cf-service-token",
     "gcp-principal",
+    "azure-principal",
   ),
   arn: Schema.String,
   createdAt: Schema.optional(Schema.String),

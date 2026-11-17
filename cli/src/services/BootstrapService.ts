@@ -24,8 +24,14 @@ import {
 } from "../infra/Errors.ts"
 import { deriveAccountId } from "../infra/CfToml.ts"
 import { Subprocess } from "../infra/Subprocess.ts"
+import { azureNameSuffix } from "../adapters/azure/AzureNames.ts"
 import {
   AFK_STATE_BUCKET_PREFIX,
+  AZURE_DEFAULT_ALLOWED_VM_SIZES,
+  AZURE_DEFAULT_LOCATION,
+  AZURE_DEFAULT_RESOURCE_GROUP,
+  AZURE_DEFAULT_VM_SIZE,
+  AZURE_STATE_CONTAINER,
   CONFIG_FILE,
   ecrRepoPrefix,
   ENV_FILE,
@@ -62,14 +68,23 @@ const TEMPLATE_GCP_TERRAFORM_DIR = resolve(
   "gcp",
 )
 
+const TEMPLATE_AZURE_TERRAFORM_DIR = resolve(
+  import.meta.dir,
+  "..",
+  "..",
+  "..",
+  "terraform",
+  "azure",
+)
+
 export interface InitInput {
-  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp" | "azure"
   readonly region: string
   readonly projectDir: string
 }
 
 export interface InitResult {
-  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp" | "azure"
   readonly configCreated: boolean
   readonly envCreated: boolean
   readonly gitignoreUpdated: boolean
@@ -86,7 +101,7 @@ export interface InitResult {
 }
 
 export interface DestroyInput {
-  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp" | "azure"
   readonly region: string
   readonly projectDir: string
   /** ECR repo suffix — the consumer's source-repo name (`afk/<name>`). */
@@ -98,7 +113,7 @@ export interface DestroyInput {
 }
 
 export interface DestroyResult {
-  readonly provider: "aws" | "cloudflare" | "local" | "gcp"
+  readonly provider: "aws" | "cloudflare" | "local" | "gcp" | "azure"
   readonly executed: boolean
   /** Human-readable lines describing each planned/performed action. */
   readonly actions: ReadonlyArray<string>
@@ -1192,6 +1207,299 @@ export const BootstrapServiceLive = Layer.effect(
         }
       })
 
+    // Best-effort read of one `az` value: "" when az is missing or signed out,
+    // so init scaffolds with a placeholder instead of failing.
+    const azValue = (args: ReadonlyArray<string>) =>
+      sub.run("az", [...args, "--output", "tsv", "--only-show-errors"]).pipe(
+        Effect.map((r) => r.stdout.trim()),
+        Effect.catchAll(() => Effect.succeed("")),
+      )
+    const azSucceeds = (args: ReadonlyArray<string>) =>
+      sub.run("az", [...args, "--output", "none", "--only-show-errors"]).pipe(
+        Effect.as(true),
+        Effect.catchAll(() => Effect.succeed(false)),
+      )
+    const resolveAzureSubscription = azValue([
+      "account",
+      "show",
+      "--query",
+      "id",
+    ])
+
+    // `afk init` defaults --region to AWS's us-east-1; on Azure that is not a
+    // location name, so the default falls through to the Azure one.
+    const azureLocationOf = (region: string) =>
+      region === "us-east-1" ? AZURE_DEFAULT_LOCATION : region
+
+    // Azure init mirrors initGcp: scaffold the config block, copy the
+    // terraform/azure module, render an azurerm backend.tf, and create the
+    // remote-state storage up front — in a resource group of its own, since
+    // the module owns (and destroys) the afk one. Best-effort throughout: a
+    // signed-out az leaves placeholders and says so.
+    const initAzure = (
+      input: InitInput,
+    ): Effect.Effect<InitResult, UserError> =>
+      Effect.gen(function* () {
+        const { projectDir } = input
+        const location = azureLocationOf(input.region)
+        const originUrl = yield* detectOriginUrl(projectDir, sub.run)
+        const subscriptionId = yield* resolveAzureSubscription
+        const configPath = resolve(projectDir, CONFIG_FILE)
+        const existingConfig = existsSync(configPath)
+          ? (JSON.parse(readFileSync(configPath, "utf8")) as {
+              backend?: string
+              gitUrl?: string
+              azure?: Record<string, unknown>
+              [k: string]: unknown
+            })
+          : undefined
+        const resourceGroup =
+          typeof existingConfig?.azure?.resourceGroup === "string"
+            ? existingConfig.azure.resourceGroup
+            : AZURE_DEFAULT_RESOURCE_GROUP
+        const stateResourceGroup = `${resourceGroup}-tfstate`
+        const stateAccount =
+          subscriptionId === ""
+            ? "REPLACE_WITH_STATE_ACCOUNT"
+            : `afktf${azureNameSuffix({ subscriptionId, resourceGroup })}`
+
+        const stateCreated =
+          subscriptionId === ""
+            ? false
+            : (yield* azSucceeds([
+                "group",
+                "create",
+                "--name",
+                stateResourceGroup,
+                "--location",
+                location,
+              ])) &&
+              (yield* azSucceeds([
+                "storage",
+                "account",
+                "create",
+                "--name",
+                stateAccount,
+                "--resource-group",
+                stateResourceGroup,
+                "--location",
+                location,
+                "--sku",
+                "Standard_LRS",
+                "--min-tls-version",
+                "TLS1_2",
+                "--allow-blob-public-access",
+                "false",
+              ])) &&
+              (yield* azSucceeds([
+                "storage",
+                "container",
+                "create",
+                "--name",
+                AZURE_STATE_CONTAINER,
+                "--account-name",
+                stateAccount,
+                "--auth-mode",
+                "key",
+              ]))
+
+        const terraformDir = resolve(projectDir, "terraform", "azure")
+        const terraformDirCreated = !existsSync(terraformDir)
+        if (existsSync(TEMPLATE_AZURE_TERRAFORM_DIR)) {
+          mkdirSync(terraformDir, { recursive: true })
+          yield* Effect.try({
+            try: () => {
+              cpSync(TEMPLATE_AZURE_TERRAFORM_DIR, terraformDir, {
+                recursive: true,
+                errorOnExist: false,
+                force: false,
+              })
+            },
+            catch: (cause) =>
+              new UserError({
+                message: `failed to copy terraform module: ${String(cause)}`,
+              }),
+          })
+          writeFileSync(
+            resolve(terraformDir, "backend.tf"),
+            [
+              `terraform {`,
+              `  backend "azurerm" {`,
+              `    resource_group_name  = "${stateResourceGroup}"`,
+              `    storage_account_name = "${stateAccount}"`,
+              `    container_name       = "${AZURE_STATE_CONTAINER}"`,
+              `    key                  = "afk.tfstate"`,
+              `  }`,
+              `}`,
+              ``,
+            ].join("\n"),
+          )
+        }
+
+        const azureBlock = {
+          ...(subscriptionId === "" ? {} : { subscriptionId }),
+          location,
+          resourceGroup,
+          defaultVmSize: AZURE_DEFAULT_VM_SIZE,
+          allowedVmSizes: [...AZURE_DEFAULT_ALLOWED_VM_SIZES],
+          cachedImages: [] as string[],
+        }
+        const configAction =
+          existingConfig === undefined
+            ? "created"
+            : existingConfig.azure !== undefined
+              ? "updated azure block"
+              : `added azure block (backend ${existingConfig.backend ?? "?"} → azure)`
+        const nextConfig =
+          existingConfig === undefined
+            ? {
+                backend: "azure",
+                gitUrl: originUrl ?? "",
+                mainService: "agent",
+                defaultTimeoutHours: 4,
+                azure: azureBlock,
+              }
+            : {
+                ...existingConfig,
+                backend: "azure",
+                gitUrl:
+                  (existingConfig.gitUrl ?? "") === "" && originUrl !== null
+                    ? originUrl
+                    : existingConfig.gitUrl,
+                // Keep what the developer set; the location just typed wins.
+                azure: {
+                  ...azureBlock,
+                  ...(existingConfig.azure ?? {}),
+                  location,
+                },
+              }
+        writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`)
+
+        const envCreated = upsertEnvFile(projectDir, originUrl)
+        const gitignoreUpdated = upsertGitignore(projectDir)
+
+        const status = (b: boolean) => (b ? "created" : "already present")
+        const humanReport = [
+          `terraform dir      ${terraformDir} (${status(terraformDirCreated)})`,
+          `state storage      ${stateResourceGroup}/${stateAccount} (${
+            subscriptionId === ""
+              ? "unresolved (az not signed in)"
+              : stateCreated
+                ? "ready"
+                : "not creatable (check perms) — create it by hand"
+          })`,
+          `afk.config.json    ${configAction}`,
+          `.afk.env           ${status(envCreated)}`,
+          `.gitignore         ${gitignoreUpdated ? "updated" : "already had .afk.env / .afk/"}`,
+          subscriptionId === ""
+            ? `  ⚠ az not signed in — run \`az login\`, then re-run \`afk init --provider azure\``
+            : `  subscription       ${subscriptionId}`,
+          ``,
+          `Next:`,
+          `  0. az extension add --name bastion && az extension add --name ssh   # for afk attach`,
+          `  1. afk provision              # terraform init + apply (VNet, Bastion, identities, ACR, Key Vault, storage, sweeper)`,
+          `  2. afk golden build           # one-time Golden managed-image build`,
+          `  3. afk secrets put github-token <PAT>`,
+          `  4. afk run "<your command>"`,
+        ].join("\n")
+
+        return {
+          provider: "azure" as const,
+          stateBucket: stateAccount,
+          stateBucketCreated: stateCreated,
+          terraformDir,
+          terraformDirCreated,
+          configCreated: existingConfig === undefined,
+          envCreated,
+          gitignoreUpdated,
+          humanReport,
+        }
+      })
+
+    // Azure teardown runs `terraform destroy` in terraform/azure, which takes
+    // the whole afk resource group with it — Runs, Golden images and secrets
+    // included, since they all live inside it. Only the state storage, kept in
+    // its own group, is left for the developer to remove.
+    const destroyAzure = (
+      input: DestroyInput,
+    ): Effect.Effect<DestroyResult, UserError | SubprocessError> =>
+      Effect.gen(function* () {
+        const { projectDir, execute } = input
+        const location = azureLocationOf(input.region)
+        const subscriptionId = yield* resolveAzureSubscription
+        const configPath = resolve(projectDir, CONFIG_FILE)
+        const resourceGroup = existsSync(configPath)
+          ? ((
+              JSON.parse(readFileSync(configPath, "utf8")) as {
+                azure?: { resourceGroup?: string }
+              }
+            ).azure?.resourceGroup ?? AZURE_DEFAULT_RESOURCE_GROUP)
+          : AZURE_DEFAULT_RESOURCE_GROUP
+        const terraformDir = resolve(projectDir, "terraform", "azure")
+        const hasTerraform = existsSync(terraformDir)
+
+        const actions = [
+          hasTerraform
+            ? `terraform destroy in ${terraformDir} (resource group ${resourceGroup}: Run VMs, Golden images, ACR, Key Vault, storage, network, sweeper)`
+            : `no terraform/azure dir — skipping terraform destroy`,
+        ]
+
+        if (!execute) {
+          return {
+            provider: "azure" as const,
+            executed: false,
+            actions,
+            humanReport: [
+              `DRY RUN — nothing has been deleted.`,
+              `Backend: azure   Location: ${location}   Subscription: ${subscriptionId || "(unset)"}`,
+              ``,
+              `Would perform:`,
+              ...actions.map((a, i) => `  ${i + 1}. ${a}`),
+              ``,
+              `Re-run with --yes to execute. This is irreversible.`,
+            ].join("\n"),
+          }
+        }
+
+        if (subscriptionId === "") {
+          return yield* Effect.fail(
+            new UserError({
+              message:
+                "az is not signed in — cannot terraform destroy the Azure backend.",
+              hint: "Run `az login` first.",
+            }),
+          )
+        }
+
+        const done = hasTerraform
+          ? yield* terraform
+              .destroy({
+                dir: terraformDir,
+                vars: {
+                  subscription_id: subscriptionId,
+                  location,
+                  resource_group: resourceGroup,
+                },
+              })
+              .pipe(Effect.as(["terraform destroy completed"]))
+          : []
+
+        return {
+          provider: "azure" as const,
+          executed: true,
+          actions: done,
+          humanReport: [
+            `Teardown complete (backend: azure, resource group: ${resourceGroup}).`,
+            ``,
+            ...done.map((d) => `  - ${d}`),
+            ``,
+            `Manual follow-up: the Terraform state lives in resource group ${resourceGroup}-tfstate`,
+            `  (az group delete --name ${resourceGroup}-tfstate).`,
+            `Local files (terraform/azure/, afk.config.json, .afk.env) were left in place.`,
+          ].join("\n"),
+        }
+      })
+
     return BootstrapService.of({
       init: (input) =>
         input.provider === "cloudflare"
@@ -1200,7 +1508,9 @@ export const BootstrapServiceLive = Layer.effect(
             ? initLocal(input)
             : input.provider === "gcp"
               ? initGcp(input)
-              : initAws(input),
+              : input.provider === "azure"
+                ? initAzure(input)
+                : initAws(input),
       destroy: (input) =>
         input.provider === "cloudflare"
           ? destroyCloudflare(input)
@@ -1208,7 +1518,9 @@ export const BootstrapServiceLive = Layer.effect(
             ? destroyLocal(input)
             : input.provider === "gcp"
               ? destroyGcp(input)
-              : destroyAws(input),
+              : input.provider === "azure"
+                ? destroyAzure(input)
+                : destroyAws(input),
     })
   }),
 )
