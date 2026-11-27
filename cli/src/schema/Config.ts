@@ -133,6 +133,7 @@ export const GcpBackendConfig = Schema.Struct({
    * Absent ⇒ the image's own size (historical behavior).
    */
   bootDiskSizeGb: Schema.optional(Schema.Number),
+  idleTimeoutMinutes: Schema.optional(Schema.Number),
   /** Images pre-pulled into the GCE Golden custom image by `afk golden build`. */
   cachedImages: Schema.optional(Schema.Array(Schema.String)),
 })

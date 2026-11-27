@@ -9,10 +9,12 @@ import {
   type PlanGcpRunInput,
 } from "./GcpRunPlan.ts"
 import {
+  GCP_DEFAULT_IDLE_TIMEOUT_MINUTES,
   GCP_LABEL_MANAGED,
   GCP_LABEL_OWNER,
   GCP_LABEL_RETAIN,
   GCP_LABEL_RUN_ID,
+  SESSION_KEEPALIVE_COMMAND,
 } from "../../constants.ts"
 
 const baseInput = (
@@ -130,6 +132,85 @@ describe("planGcpRun", () => {
       const script = result.right.backendPlanBase.startupScript
       expect(script).not.toContain("/var/run/docker.sock")
       expect(script).toContain("socket left to root")
+    }
+  })
+
+  it("starts an idle watchdog before an Interactive Run's workload", () => {
+    const result = planGcpRun(
+      baseInput({ startInput: { command: [...SESSION_KEEPALIVE_COMMAND] } }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const script = result.right.backendPlanBase.startupScript
+      expect(script).toContain("afk_idle_watchdog &")
+      expect(script).toContain("sport = :22")
+      expect(script).toContain("docker stats --no-stream")
+      expect(script).toContain(
+        `afk-startup: idle for ${GCP_DEFAULT_IDLE_TIMEOUT_MINUTES} min`,
+      )
+      expect(script.indexOf("afk_idle_watchdog &")).toBeLessThan(
+        script.indexOf("timeout --preserve-status"),
+      )
+    }
+  })
+
+  it("ends an idle Run the way its own exit does: delete, or stop when retained", () => {
+    const plan = (retain: boolean) =>
+      planGcpRun(
+        baseInput({
+          startInput: { command: [...SESSION_KEEPALIVE_COMMAND], retain },
+        }),
+      )
+    const watchdogOf = (r: ReturnType<typeof plan>) =>
+      Either.isRight(r)
+        ? (r.right.backendPlanBase.startupScript.split(
+            "afk_idle_watchdog() {",
+          )[1] ?? "")
+        : ""
+    expect(watchdogOf(plan(false))).toContain("gcloud compute instances delete")
+    expect(watchdogOf(plan(true))).toContain("gcloud compute instances stop")
+    expect(watchdogOf(plan(true))).not.toContain(
+      "gcloud compute instances delete",
+    )
+  })
+
+  it("honours the configured idle timeout", () => {
+    const result = planGcpRun(
+      baseInput({
+        config: { gcp: { idleTimeoutMinutes: 15 } },
+        startInput: { command: [...SESSION_KEEPALIVE_COMMAND] },
+      }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const script = result.right.backendPlanBase.startupScript
+      expect(script).toContain("afk-startup: idle for 15 min")
+      expect(script).toContain('[ "$_idle" -ge 15 ]')
+    }
+  })
+
+  it("turns the idle watchdog off at 0", () => {
+    const result = planGcpRun(
+      baseInput({
+        config: { gcp: { idleTimeoutMinutes: 0 } },
+        startInput: { command: [...SESSION_KEEPALIVE_COMMAND] },
+      }),
+    )
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.startupScript).not.toContain(
+        "afk_idle_watchdog",
+      )
+    }
+  })
+
+  it("leaves a Run with a developer command to end on its own", () => {
+    const result = planGcpRun(baseInput())
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right.backendPlanBase.startupScript).not.toContain(
+        "afk_idle_watchdog",
+      )
     }
   })
 

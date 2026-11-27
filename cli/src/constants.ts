@@ -258,6 +258,9 @@ export const GCP_LABEL_VALUE_MAX = 63
 export const GCP_DEFAULT_REGION = "us-central1"
 export const GCP_DEFAULT_ZONE = "us-central1-a"
 export const GCP_DEFAULT_MACHINE_TYPE = "e2-standard-4"
+export const GCP_DEFAULT_IDLE_TIMEOUT_MINUTES = 60
+export const GCP_IDLE_CHECK_SECONDS = 60
+export const GCP_IDLE_CPU_PERCENT = 5
 export const GCP_DEFAULT_ALLOWED_MACHINE_TYPES = [
   "e2-standard-2",
   "e2-standard-4",

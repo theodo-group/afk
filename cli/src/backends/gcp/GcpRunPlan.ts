@@ -15,6 +15,7 @@ import { retainedUntilIso } from "../../services/retention.ts"
 import {
   GCP_ARTIFACTS_BUCKET_PREFIX,
   GCP_DEFAULT_MACHINE_TYPE,
+  GCP_DEFAULT_IDLE_TIMEOUT_MINUTES,
   GCP_DEFAULT_REGION,
   GCP_DEFAULT_ZONE,
   GCP_LABEL_BRANCH,
@@ -29,6 +30,7 @@ import {
   GCP_LABEL_VALUE_MAX,
   DEFAULT_MAIN_SERVICE,
   SESSION_ARTIFACT_MAX_BYTES,
+  SESSION_KEEPALIVE_COMMAND,
 } from "../../constants.ts"
 
 // ---------------------------------------------------------------------------
@@ -68,6 +70,9 @@ export const sanitizeLabel = (raw: string): string =>
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "-")
     .slice(0, GCP_LABEL_VALUE_MAX)
+
+const isInteractiveRun = (command: ReadonlyArray<string>): boolean =>
+  command.join(" ") === SESSION_KEEPALIVE_COMMAND.join(" ")
 
 const labelsToMap = (labels: ReadonlyArray<Label>): Record<string, string> =>
   Object.fromEntries(labels.map((l) => [l.key, l.value]))
@@ -283,6 +288,9 @@ export const planGcpRun = (
     })),
     compose: composeContent,
     ownerUid: i.ownerUid,
+    idleTimeoutMinutes: isInteractiveRun(input.command)
+      ? (config.gcp?.idleTimeoutMinutes ?? GCP_DEFAULT_IDLE_TIMEOUT_MINUTES)
+      : 0,
     sessionArtifactBases: collectionBases(config.sessionArtifacts ?? []),
     sessionArtifactBucket: bucket,
     sessionArtifactPrefix: `${i.sourceRepoName}/${i.runId}/session-artifacts/`,
