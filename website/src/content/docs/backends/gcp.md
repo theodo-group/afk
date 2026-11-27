@@ -42,6 +42,7 @@ This document covers what the backend provisions and how its attach / lifecycle 
       "n2-standard-4"
     ],
     "bootDiskSizeGb": 100,
+    "idleTimeoutMinutes": 60,
     "cachedImages": ["postgres:16", "redis:7"]
   }
 }
@@ -49,6 +50,7 @@ This document covers what the backend provisions and how its attach / lifecycle 
 
 - `defaultMachineType` is used when `afk run` is called without `--machine-type`.
 - `bootDiskSizeGb` sizes each Run's boot disk. Absent, a Run inherits the Golden Image's size, which an agent image plus a cloned workspace and its build outputs can fill (`No space left on device` mid-Run). Debian grows the filesystem to the disk on boot, so the Golden Image needs no rebuild; the value can only grow the image's size.
+- `idleTimeoutMinutes` ends an idle Interactive Run (`afk session`): after that many minutes with no SSH connection on the VM (so no `afk attach`) and the main service under 5% CPU, the startup-script stops the main service, which ends the Run as its command exiting would (Session Artifacts collected, then delete, or stop when `--retain`). Default 60; `0` turns it off, leaving only the `--timeout` backstop. A Run with a command ends on its own and has no watchdog.
 - `allowedMachineTypes` is the whitelist the CLI validates `--machine-type` against (and which the `afk-developer` IAM condition mirrors where expressible).
 - `cachedImages` is the sidecar pre-pull list baked into the Golden Image by `afk golden build`.
 

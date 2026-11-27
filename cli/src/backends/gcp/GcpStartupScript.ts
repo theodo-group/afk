@@ -1,5 +1,7 @@
 import {
   GCP_BACKEND_ENV,
+  GCP_IDLE_CHECK_SECONDS,
+  GCP_IDLE_CPU_PERCENT,
   GCP_SECRET_PREFIX,
   VM_AFK_DIR,
   VM_COMPOSE_PATH,
@@ -54,6 +56,7 @@ export interface GcpStartupScriptInput {
    * the daemon without sudo. Absent where the Owner has no OS Login profile.
    */
   readonly ownerUid?: string
+  readonly idleTimeoutMinutes: number
 }
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
@@ -87,6 +90,49 @@ const renderDockerSocketGrant = (ownerUid: string | undefined): string =>
         `for _ in $(seq 1 ${DOCKER_SOCKET_WAIT_TRIES}); do [ -S /var/run/docker.sock ] && break; sleep 1; done`,
         `chown ${shellQuote(ownerUid)} /var/run/docker.sock || true`,
       ].join("\n")
+
+const renderSelfReclaim = (input: GcpStartupScriptInput): string =>
+  `gcloud compute instances ${input.retain ? "stop" : "delete"} ${shellQuote(input.instanceName)} --zone=${shellQuote(input.zone)} --quiet || true`
+
+const renderIdleWatchdog = (input: GcpStartupScriptInput): string => {
+  if (input.idleTimeoutMinutes <= 0) return "# (idle watchdog off)"
+  const svc = shellQuote(input.mainService)
+  const checks = Math.ceil(
+    (input.idleTimeoutMinutes * 60) / GCP_IDLE_CHECK_SECONDS,
+  )
+  return [
+    `afk_main_container() {`,
+    `  C=$(docker ps -qf "label=com.docker.compose.service=${input.mainService}" 2>/dev/null | head -n1)`,
+    `  [ -n "$C" ] || C=$(docker ps -qf "name=^${input.mainService}$" 2>/dev/null | head -n1)`,
+    `  printf '%s' "$C"`,
+    `}`,
+    `afk_attached() {`,
+    `  [ -n "$(ss -Htn state established '( sport = :22 )' 2>/dev/null)" ]`,
+    `}`,
+    `afk_busy() {`,
+    `  [ -n "$1" ] || return 1`,
+    `  _cpu=$(docker stats --no-stream --format '{{.CPUPerc}}' "$1" 2>/dev/null | tr -d '%')`,
+    `  [ -n "$_cpu" ] && awk -v c="$_cpu" 'BEGIN { exit !(c >= ${GCP_IDLE_CPU_PERCENT}) }'`,
+    `}`,
+    `afk_idle_watchdog() {`,
+    `  _idle=0`,
+    `  while sleep ${GCP_IDLE_CHECK_SECONDS}; do`,
+    `    _c=$(afk_main_container)`,
+    `    if afk_attached || afk_busy "$_c"; then _idle=0; continue; fi`,
+    `    _idle=$((_idle + 1))`,
+    `    [ "$_idle" -ge ${checks} ] || continue`,
+    `    echo "afk-startup: idle for ${input.idleTimeoutMinutes} min (no attach, ${svc} under ${GCP_IDLE_CPU_PERCENT}% CPU), ending run"`,
+    `    if [ -n "$_c" ]; then`,
+    `      docker stop "$_c" >/dev/null 2>&1 || ${renderSelfReclaim(input)}`,
+    `    else`,
+    `      ${renderSelfReclaim(input)}`,
+    `    fi`,
+    `    return`,
+    `  done`,
+    `}`,
+    `afk_idle_watchdog &`,
+  ].join("\n")
+}
 
 const renderEnvFileWrites = (
   env: ReadonlyArray<{ name: string; value: string }>,
@@ -233,6 +279,9 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
     "",
     composeBlock,
     "",
+    "# --- Idle watchdog ---",
+    renderIdleWatchdog(input),
+    "",
     "# --- Run the workload under wall-clock cap ---",
     "set +e",
     runWorkload,
@@ -245,7 +294,7 @@ export const buildStartupScript = (input: GcpStartupScriptInput): string => {
     input.retain
       ? "# --- Self-stop (retained for post-mortem; reaped after retention) ---"
       : "# --- Self-reclaim (max_run_duration is the backstop) ---",
-    `gcloud compute instances ${input.retain ? "stop" : "delete"} ${shellQuote(input.instanceName)} --zone=${shellQuote(input.zone)} --quiet || true`,
+    renderSelfReclaim(input),
     "",
   ].join("\n")
 }
